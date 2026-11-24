@@ -36,6 +36,13 @@ const DISPATCH_SCAN_LIMIT: u32 = 64;
 /// 无归属帧。计数器只增不清，查不到归属时随告警一并报出，测试也据此断言「没有静默」。
 static UNATTRIBUTED_SUBAGENT_WRITES: AtomicU64 = AtomicU64::new(0);
 
+/// 彻底放弃写入的子代理事件帧数。
+///
+/// 存储层的瞬时争用已由 `with_busy_retry` 吃在有界重试里；能走到这里的只剩「重试预算
+/// 用完仍然忙」或真正的基础设施故障。两种都是**逐字稿缺帧**，必须以 error 级留痕并
+/// 累计计数，否则界面上只表现为「子代理少了一段过程」，无人能事后核对缺了多少。
+static LOST_SUBAGENT_EVENTS: AtomicU64 = AtomicU64::new(0);
+
 /// 读取累计的无归属写入次数。
 #[cfg(test)]
 #[must_use]
@@ -196,6 +203,52 @@ where
         }
         cached.clone()
     }
+
+    /// 一次性把一批帧落成 durable 事实。
+    ///
+    /// 一批只开一个事务：子代理的逐帧追加是运行态库上最密集的写者，逐帧一次事务在
+    /// 并发子代理下会把单写者带宽吃满，随后其它写者按忙超时失败。批量追加把事务数
+    /// 按批降下来，同时保持「落库之后才发布」的既有顺序。
+    fn persist(&self, payloads: &[(String, String)]) -> Result<(), String> {
+        if payloads.is_empty() {
+            return Ok(());
+        }
+        let now_ms = self.clock.now_ms();
+        let persisted = match self.attribution() {
+            Some(interaction_id) => self.store.append_attributed_events(
+                &self.session_id,
+                &self.host,
+                &interaction_id,
+                payloads,
+                now_ms,
+            ),
+            None => {
+                // 无归属只允许会话级事件：`wire_event` 会在存储层被拒绝，逐字稿因此
+                // 不会静默落成「没有轮次」的孤儿帧。计数器与告警在构造 sink 时已留痕。
+                UNATTRIBUTED_SUBAGENT_WRITES
+                    .fetch_add(u64::try_from(payloads.len()).unwrap_or(u64::MAX), Ordering::AcqRel);
+                self.store
+                    .append_events(&self.session_id, &self.host, payloads, now_ms)
+            }
+        }
+        .map_err(|error| {
+            let lost = LOST_SUBAGENT_EVENTS
+                .fetch_add(u64::try_from(payloads.len()).unwrap_or(u64::MAX), Ordering::AcqRel)
+                + u64::try_from(payloads.len()).unwrap_or(0);
+            axon_logger::error(&format!(
+                "子代理会话事件追加失败，本批 {} 帧丢失（累计丢失 {} 帧）: session={} error={error:?}",
+                payloads.len(),
+                lost,
+                self.session_id.as_str()
+            ));
+            format!("子代理会话事件追加失败：{error:?}")
+        })?;
+        // 落库之后再发布：订阅者看到的每一帧都已经是 durable 事实。
+        for record in &persisted {
+            self.stream_bridge.publish(record, &record.cursor());
+        }
+        Ok(())
+    }
 }
 
 impl<S, C> TurnEventSink for ChildSessionSink<S, C>
@@ -204,30 +257,16 @@ where
     C: RuntimeClock + Send + Sync,
 {
     fn publish(&self, event: &RuntimeEvent) -> Result<(), String> {
-        let payloads = [(event.event_type.clone(), event.payload_json.clone())];
-        let now_ms = self.clock.now_ms();
-        let persisted = match self.attribution() {
-            Some(interaction_id) => self.store.append_attributed_events(
-                &self.session_id,
-                &self.host,
-                &interaction_id,
-                &payloads,
-                now_ms,
-            ),
-            None => {
-                // 无归属只允许会话级事件：`wire_event` 会在存储层被拒绝，逐字稿因此
-                // 不会静默落成「没有轮次」的孤儿帧。计数器与告警在构造 sink 时已留痕。
-                UNATTRIBUTED_SUBAGENT_WRITES.fetch_add(1, Ordering::AcqRel);
-                self.store
-                    .append_events(&self.session_id, &self.host, &payloads, now_ms)
-            }
-        }
-        .map_err(|error| format!("子代理会话事件追加失败：{error:?}"))?;
-        // 落库之后再发布：订阅者看到的每一帧都已经是 durable 事实。
-        for record in &persisted {
-            self.stream_bridge.publish(record, &record.cursor());
-        }
-        Ok(())
+        self.persist(&[(event.event_type.clone(), event.payload_json.clone())])
+    }
+
+    /// 一批事件一次事务：终态与它的派生帧本来就同批产生，逐帧提交只是多付 fsync。
+    fn publish_batch(&self, events: &[RuntimeEvent]) -> Result<(), String> {
+        let payloads = events
+            .iter()
+            .map(|event| (event.event_type.clone(), event.payload_json.clone()))
+            .collect::<Vec<_>>();
+        self.persist(&payloads)
     }
 }
 

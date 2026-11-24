@@ -10,7 +10,7 @@ use super::work_item_settlement::{LedgerTrace, Settlement, WorkItemLocator, sett
 use crate::domain::runtime::{DaemonHostRecord, SessionEventRecord};
 use crate::ports::{RuntimeStore, RuntimeStoreError};
 use axon_domain::{DaemonSessionId, ExecutionStatus};
-use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 const UNCERTAIN_ERROR_KIND: &str = "uncertain";
 const WAITING_GOAL_STATUS: &str = "waiting";
@@ -92,48 +92,143 @@ fn quarantine_running(
         return Ok(Vec::new());
     }
     store.initialize()?;
-    let mut connection = store.connection()?;
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(storage)?;
-    SqliteRuntimeStore::ensure_fence(&transaction, host, now_ms)?;
     let now = i64_value(now_ms)?;
+    /*
+     * 只读探路：没有候选就不开写事务（理由同 `quarantine_interrupted_interactions`）。
+     *
+     * 这条路径同样挂在每秒一次的 supervisor tick 上：常态下一条候选都没有，写锁只是白占
+     * 一次别的写者必须排队的位置。fence 走只读口径，租约失效仍按 fail-closed 上报。
+     */
+    let pending = {
+        let mut connection = store.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(storage)?;
+        SqliteRuntimeStore::check_fence(&transaction, host, now_ms)?;
+        let pending = read_candidates(&transaction, now, limit, selector)?;
+        transaction.commit().map_err(storage)?;
+        pending
+    };
+    if pending.is_empty() {
+        return Ok(Vec::new());
+    }
     let mut records = Vec::new();
-    for candidate in read_candidates(&transaction, now, limit, selector)? {
+    for candidate in pending {
+        /*
+         * 每条一个事务：持锁时间只与这一条的语句数有关，不随批量线性增长。
+         *
+         * 探路与写入之间可能有别的收敛方先落定同一条，因此仍以事务内的守卫结果为准
+         * （`settle_uncertain` 返回它是否真的改了这一行）。
+         */
+        /*
+         * 锁序固定为「先会话锁、后数据库写事务」：水位推进与文件尾追加必须落在同一把
+         * 会话锁里。没有会话行就没有日志可写，那一支不需要锁。
+         */
+        let owned_session = candidate
+            .session_id
+            .as_ref()
+            .and_then(|raw| DaemonSessionId::new(raw.clone()).ok());
+        let session_lock = owned_session
+            .as_ref()
+            .map(|session_id| store.event_log_write_lock(session_id));
+        let _session_guard = session_lock.as_ref().map(|lock| {
+            lock.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        });
+        let mut connection = store.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)?;
+        SqliteRuntimeStore::ensure_fence(&transaction, host, now_ms)?;
+        /*
+         * 事务内重校验租约：探路是在读事务里做的，它与这一次写入之间可能有别的执行者刚
+         * 完成续租。`settle_uncertain` 的守卫只认状态，到期判定必须在这里补一次。
+         */
+        if matches!(selector, CandidateSelector::ExpiredLease)
+            && !execution_lease_expired(&transaction, &candidate.execution_id, now)?
+        {
+            transaction.commit().map_err(storage)?;
+            continue;
+        }
         let payload = uncertain_payload(&candidate.execution_id, candidate.goal_id.as_deref());
-        if !settle_uncertain(
+        let settled = settle_uncertain(
             &transaction,
             now,
             &candidate.execution_id,
             candidate.goal_id.as_deref(),
             &payload,
-        )? {
-            continue;
+        )?;
+        let event = if !settled {
+            None
+        } else {
+            match owned_session {
+                Some(session_id) => match next_session_sequence(&transaction, &session_id)? {
+                    Some(sequence) => {
+                        if matches!(settlement, SessionSettlement::AdoptByCurrentHost) {
+                            update_session_owner(&transaction, host, now, &session_id, sequence)?;
+                        }
+                        Some(SessionEventRecord {
+                            session_id,
+                            sequence,
+                            generation: host.generation.clone(),
+                            event_type: SESSION_EVENT_TYPE.to_owned(),
+                            payload_json: payload,
+                            emitted_at_ms: now_ms,
+                        })
+                    }
+                    // 会话行不存在：终态照样已落定，只是没有可归属的事件日志。
+                    None => None,
+                },
+                None => None,
+            }
+        };
+        transaction.commit().map_err(storage)?;
+        drop(connection);
+        if let Some(mut record) = event {
+            match super::event_log_repository::write_records_locked(
+                store,
+                std::slice::from_mut(&mut record),
+                None,
+            ) {
+                Ok(()) => records.push(record),
+                Err(error) => {
+                    /*
+                     * 控制面已收口、证据帧没落成：如实留痕并停在这一条。已落成的前序记录
+                     * 照常返回给调用方发布。复核口径：按 session_id 与 sequence 对照事件面
+                     * 文件里的 `turn_uncertain` 帧。
+                     */
+                    axon_logger::error(&format!(
+                        "控制面已收口但证据帧未落盘（该轮缺证据帧）: session={} sequence={} error={error:?}",
+                        record.session_id.as_str(),
+                        record.sequence
+                    ));
+                    break;
+                }
+            }
         }
-        let Some(session_id) = candidate.session_id else {
-            continue;
-        };
-        let Ok(session_id) = DaemonSessionId::new(session_id) else {
-            continue;
-        };
-        let Some(sequence) = next_session_sequence(&transaction, &session_id)? else {
-            continue;
-        };
-        if matches!(settlement, SessionSettlement::AdoptByCurrentHost) {
-            update_session_owner(&transaction, host, now, &session_id, sequence)?;
-        }
-        records.push(SessionEventRecord {
-            session_id,
-            sequence,
-            generation: host.generation.clone(),
-            event_type: SESSION_EVENT_TYPE.to_owned(),
-            payload_json: payload,
-            emitted_at_ms: now_ms,
-        });
     }
-    transaction.commit().map_err(storage)?;
-    super::event_log_repository::write_records(store, &records, None)?;
     Ok(records)
+}
+
+/// 该执行行是否确实已经租约过期。
+///
+/// `settle_uncertain` 的守卫只认状态，不含到期判定；探路搬到读事务之后，探路与写入之间
+/// 可能有别的执行者刚完成续租，因此必须在写事务里补一次到期复核。
+fn execution_lease_expired(
+    transaction: &Transaction<'_>,
+    execution_id: &str,
+    now: i64,
+) -> Result<bool, RuntimeStoreError> {
+    let expired = transaction
+        .query_row(
+            "SELECT 1 FROM work_items WHERE execution_id=?1 AND status='running' \
+             AND lease_expires_at_ms<=?2",
+            params![execution_id, now],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(storage)?;
+    Ok(expired.is_some())
 }
 
 /// 一条待隔离的 running 执行行；`goal_id` 为空表示它没有所属目标。
@@ -144,7 +239,7 @@ struct InterruptedCandidate {
 }
 
 fn read_candidates(
-    transaction: &Transaction<'_>,
+    connection: &Connection,
     now: i64,
     limit: u32,
     selector: CandidateSelector<'_>,
@@ -170,7 +265,7 @@ fn read_candidates(
             Some(owner_generation),
         ),
     };
-    let mut statement = transaction.prepare(&sql).map_err(storage)?;
+    let mut statement = connection.prepare(&sql).map_err(storage)?;
     let rows = match (owner_host_id, owner_generation) {
         (Some(owner_host_id), Some(owner_generation)) => statement
             .query_map(

@@ -43,7 +43,7 @@ import {
   type TurnState,
 } from './transcript';
 import { applyTurnSummary, seedTurnReadings, settleTurn, type TurnSummaryFacts } from './transcript/turns';
-import type { SessionTokenBaseline } from './sessionUsage';
+import { sessionBaselineOf, type SessionTokenBaseline } from './sessionUsage';
 import { sessionFactsOf, type SessionFacts } from './sessionFacts';
 import type { ConversationStreamEvent } from './wire';
 import type { SessionEffectiveModel } from './viewConfig';
@@ -203,19 +203,9 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
       const snapshot = page.sessionPlan ?? null;
       const plan = snapshot === null ? null : planProjectionOf(snapshot.title, snapshot.steps);
 
-      if (page.sessionUsage !== null) {
-        setSessionBaseline({
-          usage: page.sessionUsage,
-          elapsedMs: page.sessionElapsedMs ?? 0,
-          turnIds: new Set(page.interactions.map((item) => item.interactionId)),
-          // 取页那一刻仍在跑的那几条：账本还没落账，整条由本地增量承担。
-          openTurnIds: new Set(
-            page.interactions
-              .filter((item) => interactionStillRunning(item.status))
-              .map((item) => item.interactionId),
-          ),
-        });
-      }
+      // 基线把车道标识一起钉住：这一页属于哪条会话，就只在哪条会话上成立。
+      const baseline = sessionBaselineOf(laneId, page);
+      if (baseline !== null) setSessionBaseline(baseline);
       // 会话级后台作业清单随索引一起回来：作业属于整条会话，不能只靠本轮回放。
       const jobs = sessionJobRows(page.jobs);
       if (jobs.length > 0) dispatch({ type: 'seed-jobs', jobs });

@@ -547,6 +547,11 @@ export type ConversationAction =
   | { type: 'connecting' }
   | { type: 'frames'; frames: import('../wire').ConversationStreamEvent[]; nowMs: number }
   /**
+   * 服务端显式收口这一轮（运行证据判过期、界面不再等在跑的收口帧）：
+   * 判据由服务端给出，界面只把结论落成终态与一条结论行。
+   */
+  | { type: 'settle-silent-turn'; interactionId: string; verdict: string; nowMs: number }
+  /**
    * 用服务端权威记录对账本地待答状态。
    *
    * `authoritative` 为真表示这一批就是服务端当前的全部问答记录：本地还在等回答、

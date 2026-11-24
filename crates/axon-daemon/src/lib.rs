@@ -13,7 +13,7 @@ pub use application::{
     EventStreamBridge, EventStreamBridgeTelemetrySnapshot, EventStreamSubscription,
     ExternalEventEnvelope, ExternalEventIngress, ExternalEventIngressError,
     GatewayHostDependencies, HostTickReport, InteractionDelivery, InteractionIngressPolicy,
-    InteractionIngressPolicyError, InteractionIngressReceipt, NoActiveTurnSteerSink,
+    InteractionIngressPolicyError, InteractionIngressReceipt, LeaseLostHook, NoActiveTurnSteerSink,
     PRIMARY_TURN_ACTION_KIND, PrimaryTurnErrorLayer, PrimaryTurnFailure, PrimaryTurnIngress,
     PrimaryTurnRequest, PrimaryTurnRunner, PrimaryTurnRunnerError, PrimaryTurnService,
     PrimaryTurnServiceError, PrimaryTurnTickReport, SessionAttachSnapshot, StreamEvent,

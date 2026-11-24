@@ -40,8 +40,9 @@ pub use interaction_ingress::{
     PrimaryTurnIngress,
 };
 pub use primary_turn_service::{
-    PrimaryTurnErrorLayer, PrimaryTurnFailure, PrimaryTurnRequest, PrimaryTurnRunner,
-    PrimaryTurnRunnerError, PrimaryTurnService, PrimaryTurnServiceError, PrimaryTurnTickReport,
+    LeaseLostHook, PrimaryTurnErrorLayer, PrimaryTurnFailure, PrimaryTurnRequest,
+    PrimaryTurnRunner, PrimaryTurnRunnerError, PrimaryTurnService, PrimaryTurnServiceError,
+    PrimaryTurnTickReport,
 };
 pub use scheduler_service::{SchedulerError, SchedulerService, SchedulerTickReport};
 pub use session_registry::SessionRegistry;

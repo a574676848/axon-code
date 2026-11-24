@@ -23,10 +23,16 @@ use super::primary_turn_worker_pool::{PrimaryTurnWorkerPool, PrimaryTurnWorkerPo
 
 const SESSION_PANIC_ERROR: &str = "Primary turn session worker 异常退出";
 const LEASE_RENEWAL_THREAD_NAME: &str = "primary-turn-lease-renewal";
-/// lease 剩余一半时续租，为 supervisor 留出完整故障判定窗口。
-const LEASE_RENEWAL_INTERVAL_DIVISOR: u64 = 2;
-const LEASE_RENEWAL_RETRY_LIMIT: u32 = 3;
-const LEASE_RENEWAL_RETRY_DELAY: Duration = Duration::from_millis(5);
+/// 租约还剩三分之一时续租。
+///
+/// 续租要覆盖一次写锁等待、一次 WAL 回写与一次 GC 抖动：按剩余一半续租时，
+/// 一次慢写入就能让 120 秒的租约在两次续租之间掉到零，supervisor 随后会把一个
+/// 其实还活着的轮次收口成中断，界面那边就只剩一张「运行证据已过期」的卡。
+const LEASE_RENEWAL_INTERVAL_DIVISOR: u64 = 3;
+/// 续租遇到存储抖动时的重新尝试间隔。
+const LEASE_RENEWAL_RETRY_DELAY: Duration = Duration::from_millis(750);
+/// 存储抖动期间的告警节流：约 30 秒留一条，风暴里不刷日志。
+const LEASE_RENEWAL_WARN_EVERY: u32 = 40;
 /// 批内补位轮询间隔。
 ///
 /// 协调线程在同一批里只等待「任意一个 session」结束，并在有空闲槽位时重新领取，因此
@@ -146,6 +152,35 @@ pub enum PrimaryTurnServiceError {
     Runner(String),
 }
 
+/// 主 turn 租约证明不在自己手上时的收口钩子。
+///
+/// 续租返回「行已不属于我们」之后，本轮已经不可能再写入任何事件（事件面按租约令牌
+/// 与到期时间做围栏）。让运行侧继续跑到收尾，只是把 token 烧在一个已经收口的行上，
+/// 用户那边还多出一段永远落不了地的输出。钩子因此把取消请求交给运行侧，
+/// 由它在下一个安全检查点收口。
+#[derive(Clone)]
+pub struct LeaseLostHook(Arc<dyn Fn(&axon_domain::DaemonSessionId) + Send + Sync>);
+
+impl LeaseLostHook {
+    /// 用一条会话级回调构造。
+    pub fn new<F>(hook: F) -> Self
+    where
+        F: Fn(&axon_domain::DaemonSessionId) + Send + Sync + 'static,
+    {
+        Self(Arc::new(hook))
+    }
+
+    fn call(&self, session_id: &axon_domain::DaemonSessionId) {
+        (self.0)(session_id);
+    }
+}
+
+impl std::fmt::Debug for LeaseLostHook {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("LeaseLostHook")
+    }
+}
+
 /// 领取 Interaction 并逐个运行主 turn。
 #[derive(Debug, Clone)]
 pub struct PrimaryTurnService<S, R, C> {
@@ -155,6 +190,8 @@ pub struct PrimaryTurnService<S, R, C> {
     lease_duration_ms: u64,
     worker_pool: PrimaryTurnWorkerPoolSlot,
     stream_bridge: Arc<EventStreamBridge>,
+    /// 租约丢失时请运行侧收口；组合根不接线时保持 None，不影响其余路径。
+    lease_lost: Option<LeaseLostHook>,
 }
 
 struct InteractionLeaseRenewalGuard<S, C> {
@@ -222,7 +259,17 @@ where
             lease_duration_ms,
             worker_pool,
             stream_bridge,
+            lease_lost: None,
         })
+    }
+
+    /// 接上「租约丢失即收口」的钩子。
+    ///
+    /// 组合根在这里接的是运行侧的中断入口：与用户按 ESC 走同一条取消令牌，
+    /// 因此不需要另造一套停止通道。
+    pub fn with_lease_lost(mut self, hook: LeaseLostHook) -> Self {
+        self.lease_lost = Some(hook);
+        self
     }
 
     /// 批量领取并运行主 turn。
@@ -358,7 +405,8 @@ where
             lease_token: lease.lease_token.clone(),
             runtime_profile: RuntimeProfileSelector::for_primary_turn(),
         };
-        let mut renewal = self.start_lease_renewal(&interaction_id, &lease.lease_token)?;
+        let mut renewal =
+            self.start_lease_renewal(&session_id, &interaction_id, &lease.lease_token)?;
         let runner_result = self.runner.run(request);
         let renewal_error = renewal.take_error();
         drop(renewal);
@@ -420,8 +468,18 @@ where
         Ok(())
     }
 
+    /// 起一条续租线程：租约丢失即请运行侧收口，存储抖动则一直重试。
+    ///
+    /// 两类失败必须分开处理，这是本线程唯一要紧的判据：
+    /// - **存储抖动**（`database is locked` 这类）：租约仍然在我们手上，只是这一拍没写进去。
+    ///   旧实现把重试钉成 3 次（约 15 毫秒），于是一次 WAL 回写就能把续租线程彻底停掉，
+    ///   这一轮随后在租约到期后继续跑到收尾，写入全部被围栏拒绝，用户看到的是一条
+    ///   永远不会收口的轮次。现在按固定退避一直重试，只有停机或租约丢失才退出。
+    /// - **行已不属于我们**（`InvalidState` 等）：这是证明，不是抖动。先把取消请求交给
+    ///   运行侧在检查点收口，再如实上报，避免把 token 烧在一个已经收口的行上。
     fn start_lease_renewal(
         &self,
+        session_id: &axon_domain::DaemonSessionId,
         interaction_id: &axon_domain::InteractionId,
         lease_token: &str,
     ) -> Result<InteractionLeaseRenewalGuard<S, C>, PrimaryTurnServiceError> {
@@ -431,40 +489,68 @@ where
         let (error_sender, error_receiver) = mpsc::channel();
         let store = self.store.clone();
         let clock = self.clock.clone();
+        let session_id = session_id.clone();
         let interaction_id = interaction_id.clone();
         let lease_token = lease_token.to_owned();
         let lease_duration_ms = self.lease_duration_ms;
+        let lease_lost = self.lease_lost.clone();
         let worker = thread::Builder::new()
             .name(LEASE_RENEWAL_THREAD_NAME.to_owned())
             .spawn(move || {
+                let mut storage_failures: u32 = 0;
                 loop {
                     match stop_receiver.recv_timeout(renewal_interval) {
                         Ok(()) | Err(RecvTimeoutError::Disconnected) => return,
                         Err(RecvTimeoutError::Timeout) => {}
                     }
-                    let mut renewal_error = None;
-                    for retry in 0..=LEASE_RENEWAL_RETRY_LIMIT {
+                    loop {
                         match store.renew_processing(
                             &interaction_id,
                             &lease_token,
                             clock.now_ms(),
                             lease_duration_ms,
                         ) {
-                            Ok(_) => break,
-                            Err(InteractionStoreError::Storage(_error))
-                                if retry < LEASE_RENEWAL_RETRY_LIMIT =>
-                            {
-                                thread::sleep(LEASE_RENEWAL_RETRY_DELAY);
-                            }
-                            Err(error) => {
-                                renewal_error = Some(error);
+                            Ok(_) => {
+                                if storage_failures > 0 {
+                                    axon_logger::warning(&format!(
+                                        "主 turn 续租在 {} 次重试后恢复: session={}",
+                                        storage_failures,
+                                        session_id.as_str()
+                                    ));
+                                    storage_failures = 0;
+                                }
                                 break;
                             }
+                            Err(InteractionStoreError::Storage(error)) => {
+                                storage_failures = storage_failures.saturating_add(1);
+                                if storage_failures % LEASE_RENEWAL_WARN_EVERY == 1 {
+                                    axon_logger::warning(&format!(
+                                        "主 turn 续租遇到存储抖动，按 {}ms 持续重试（累计 {} 次）: session={} error={}",
+                                        LEASE_RENEWAL_RETRY_DELAY.as_millis(),
+                                        storage_failures,
+                                        session_id.as_str(),
+                                        error
+                                    ));
+                                }
+                                match stop_receiver.recv_timeout(LEASE_RENEWAL_RETRY_DELAY) {
+                                    Ok(()) | Err(RecvTimeoutError::Disconnected) => return,
+                                    Err(RecvTimeoutError::Timeout) => continue,
+                                }
+                            }
+                            Err(error) => {
+                                if let Some(hook) = lease_lost.as_ref() {
+                                    hook.call(&session_id);
+                                }
+                                axon_logger::error(&format!(
+                                    "主 turn 租约已丢失，已请求运行侧收口: session={} interaction={} error={}",
+                                    session_id.as_str(),
+                                    interaction_id.as_str(),
+                                    error
+                                ));
+                                let _ = error_sender.send(PrimaryTurnServiceError::Store(error));
+                                return;
+                            }
                         }
-                    }
-                    if let Some(error) = renewal_error {
-                        let _ = error_sender.send(PrimaryTurnServiceError::Store(error));
-                        return;
                     }
                 }
             })

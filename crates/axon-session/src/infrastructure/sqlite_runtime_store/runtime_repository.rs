@@ -359,68 +359,104 @@ pub(super) fn recover_expired_sessions(
 ) -> Result<Vec<SessionRuntimeRecord>, RuntimeStoreError> {
     let plan = plan_recovery(store, host, now_ms, limit)?;
     if plan.is_empty() {
-        // 没有候选也要过一遍 fence：状态不成立时调用方必须看到 Fenced 而不是空结果。
+        /*
+         * 没有候选也要过一遍 fence：状态不成立时调用方必须看到 Fenced 而不是空结果。
+         *
+         * 这里只读判定：fence 走只读口径，与 `check_fence` 同一判据。空集合下拿写锁只是
+         * 白占一次别的写者必须排队的位置，而这条路径每秒都会被 tick 调一次。
+         */
         let mut connection = store.connection()?;
         let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .transaction_with_behavior(TransactionBehavior::Deferred)
             .map_err(storage)?;
-        SqliteRuntimeStore::ensure_fence(&transaction, host, now_ms)?;
+        SqliteRuntimeStore::check_fence(&transaction, host, now_ms)?;
         transaction.commit().map_err(storage)?;
         return Ok(Vec::new());
     }
-    let mut connection = store.connection()?;
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(storage)?;
-    SqliteRuntimeStore::ensure_fence(&transaction, host, now_ms)?;
     let mut recovered = Vec::with_capacity(plan.len());
-    let mut pending_events: Vec<(axon_domain::DaemonSessionId, u64, String)> = Vec::new();
     for step in plan {
-        // 水位 CAS：第一段到现在之间若有别的写者推进过水位，这一步必须落空，
-        // 否则会用旧水位算出的事件序号覆盖别人的进度。
-        let changed = transaction
-            .execute(
-                "UPDATE sessions SET status='recovering',owner_host_id=?1,owner_generation=?2,\
-                 worker_attempt=worker_attempt+1,last_activity_at_ms=?3,updated_at_ms=?3,\
-                 last_event_sequence=?4 \
-                 WHERE session_id=?5 AND last_event_sequence=?6 \
-                 AND status IN ('running','compacting','waiting')",
-                params![
-                    host.host_id.as_str(),
-                    host.generation,
-                    i64_value(now_ms)?,
-                    step.next_event,
-                    step.session_id.as_str(),
-                    i64_value(step.recorded_sequence)?,
-                ],
-            )
-            .map_err(storage)?;
-        if changed == 0 {
-            continue;
-        }
-        pending_events.push((
-            step.session_id.clone(),
-            step.next_sequence,
-            step.payload_json,
-        ));
-        recovered.push(transaction.query_row(
-            "SELECT session_id,current_run_id,root_session_id,agent_path,kind,trust_scope,workspace_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms \
-             FROM sessions WHERE session_id=?1",
-            params![step.session_id.as_str()],
-            session_runtime_row,
-        ).map_err(storage)?);
-    }
-    transaction.commit().map_err(storage)?;
-    for (session_id, sequence, payload_json) in pending_events {
-        let record = crate::domain::runtime::SessionEventRecord {
-            session_id,
-            sequence,
-            generation: host.generation.clone(),
-            event_type: "session_recovered".to_owned(),
-            payload_json,
-            emitted_at_ms: now_ms,
+        /*
+         * 锁序固定为「先会话锁、后数据库写事务」：水位 CAS 与新序号必须在同一把会话锁内
+         * 完成，否则与逐帧追加交错会写出乱序尾并触发「序号与文件尾不符」的重排。
+         */
+        let lock = store.event_log_write_lock(&step.session_id);
+        let guard = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (runtime, mut event) = {
+            let mut connection = store.connection()?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(storage)?;
+            SqliteRuntimeStore::ensure_fence(&transaction, host, now_ms)?;
+            // 水位 CAS：只读探路到现在之间若有别的写者推进过水位，这一步必须落空，
+            // 否则会用旧水位算出的事件序号覆盖别人的进度。
+            let changed = transaction
+                .execute(
+                    "UPDATE sessions SET status='recovering',owner_host_id=?1,owner_generation=?2,\
+                     worker_attempt=worker_attempt+1,last_activity_at_ms=?3,updated_at_ms=?3,\
+                     last_event_sequence=?4 \
+                     WHERE session_id=?5 AND last_event_sequence=?6 \
+                     AND status IN ('running','compacting','waiting')",
+                    params![
+                        host.host_id.as_str(),
+                        host.generation,
+                        i64_value(now_ms)?,
+                        step.next_event,
+                        step.session_id.as_str(),
+                        i64_value(step.recorded_sequence)?,
+                    ],
+                )
+                .map_err(storage)?;
+            let outcome = if changed == 0 {
+                None
+            } else {
+                let runtime = transaction
+                    .query_row(
+                        "SELECT session_id,current_run_id,root_session_id,agent_path,kind,trust_scope,workspace_id,cwd,status,owner_host_id,owner_generation,worker_attempt,context_version,last_checkpoint_seq,last_event_sequence,last_activity_at_ms \
+                         FROM sessions WHERE session_id=?1",
+                        params![step.session_id.as_str()],
+                        session_runtime_row,
+                    )
+                    .map_err(storage)?;
+                let event = crate::domain::runtime::SessionEventRecord {
+                    session_id: step.session_id.clone(),
+                    sequence: step.next_sequence,
+                    generation: host.generation.clone(),
+                    event_type: "session_recovered".to_owned(),
+                    payload_json: step.payload_json.clone(),
+                    emitted_at_ms: now_ms,
+                };
+                Some((runtime, event))
+            };
+            transaction.commit().map_err(storage)?;
+            match outcome {
+                Some(pair) => pair,
+                None => {
+                    drop(guard);
+                    continue;
+                }
+            }
         };
-        super::event_log_repository::write_records(store, std::slice::from_ref(&record), None)?;
+        /*
+         * 控制面已落定，证据帧紧跟着写。落盘失败时如实留痕并停止本轮，已落成的前序会话
+         * 照常返回；复核口径见日志里的 session 与 sequence。
+         */
+        if let Err(error) = super::event_log_repository::write_records_locked(
+            store,
+            std::slice::from_mut(&mut event),
+            None,
+        ) {
+            axon_logger::error(&format!(
+                "控制面已恢复但证据帧未落盘（该会话缺 session_recovered 帧）: session={} sequence={} error={error:?}",
+                event.session_id.as_str(),
+                event.sequence
+            ));
+            drop(guard);
+            break;
+        }
+        drop(guard);
+        recovered.push(runtime);
     }
     Ok(recovered)
 }

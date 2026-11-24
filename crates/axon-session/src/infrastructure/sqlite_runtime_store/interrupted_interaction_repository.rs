@@ -12,7 +12,7 @@ use super::work_item_settlement::{
 use crate::domain::runtime::{DaemonHostRecord, SessionEventRecord};
 use crate::ports::{RuntimeStore, RuntimeStoreError};
 use axon_domain::{DaemonSessionId, ExecutionStatus, InteractionId};
-use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 const WORK_RUNNING: &str = "running";
 /// 既有流水账事件名：升级期核对脚本依赖它，不得改名。
@@ -28,44 +28,123 @@ pub(super) fn quarantine_interrupted_interactions(
         return Ok(Vec::new());
     }
     store.initialize()?;
-    let mut connection = store.connection()?;
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(storage)?;
-    SqliteRuntimeStore::ensure_fence(&transaction, host, now_ms)?;
     let now = i64_value(now_ms)?;
+    /*
+     * 只读探路：fence 与候选一起在一个读事务里判定，没有候选就不开写事务。
+     *
+     * 这条路径挂在每秒一次的 supervisor tick 上，而运行态库是单写者：集合为空也去拿一次
+     * 写锁，等于每秒白占一次别的写者（逐帧追加、主轮收口）必须排队的时机。fence 走
+     * `check_fence`（只读口径，判据相同）：空集合下租约失效仍按 fail-closed 上报。
+     */
+    let candidates = {
+        let mut connection = store.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(storage)?;
+        SqliteRuntimeStore::check_fence(&transaction, host, now_ms)?;
+        let candidates = read_candidates(&transaction, now, limit)?;
+        transaction.commit().map_err(storage)?;
+        candidates
+    };
     let mut records = Vec::new();
-    for (interaction_id, session_id) in read_candidates(&transaction, now, limit)? {
-        if !settle_interrupted(&transaction, now, &interaction_id)? {
+    for (interaction_id, session_id) in candidates {
+        /*
+         * 每条一个事务：持锁时间只与这一条的语句数有关，不随批量线性增长。
+         *
+         * 探路与写入之间可能有别的收敛方先落定同一条，因此终态判定仍以事务内的守卫结果
+         * 为准（`settle_interrupted` 返回它是否真的改了这一行）：重复收敛只会空转一次。
+         */
+        /*
+         * 锁序固定为「先会话锁、后数据库写事务」：水位推进与文件尾追加必须落在同一把
+         * 会话锁里，否则与逐帧追加交错就会写出乱序尾并触发「序号与文件尾不符」的重排。
+         * 没有会话行就没有日志可写，那一支不需要锁。
+         */
+        let session_lock = session_id
+            .as_ref()
+            .map(|session_id| store.event_log_write_lock(session_id));
+        let _session_guard = session_lock.as_ref().map(|lock| {
+            lock.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        });
+        let mut connection = store.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)?;
+        SqliteRuntimeStore::ensure_fence(&transaction, host, now_ms)?;
+        /*
+         * 事务内重校验租约：探路是在读事务里做的，它与这一次写入之间可能有别的执行者刚
+         * 完成续租。不重校验就会把一条仍在跑的轮次收口成中断（`settle_interrupted` 的
+         * 守卫只看 `status='running'`，不看租约是否真的过期）。
+         */
+        if !lease_expired(&transaction, &interaction_id, now)? {
+            transaction.commit().map_err(storage)?;
             continue;
         }
-        let payload = interrupted_payload(&interaction_id);
-        if let Some(session_id) = session_id {
-            let Some(sequence) = next_session_sequence(&transaction, &session_id)? else {
-                continue;
-            };
-            update_session_tail(&transaction, now, &session_id, sequence)?;
-            records.push(SessionEventRecord {
-                session_id,
-                sequence,
-                generation: host.generation.clone(),
-                event_type: SESSION_EVENT_TYPE.to_owned(),
-                payload_json: payload,
-                emitted_at_ms: now_ms,
-            });
+        if !settle_interrupted(&transaction, now, &interaction_id)? {
+            transaction.commit().map_err(storage)?;
+            continue;
+        }
+        let event = match session_id {
+            Some(session_id) => match next_session_sequence(&transaction, &session_id)? {
+                Some(sequence) => {
+                    update_session_tail(&transaction, now, &session_id, sequence)?;
+                    Some(SessionEventRecord {
+                        session_id,
+                        sequence,
+                        generation: host.generation.clone(),
+                        event_type: SESSION_EVENT_TYPE.to_owned(),
+                        payload_json: interrupted_payload(&interaction_id),
+                        emitted_at_ms: now_ms,
+                    })
+                }
+                // 会话行不存在：控制面终态照样已落定，只是没有可归属的事件日志。
+                None => None,
+            },
+            None => None,
+        };
+        transaction.commit().map_err(storage)?;
+        // 连接在落盘之前还池：补偿分支会自己再取连接，这里不必占着句柄。
+        drop(connection);
+        /*
+         * 控制面已经落定，证据帧必须紧跟着写进事件面。
+         *
+         * 逐条摊销而不是攒到批末：中途某条失败时，前面已经提交的收敛不能因此丢掉证据帧
+         * （否则那一轮在界面上就是「收口了但没有过程」）。
+         */
+        if let Some(mut record) = event {
+            match super::event_log_repository::write_records_locked(
+                store,
+                std::slice::from_mut(&mut record),
+                None,
+            ) {
+                Ok(()) => records.push(record),
+                Err(error) => {
+                    /*
+                     * 控制面已收口、证据帧没落成：如实留痕并停在这一条。
+                     *
+                     * 已落成的前序记录照常返回，让调用方把它们发布出去，不用一个错误把
+                     * 整轮的实时发布一起吞掉。复核口径：按 session_id 与 sequence 对照
+                     * 事件面文件里的 `interaction_interrupted` 帧。
+                     */
+                    axon_logger::error(&format!(
+                        "控制面已收口但证据帧未落盘（该轮缺证据帧）: session={} sequence={} error={error:?}",
+                        record.session_id.as_str(),
+                        record.sequence
+                    ));
+                    break;
+                }
+            }
         }
     }
-    transaction.commit().map_err(storage)?;
-    super::event_log_repository::write_records(store, &records, None)?;
     Ok(records)
 }
 
 fn read_candidates(
-    transaction: &Transaction<'_>,
+    connection: &Connection,
     now: i64,
     limit: u32,
 ) -> Result<Vec<(InteractionId, Option<DaemonSessionId>)>, RuntimeStoreError> {
-    let mut statement = transaction
+    let mut statement = connection
         .prepare(
             "SELECT i.interaction_id,i.scope_json,i.audience_json,i.source_channel,i.source_message_id,\
                     i.reply_route_json,i.session_id \
@@ -98,6 +177,26 @@ fn read_candidate_row(
 fn candidate_session_id(row: &rusqlite::Row<'_>) -> Result<DaemonSessionId, String> {
     let session_id: String = row.get(6).map_err(|error| error.to_string())?;
     DaemonSessionId::new(session_id).map_err(|error| error.to_string())
+}
+
+/// 该轮次的工作项是否确实已经租约过期。
+///
+/// `settle_interrupted` 的守卫只认 `status='running'`，不含租约判定。探路搬到读事务之后，
+/// 探路与写入之间可能有别的执行者刚完成续租，因此必须在写事务里补一次到期复核。
+fn lease_expired(
+    transaction: &Transaction<'_>,
+    interaction_id: &InteractionId,
+    now: i64,
+) -> Result<bool, RuntimeStoreError> {
+    let expired = transaction
+        .query_row(
+            "SELECT 1 FROM work_items WHERE inbox_id=?1 AND status=?2 AND lease_expires_at_ms<=?3",
+            params![interaction_id.as_str(), WORK_RUNNING, now],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(storage)?;
+    Ok(expired.is_some())
 }
 
 fn settle_interrupted(

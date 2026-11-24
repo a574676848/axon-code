@@ -32,6 +32,8 @@ pub use daemon_host_error::DaemonHostError;
 #[path = "daemon_host_tick_report.rs"]
 mod daemon_host_tick_report;
 pub use daemon_host_tick_report::HostTickReport;
+#[path = "daemon_host_lease_lost.rs"]
+mod daemon_host_lease_lost;
 
 #[cfg(test)]
 #[path = "daemon_host_capacity_tests.rs"]
@@ -91,17 +93,18 @@ use interaction_turn_runner::InteractionTurnRunner;
 pub use interaction_turn_runner::{PRIMARY_TURN_ACTION_KIND, primary_session_id_for_interaction};
 
 const UPGRADE_GRACE_PERIOD_MS: u64 = 300_000;
-/// 启动与每轮 supervisor 的中断 Interaction 收敛上限，配合 claim 索引避免无界扫描。
-const INTERRUPTED_INTERACTION_BATCH_LIMIT: u32 = 64;
+/// 维护批量事务的收敛上限。
+///
+/// 中断收敛、`recovering` 结算与静默轮次收口各自在**一个写事务里**逐条结算，单次持锁
+/// 时间随批量线性增长：64 条每条约 2 到 3 条语句，一次就能把运行态库的单写者锁握住
+/// 数百毫秒，与逐帧写入共用同一个等待预算，突发时把对方挤成 `database is locked`。
+/// 降到 16 后单次持锁有上界，积压仍在几个 tick 内排空。
+const MAINTENANCE_BATCH_LIMIT: u32 = 16;
 /// 会话停留在 `recovering` 的容忍时长。
 ///
 /// supervisor 每轮都会重新接管失控会话，正常运行下 `recovering` 只存在一个 tick；
 /// 两分钟仍未派发说明这一轮已经没有执行者，必须收口为中断而不是继续挂着。
 const RECOVERING_SETTLEMENT_TTL_MS: u64 = 120_000;
-/// 每轮 supervisor 收敛 `recovering` 会话的上限：与中断收敛同一批量级。
-const RECOVERING_SETTLEMENT_BATCH_LIMIT: u32 = 64;
-/// 每轮 supervisor 静默轮次收口的会话上限：与中断收敛同一批量级。
-const SILENT_TURN_SETTLEMENT_BATCH_LIMIT: u32 = 64;
 /// 尚未领取 lease 时的租约到期哨兵值。
 const NO_LEASE_MS: u64 = 0;
 pub(super) const DEFAULT_QUEUE_LIMIT: u32 = 100;
@@ -129,6 +132,8 @@ pub struct DaemonHost<S, E, P, C, I> {
     /// 组合根提供的远端通知目标；所有 Host 快照共享最新配置。
     /// 最近一次成功写入的 Host lease 到期时间；健康快照据此报告真实剩余租期。
     lease_expires_at_ms: Arc<AtomicU64>,
+    /// 主 turn 租约丢失时请运行侧收口；组合根不接线时为空。
+    lease_lost: Option<super::primary_turn_service::LeaseLostHook>,
 }
 
 /// Gateway infrastructure 使用的不可变 Host 依赖快照。
@@ -208,6 +213,7 @@ where
             active_turn_steer_sink: Arc::new(NoActiveTurnSteerSink),
             delivery_health: None,
             lease_expires_at_ms: Arc::new(AtomicU64::new(NO_LEASE_MS)),
+            lease_lost: None,
         }
     }
 
@@ -301,7 +307,7 @@ where
         let interrupted = self.store.quarantine_interrupted_interactions(
             self.started_host()?,
             self.clock.now_ms(),
-            INTERRUPTED_INTERACTION_BATCH_LIMIT,
+            MAINTENANCE_BATCH_LIMIT,
         )?;
         daemon_host_interrupted_projection::project_interrupted_interactions(
             &self.publisher,
@@ -409,7 +415,7 @@ where
         }
         let host = self.started_host()?.clone();
         let now_ms = self.clock.now_ms();
-        super::primary_turn_service::PrimaryTurnService::new_with_worker_pool(
+        let mut service = super::primary_turn_service::PrimaryTurnService::new_with_worker_pool(
             self.store.clone(),
             InteractionTurnRunner {
                 store: self.store.clone(),
@@ -425,9 +431,13 @@ where
             self.primary_turn_worker_pool.clone(),
             Arc::clone(&self.stream_bridge),
         )
-        .map_err(|error| DaemonHostError::Worker(error.to_string()))?
-        .tick_concurrent(limit, PRIMARY_TURN_MAX_CONCURRENCY)
-        .map_err(|error| DaemonHostError::Worker(error.to_string()))
+        .map_err(|error| DaemonHostError::Worker(error.to_string()))?;
+        if let Some(lease_lost) = self.lease_lost.clone() {
+            service = service.with_lease_lost(lease_lost);
+        }
+        service
+            .tick_concurrent(limit, PRIMARY_TURN_MAX_CONCURRENCY)
+            .map_err(|error| DaemonHostError::Worker(error.to_string()))
     }
 
     /// 恢复租约失效的 Session，并直接按 `work_items` 驱动执行 Worker。
@@ -453,7 +463,7 @@ where
         let interrupted_interactions = self.store.quarantine_interrupted_interactions(
             &host,
             now_ms,
-            INTERRUPTED_INTERACTION_BATCH_LIMIT,
+            MAINTENANCE_BATCH_LIMIT,
         )?;
         daemon_host_interrupted_projection::project_interrupted_interactions(
             &self.publisher,
@@ -468,7 +478,7 @@ where
                 &host,
                 now_ms,
                 RECOVERING_SETTLEMENT_TTL_MS,
-                RECOVERING_SETTLEMENT_BATCH_LIMIT,
+                MAINTENANCE_BATCH_LIMIT,
             ) {
                 Ok(settlement) => {
                     daemon_host_interrupted_projection::project_interrupted_interactions(
@@ -489,7 +499,7 @@ where
         // 2. 再让 `recovering` 会话按「在途工作项」判完归宿，避免轮次先被收口、会话提前腾空。
         let silent_turns_settled = if accepting_work {
             match SilentTurnSettlementService::new(self.store.clone())
-                .settle_pending(now_ms, SILENT_TURN_SETTLEMENT_BATCH_LIMIT)
+                .settle_pending(now_ms, MAINTENANCE_BATCH_LIMIT)
             {
                 Ok(report) => {
                     // 排队轮次被判死意味着消息不会再跑了：这是运维需要看见的事实，

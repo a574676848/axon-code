@@ -80,6 +80,26 @@ function idle(state: LiveEvidenceState, showRunning: boolean): LiveEvidence {
   return { state, showRunning, title: null, reason: null, advice: null, action: null, meta: [] };
 }
 
+/**
+ * 正在与服务端核对这一轮：既不出卡，也不改口。
+ *
+ * 核对是一次往返（本机实测 1 到 4 秒）。这段时间把「在跑」撤下再挂回去，输入坞的状态行
+ * 会闪一下；确认还有执行者时那一闪纯属噪声，因此只压住卡片，不动在跑态。
+ */
+export function liveEvidenceChecking(): LiveEvidence {
+  return idle('unknown', true);
+}
+
+/**
+ * 服务端说这一轮还有执行者：上一份观测是旧读数，不是这一轮没了。
+ *
+ * 收口接口的判定读的是工作项行本身（带租约且状态在跑），比界面轮询到的读数更新，
+ * 因此它的结论优先：界面照常显示在跑，等下一次观测自己收敛。
+ */
+export function liveEvidenceRunning(): LiveEvidence {
+  return idle('running', true);
+}
+
 /** 过期结论：标题、结论、建议与归因一起给出。 */
 function expired(reason: string, meta: string[]): LiveEvidence {
   return {

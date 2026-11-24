@@ -173,6 +173,14 @@ export interface ConversationController {
   unfoldTurn: (interactionId: string) => void;
   /** 收起已展开的一轮：释放过程正文，只留抬头。 */
   collapseTurn: (interactionId: string) => void;
+  /**
+   * 按服务端判据收口这一轮。
+   *
+   * 运行证据说这一轮已经没有执行者时，界面不再只给一张「重启后台服务」的卡：
+   * 收口判据由服务端给出（租约过期、首字超时、本来就不在途），这里只把结论落成终态。
+   * 已经收口的轮次不受影响，因此重复调用安全。
+   */
+  settleSilentTurn: (interactionId: string, verdict: string) => void;
   /** 提交正文到当前目标；目标不具备车道能力时明确失败，不静默丢弃。 */
   submit: (
     text: string,

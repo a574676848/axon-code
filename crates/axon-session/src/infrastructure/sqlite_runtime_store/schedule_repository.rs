@@ -5,7 +5,11 @@ use crate::domain::RuntimeScheduleRecord;
 use crate::domain::runtime::DaemonHostRecord;
 use crate::ports::{RuntimeStore, RuntimeStoreError};
 use axon_domain::DaemonSessionId;
-use rusqlite::{TransactionBehavior, params};
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
+/// 到期调度的判定：只认 active、到点、且租约已空或已过期。
+///
+/// 只读探路与领取共用同一段判定：两处各写一份 SQL 迟早会分叉成「探到有、领不到」。
+const DUE_SCHEDULE_PREDICATE: &str = "status='active' AND next_run_at_ms <= ?1 AND (lease_expires_at_ms IS NULL OR lease_expires_at_ms <= ?1)";
 /// 持久调度 repository 视图。
 #[derive(Debug, Clone, Copy)]
 pub struct ScheduleRepository<'a, S> {
@@ -46,13 +50,44 @@ pub(super) fn claim_due_schedules(
     lease_duration_ms: u64,
     limit: u32,
 ) -> Result<Vec<RuntimeScheduleRecord>, RuntimeStoreError> {
+    /*
+     * 只读探路：没有到期调度就不开写事务。
+     *
+     * 这条路径每秒被 scheduler tick 调一次，运行态库是单写者：空集合下拿一次写锁，逐帧
+     * 追加与主轮收口就得在它后面排队。fence 走只读口径，租约失效仍按 fail-closed 上报。
+     */
+    let has_due = {
+        let mut connection = store.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(storage)?;
+        SqliteRuntimeStore::check_fence(&transaction, host, now_ms)?;
+        let due = transaction
+            .query_row(
+                &format!("SELECT 1 FROM schedules WHERE {DUE_SCHEDULE_PREDICATE} LIMIT 1"),
+                params![i64_value(now_ms)?],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(storage)?;
+        transaction.commit().map_err(storage)?;
+        due.is_some()
+    };
+    if !has_due {
+        return Ok(Vec::new());
+    }
     let mut connection = store.connection()?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(storage)?;
     SqliteRuntimeStore::ensure_fence(&transaction, host, now_ms)?;
     let expires = i64_value(now_ms.saturating_add(lease_duration_ms))?;
-    let mut statement = transaction.prepare("SELECT schedule_id FROM schedules WHERE status='active' AND next_run_at_ms <= ?1 AND (lease_expires_at_ms IS NULL OR lease_expires_at_ms <= ?1) ORDER BY next_run_at_ms ASC LIMIT ?2").map_err(storage)?;
+    let mut statement = transaction
+        .prepare(&format!(
+            "SELECT schedule_id FROM schedules WHERE {DUE_SCHEDULE_PREDICATE} \
+             ORDER BY next_run_at_ms ASC LIMIT ?2"
+        ))
+        .map_err(storage)?;
     let ids = statement
         .query_map(params![i64_value(now_ms)?, i64::from(limit)], |row| {
             row.get::<_, String>(0)

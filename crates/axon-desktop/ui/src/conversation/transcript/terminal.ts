@@ -5,8 +5,14 @@
  * 已结算的轮次不再被迟到帧改写；否则运行侧与调度侧各写一条终态时，界面上会出现
  * 两张失败卡或一条重复的分割线。
  *
- * 交互状态帧多一层归属：它的载荷只有一个状态字符串，唯一的归属事实是订阅标识，
- * 因此落帧规则见 `applyInteractionStatus`，与其余三类「落到当前活跃轮次」不同。
+ * 幂等不只是「不重复落卡」：迟到的重放帧曾经按到达时刻重算已经结算的用时（实测把
+ * 29.9 秒写成 1 分 45 秒），也曾经把已经中断的轮次改写成完成。因此终态帧一律先按
+ * 归属找回那一轮，只有它还在跑时才允许写状态与用时；已经收口的轮次最多补齐缺失的
+ * 分割线，读数一个字都不改。
+ *
+ * 归属分两类：完成、失败与不确定由载荷里的 Interaction 标识归属，缺省退回活跃轮次；
+ * 交互状态帧的载荷只有一个状态字符串，唯一归属事实是订阅标识，落帧规则见
+ * `applyInteractionStatus`。
  */
 
 import { parsePayload, type InteractionStatus } from '../wire';
@@ -28,14 +34,40 @@ export function hasOpenTurn(state: ConversationState): boolean {
   return state.turns.some((turn) => turn.status === 'pending' || turn.status === 'streaming');
 }
 
+/**
+ * 这一轮是否还没收口。
+ *
+ * 收口过的轮次已经写下终态与用时，任何后到的帧都只是重复事实，不得再改它。
+ */
+function isOpenTurn(turn: TurnState | undefined): boolean {
+  return turn !== undefined && (turn.status === 'pending' || turn.status === 'streaming');
+}
+
+/**
+ * 终态帧落到哪一轮。
+ *
+ * 载荷带着 Interaction 标识时以它为准：上一轮的终态帧重放得比新一轮的提交还晚时，
+ * 按「最后一条未收口轮次」会把它结算到新一轮上，新一轮的正文当场被提前收口。
+ * 没有标识的老载荷仍然按活跃轮次落帧，口径与既有实现一致。
+ */
+function targetTurnIndex(
+  state: ConversationState,
+  interactionId: string | null | undefined,
+): number {
+  const target = (interactionId ?? '').trim();
+  return target.length === 0 ? activeTurnIndex(state) : statusTurnIndex(state, target);
+}
+
 /** 失败帧：载荷可能带结构化失败回执，也可能只有一句错误正文。 */
 export function applyTurnFailed(
   state: ConversationState,
   payloadJson: string,
   nowMs: number,
+  interactionId: string | null = null,
 ): ConversationState {
-  if (!hasOpenTurn(state)) return state;
-  const position = activeTurnIndex(state);
+  const position = targetTurnIndex(state, interactionId);
+  // 已收口：迟到或重复的失败帧不再改状态，也不再补第二张失败卡。
+  if (!isOpenTurn(state.turns[position])) return state;
   const payload = parsePayload<{ message?: string; reason?: string; failure?: FailureReport }>(
     payloadJson,
   );
@@ -63,9 +95,10 @@ export function applyTurnUncertain(
   state: ConversationState,
   payloadJson: string,
   nowMs: number,
+  interactionId: string | null = null,
 ): ConversationState {
-  if (!hasOpenTurn(state)) return state;
-  const position = activeTurnIndex(state);
+  const position = targetTurnIndex(state, interactionId);
+  if (!isOpenTurn(state.turns[position])) return state;
   const payload = parsePayload<{ reason?: string; classification?: string }>(payloadJson);
   return withTurn(state, position, (turn) => {
     const elapsed = durationFromEvents(turn, nowMs);
@@ -110,15 +143,20 @@ export function applyInteractionStatus(
   if (status === 'received' || status === 'processing') return state;
   const position = statusTurnIndex(state, interactionId);
   if (position < 0) return state;
-  const mapped: TurnState['status'] =
-    status === 'rejected' ? 'rejected' : status === 'interrupted' ? 'interrupted' : 'completed';
   return withTurn(state, position, (turn) => {
+    /*
+     * 已收口：这一帧只是重复事实。既不改状态，也不按到达时刻重算用时，
+     * 只把可能缺失的分割线补上（收口事件丢失时它就是唯一的收尾）。
+     */
+    if (!isOpenTurn(turn)) {
+      return hasTurnSummary(turn)
+        ? turn
+        : appendTurnSummary(turn, turn.elapsedMs ?? durationFromEvents(turn, nowMs));
+    }
+    const mapped: TurnState['status'] =
+      status === 'rejected' ? 'rejected' : status === 'interrupted' ? 'interrupted' : 'completed';
     const elapsed = turn.elapsedMs ?? durationFromEvents(turn, nowMs);
-    const closed = settleTurn(
-      turn,
-      turn.status === 'completed' && mapped === 'completed' ? turn.status : mapped,
-      elapsed,
-    );
+    const closed = settleTurn(turn, mapped, elapsed);
     // 终态处理必须幂等：状态帧是这一轮结束的独立事实，
     // 即使收口事件缺失或乱序，分割线也要补齐，不能靠某一帧必到。
     return hasTurnSummary(turn) ? closed : appendTurnSummary(closed, elapsed);
@@ -137,6 +175,51 @@ function statusTurnIndex(state: ConversationState, interactionId: string): numbe
   return state.turns.findIndex((turn) => turn.id === target || turn.interactionId === target);
 }
 
+/** 服务端显式收口的判据到正文。 */
+function silentSettleSummary(verdict: string): string {
+  switch (verdict) {
+    case 'lease_expired':
+      return '这一轮已经没有执行者（租约已过期），服务端已把它标记为中断';
+    case 'first_token_deadline_exceeded':
+      return '首次响应超时，服务端已把这一轮标记为中断';
+    case 'no_in_flight_turn':
+      return '服务端已经没有这一轮的在途轮次，等于它早就结束了';
+    case 'already_settled':
+      return '这一轮此前已经在服务端收口';
+    default:
+      return `服务端结论：${verdict}`;
+  }
+}
+
+/**
+ * 运行证据判过期之后，按服务端判据在本地收口这一轮。
+ *
+ * 界面不再拿「重启后台服务」当唯一出路：收口由服务端给出判据（租约过期、首字超时、
+ * 本来就不在途），界面只把结论落成正文与终态，因此计时停下、工作状态行退场、
+ * 正文末尾留一条可追溯的结论行。已经收口的轮次不动，重复调用与迟到帧都安全。
+ */
+export function applySettledSilentTurn(
+  state: ConversationState,
+  interactionId: string,
+  verdict: string,
+  nowMs: number,
+): ConversationState {
+  const position = statusTurnIndex(state, interactionId);
+  if (position < 0) return state;
+  return withTurn(state, position, (turn) => {
+    if (!isOpenTurn(turn)) return turn;
+    const elapsed = turn.elapsedMs ?? durationFromEvents(turn, nowMs);
+    const notified = upsertCell(turn, {
+      id: `turn-server-settled:${turn.id}`,
+      role: 'notice',
+      title: '已由服务端收口',
+      summary: silentSettleSummary(verdict),
+      tone: 'info',
+    });
+    return appendTurnSummary(settleTurn(notified, 'interrupted', elapsed), elapsed);
+  });
+}
+
 /** 本轮已有的失败事实；没有失败卡时返回 null。 */
 function payloadFailure(turn: TurnState): FailureReport | null {
   const cell = turn.cells.find((candidate) => candidate.role === 'failure');
@@ -151,8 +234,11 @@ export function applyTurnCompleted(
   nowMs: number,
   generation: GenerationMetricsPayload | null,
   failure: FailureReport | null,
+  interactionId: string | null = null,
 ): ConversationState {
-  const position = activeTurnIndex(state);
+  const position = targetTurnIndex(state, interactionId);
+  // 已收口：迟到的收尾帧不得重写用时、分割线或中断结论。
+  if (!isOpenTurn(state.turns[position])) return state;
   return withTurn(state, position, (turn) => {
     if (status === 'interrupted') {
       const elapsed = durationFromEvents(turn, nowMs);

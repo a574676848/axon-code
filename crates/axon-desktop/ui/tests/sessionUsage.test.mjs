@@ -5,7 +5,9 @@ import {
     hasUsageObservation,
     lastObservedUsage,
     EMPTY_SESSION_USAGE,
+    baselineForSession,
     cumulativeCacheHitBasisPoints,
+    sessionBaselineOf,
     sessionCumulative,
 } from '../src/conversation/sessionUsage.ts';
 
@@ -181,4 +183,42 @@ test('新建会话没有历史时各项都读作 0', () => {
     };
 
     assert.deepEqual(sessionCumulative([], empty), { ...EMPTY_SESSION_USAGE, elapsedMs: 0 });
+});
+
+test('基线把车道标识一起钉住，取页那一刻在跑的轮次留给本地增量', () => {
+    const built = sessionBaselineOf('lane-a', {
+        sessionUsage: baseline().usage,
+        sessionElapsedMs: 3_600_000,
+        interactions: [
+            { interactionId: 'history-1', status: 'understood' },
+            { interactionId: 'live-1', status: 'processing' },
+        ],
+    });
+
+    assert.equal(built.sessionId, 'lane-a');
+    assert.deepEqual([...built.turnIds], ['history-1', 'live-1']);
+    assert.deepEqual([...built.openTurnIds], ['live-1'], '在跑的那一轮由本地增量承担');
+    assert.equal(
+        sessionBaselineOf('lane-a', { sessionUsage: null, sessionElapsedMs: null, interactions: [] }),
+        null,
+        '网关没有用量结论时不立基线',
+    );
+});
+
+test('新建会话不继承上一条会话的累计读数', () => {
+    // 打开上一条会话的索引还在途时切到新建会话：旧页随后才落地，基线记的仍是上一条会话。
+    const stale = sessionBaselineOf('lane-a', {
+        sessionUsage: baseline().usage,
+        sessionElapsedMs: 415_000,
+        interactions: [],
+    });
+
+    assert.equal(baselineForSession(stale, 'draft-b'), null, '别的会话的基线一律不采用');
+    assert.equal(
+        sessionCumulative([], baselineForSession(stale, 'draft-b')),
+        null,
+        '指标条的耗时、累计与命中率因此整段不占位',
+    );
+    assert.equal(baselineForSession(stale, 'lane-a'), stale, '同一条会话里基线照常成立');
+    assert.equal(baselineForSession(stale, null), null, '首屏没有会话可言');
 });

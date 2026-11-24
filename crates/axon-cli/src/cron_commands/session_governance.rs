@@ -204,10 +204,22 @@ pub(super) fn tier_event_bodies(
 /// 任务抢先建出一个没有 schema 的空库。
 pub(super) fn truncate_wal(root: &Path) -> Result<(), String> {
     let data_root = root.join(AXON_RUNTIME_DATA_DIR);
-    if !data_root
-        .join(axon_session::CONTROL_DATABASE_FILE_NAME)
-        .is_file()
-    {
+    let control = data_root.join(axon_session::CONTROL_DATABASE_FILE_NAME);
+    if !control.is_file() {
+        return Ok(());
+    }
+    /*
+     * 有活动连接的库不做 TRUNCATE：这一步要求独占并等待读者，热库上会把网关读请求与逐帧
+     * 追加一起挂住。
+     *
+     * 跳过它只是不回收文件体积，不改变增长上界：上界由 `wal_autocheckpoint` 与每五分钟
+     * 的 PASSIVE 回写维持，`journal_size_limit` 只在回写重置之后把 WAL 截到该值。因此跳过
+     * 截断后 WAL 会常驻历史高水位（本机实测几 MB 量级），这是换取热库不被独占的代价。
+     *
+     * 判活按 WAL 共享内存文件，与清理任务里的 VACUUM 同口径。
+     */
+    if has_live_connection(&control) {
+        axon_logger::debug("跳过 WAL 截断：运行态库有活动连接，留给离线维护窗口");
         return Ok(());
     }
     let store = SqliteRuntimeStore::from_root(data_root);
@@ -221,6 +233,23 @@ pub(super) fn truncate_wal(root: &Path) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// WAL 共享内存文件后缀：它只在有连接打开该库时存在且非空。
+const WAL_SHM_SUFFIX: &str = "-shm";
+
+/// 该库当前是否还有活动连接。
+///
+/// WAL 共享内存文件由 SQLite 在第一条连接打开时创建、在最后一条连接关闭时删除，因此
+/// 「存在且非空」等价于「此刻有人在用这个库」。判不出来时按「有人在用」处理：少回收一次
+/// 磁盘空间远比在热库上做整库独占操作安全。
+///
+/// 边界：非 WAL 的库没有 `-shm`，这条判据对它恒为假；那种库会在整库维护时按
+/// `busy_timeout` 失败并被跳过，行为仍然安全，只是判活不靠这条。
+pub(super) fn has_live_connection(path: &Path) -> bool {
+    let mut shm = path.as_os_str().to_os_string();
+    shm.push(WAL_SHM_SUFFIX);
+    std::fs::metadata(std::path::PathBuf::from(shm)).is_ok_and(|metadata| metadata.len() > 0)
 }
 
 /// 取 thread 索引；缺失就先重建一次再读。

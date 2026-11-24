@@ -12,16 +12,26 @@
 import { useMemo } from 'react';
 
 import {
+  baselineForSession,
   sessionCumulative,
   type SessionCumulative,
   type SessionTokenBaseline,
 } from './sessionUsage';
 import type { TurnState } from './transcript/state';
 
-/** 整条会话的累计 token 与累计耗时；基线未就绪时为空。 */
+/**
+ * 整条会话的累计 token 与累计耗时；基线未就绪或不属于当前会话时为空。
+ *
+ * `sessionId` 必须与基线里钉住的那一条一致：新建会话不读历史索引，基线仍是上一条会话的，
+ * 直接合成会把上一条会话的消耗画到这条空会话上（指标条于是读作「还没开始就已经花了 7M」）。
+ */
 export function useSessionCumulative(
   turns: readonly TurnState[],
   baseline: SessionTokenBaseline | null,
+  sessionId: string | null,
 ): SessionCumulative | null {
-  return useMemo(() => sessionCumulative(turns, baseline), [turns, baseline]);
+  return useMemo(
+    () => sessionCumulative(turns, baselineForSession(baseline, sessionId)),
+    [turns, baseline, sessionId],
+  );
 }

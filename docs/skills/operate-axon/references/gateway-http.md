@@ -150,7 +150,7 @@ Authorization: Bearer <token>
 | `GET /api/v1/sessions/<sessionId>/questions` | 该会话的提问记录，可用 `?state=<pending\|suspended\|answered\|cancelled\|expired>` 过滤 |
 | `POST /api/v1/sessions/<sessionId>/questions/<callId>/answer` | 提交待决提问的结构化回答，先到先得；已结算返回 409 |
 | `GET /api/v1/sessions/<sessionId>/context-snapshot` | 会话级上下文快照，界面占用与剩余量都读这一份。返回 `{"sessionId":...,"snapshot":{...}\|null}`；`snapshot` 含 `currentContextTokens`、`contextWindow`、`composition`（`systemPromptTokens`/`toolDefinitionTokens`/`conversationTokens`，只含帧里真实出现的字段）、`updatedAtMs`、`source`（目前只有 `usage_frame`）。只发原始读数，剩余量由客户端按「窗口 − 占用」派生。没有可用读数时 `snapshot` 为 `null`，与会话不存在（404）严格区分；未知字段一律 `null`，**不是 0**，客户端不要用旧值顶替 |
-| `POST /api/v1/sessions/<sessionId>/settle-silent-turn` | 显式收口一条没有执行者的在途轮次（租约已失效，或租约仍活但首字期限内没有任何事件帧）。请求体 `{"interactionId":"<交互标识>"}`；响应 `{"settled":<bool>,"verdict":"<判据>"}`，`verdict` 取 `lease_expired` / `first_token_deadline_exceeded` / `still_running` / `no_in_flight_turn` / `already_settled`。只写服务端终态，重复调用幂等；客户端据此给文案，**不得**只在前端把这一轮改成已中断 |
+| `POST /api/v1/sessions/<sessionId>/settle-silent-turn` | 显式收口一条没有执行者的在途轮次（租约已失效，或租约仍活但首字期限内没有任何事件帧）。请求体 `{"interactionId":"<交互标识>"}`；响应 `{"settled":<bool>,"verdict":"<判据>"}`，`verdict` 取 `lease_expired` / `first_token_deadline_exceeded` / `still_running` / `no_in_flight_turn` / `already_settled`。只写服务端终态，重复调用幂等；桌面端在运行证据判过期时自动调用一次（按 ESC 与回车前的核对也走这里），按回执给出的判据落终态：`still_running` 表示上一份读数过期、界面继续显示在跑，其余判据表示这一轮已经不归任何人执行，界面据此收口并留一条结论行。判据只能由服务端给出，界面不得自己判死一轮 |
 
 `<agent>` 是单个路径段，其中的 `/` 与 `:` 必须先做百分号转义；转义非法按未命中处理。
 

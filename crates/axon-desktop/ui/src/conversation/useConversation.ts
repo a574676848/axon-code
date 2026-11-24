@@ -609,7 +609,12 @@ export function useConversation(
   const projection = state;
 
   /** 会话累计读数：网关基线加本地增量；基线未就绪时为空，指标条不画这两段。 */
-  const sessionCumulative = useSessionCumulative(projection.turns, paging.sessionBaseline);
+  // 累计读数按当前会话核对该基线：换目标之后才落地的旧页属于上一条会话，不能拿来画这一条。
+  const sessionCumulative = useSessionCumulative(
+    projection.turns,
+    paging.sessionBaseline,
+    targetKey,
+  );
 
   /**
    * 加载更早的一页轮次。
@@ -658,6 +663,14 @@ export function useConversation(
     prependToken: paging.prependToken,
     unfoldTurn: paging.unfoldTurn,
     collapseTurn: (turnId: string) => dispatch({ type: 'collapse-turn', turnId }),
+    /**
+     * 按服务端判据收口这一轮。
+     *
+     * 运行证据判过期之后走这里：状态、计时与结论行都在归约器里落定，
+     * 视图只负责把服务端的 verdict 交进来。
+     */
+    settleSilentTurn: (interactionId: string, verdict: string) =>
+      dispatch({ type: 'settle-silent-turn', interactionId, verdict, nowMs: Date.now() }),
     clearSubmitError: () => setSubmitError(null),
   };
 }

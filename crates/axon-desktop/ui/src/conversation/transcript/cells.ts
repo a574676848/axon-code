@@ -635,9 +635,19 @@ export function applyContextRollover(
 export function applyTurnCompletedUsage(
   state: ConversationState,
   usage: WireUsageUpdate | null,
+  interactionId: string | null = null,
 ): ConversationState {
   const position = activeTurnIndex(state);
   if (position < 0) return state;
+  /*
+   * 收尾负载带着归属时只落到同一轮：上一轮的收尾帧重放得比新一轮的提交还晚时，
+   * 不认归属就会把上一轮的用量写进新一轮的累计里。
+   */
+  const target = (interactionId ?? '').trim();
+  if (target.length > 0) {
+    const turn = state.turns[position];
+    if (turn.id !== target && turn.interactionId !== target) return state;
+  }
   const folded = withTurn(state, position, (turn) => foldStreamUsage(turn));
   if (usage === null) return folded;
   const observed = folded.turns[position].usage;

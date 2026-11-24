@@ -11,14 +11,16 @@
 
 import { useContextSnapshot } from './useContextSnapshot';
 import { liveEvidence, useSessionLive } from './useSessionLive';
+import { useSilentTurnSettle } from './useSilentTurnSettle';
 import type { ContextSnapshotReading } from './contextSnapshot';
 import type { LiveEvidence } from './liveEvidence';
+import type { TurnState } from './transcript';
 
 /** 视图层需要的两组会话级读数。 */
 export interface ConversationObservations {
   /** 上下文快照读数；空表示还没有任何可用读数。 */
   contextSnapshot: ContextSnapshotReading | null;
-  /** 运行态证据结论。 */
+  /** 运行态证据结论；判过期时已经与服务端核对过一轮。 */
   evidence: LiveEvidence;
 }
 
@@ -28,14 +30,34 @@ export interface ConversationObservations {
  * `revision` 是轮次数量：新的一轮开始或收口都要重读一次快照。证据只在 `working`
  * 为真时核对，因此空闲会话不会因此多出请求。
  * `configuredWindow` 是当前生效模型的窗口（配置事实），仅用于补快照缺失的分母。
+ * `turns` 与 `onSettled` 供证据过期时自动收口：身份由仍在跑的那一轮给出，
+ * 结论由服务端给出，本 hook 只把两者接起来。
  */
 export function useConversationObservations(
   sessionId: string | null,
   working: boolean,
   revision: number,
   configuredWindow: number | null = null,
+  turns: readonly TurnState[] = [],
+  onSettled: (interactionId: string, verdict: string) => void = () => undefined,
 ): ConversationObservations {
   const contextSnapshot = useContextSnapshot(sessionId, revision, configuredWindow);
   const liveReading = useSessionLive(sessionId, working);
-  return { contextSnapshot, evidence: liveEvidence(working, liveReading, Date.now()) };
+  const evidence = liveEvidence(working, liveReading, Date.now());
+  /** 仍在跑的那一轮：证据过期时按它的 Interaction 标识请服务端收口。 */
+  let openTurn: TurnState | undefined;
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index];
+    if (turn.status === 'pending' || turn.status === 'streaming') {
+      openTurn = turn;
+      break;
+    }
+  }
+  const resolved = useSilentTurnSettle({
+    sessionId,
+    evidence,
+    interactionId: openTurn?.interactionId ?? null,
+    onSettled,
+  });
+  return { contextSnapshot, evidence: resolved };
 }

@@ -159,7 +159,11 @@ function applyFrame(
      * 再应用一次就是重复计入；只有整轮一次都没观测过的历史才拿它兜底。
      * 必须在分割线落地之前并入本轮，否则 Token 一行永远不会出现。
      */
-    const withUsage = applyTurnCompletedUsage(withCursor, payload?.usage ?? null);
+    const withUsage = applyTurnCompletedUsage(
+      withCursor,
+      payload?.usage ?? null,
+      payload?.interactionId ?? null,
+    );
     return applyTurnCompleted(
       withUsage,
       payload?.response ?? null,
@@ -168,15 +172,21 @@ function applyFrame(
       payload?.generation ?? null,
       // 终态载荷里的结构化失败优先；没有时由正文里的回执解读兜底。
       failureReportFromPayload(payload),
+      payload?.interactionId ?? null,
     );
   }
   if (frame.eventType === EVENT_TYPE_TURN_FAILED) {
-    return applyTurnFailed(withCursor, frame.payloadJson, nowMs);
+    return applyTurnFailed(withCursor, frame.payloadJson, nowMs, payloadInteractionId(frame.payloadJson));
   }
   if (frame.eventType === EVENT_TYPE_TURN_UNCERTAIN) {
-    return applyTurnUncertain(withCursor, frame.payloadJson, nowMs);
+    return applyTurnUncertain(withCursor, frame.payloadJson, nowMs, payloadInteractionId(frame.payloadJson));
   }
   return withCursor;
+}
+
+/** 终态载荷里的 Interaction 标识；没有时为空，落帧退回活跃轮次。 */
+function payloadInteractionId(payloadJson: string): string | null {
+  return parsePayload<{ interactionId?: string }>(payloadJson)?.interactionId ?? null;
 }
 
 /** 一条 wire 事件落到当前活跃轮次上。 */
@@ -439,6 +449,8 @@ function applyLifecycle(
     (lifecycle.status === 'completed' || lifecycle.status === 'failed')
   ) {
     return withTurn(state, position, (turn) => {
+      // 已收口：一次 run 的终态可能重放（重连、回放与实时各一条），不得重写用时。
+      if (turn.status !== 'pending' && turn.status !== 'streaming') return turn;
       const elapsed = turn.elapsedMs ?? durationFromEvents(turn, nowMs);
       const settled = settleTurn(
         turn,

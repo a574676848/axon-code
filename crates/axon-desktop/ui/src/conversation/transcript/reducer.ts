@@ -8,6 +8,7 @@
 
 import { applyFrames } from './frames';
 import { collapseTurn, foldTurn, replaceTurnCells } from './fold';
+import { applySettledSilentTurn } from './terminal';
 import { INITIAL_CONVERSATION, LOCAL_STEER_PREFIX, type AttachmentRef, type ConversationAction, type ConversationState, type JobRow, type TurnState } from './state';
 import { pruneSettledQuestions, type PendingQuestion } from '../questions';
 import { emptyTurn, absorbClaimedUserCells, detachCells, localUserId, openTurn, refreshLiveElapsed, refreshLiveSummary, upsertCell, withTurn } from './turns';
@@ -169,6 +170,9 @@ export function conversationReducer(
       };
     case 'frames':
       return applyFrames(state, action.frames, action.nowMs);
+    case 'settle-silent-turn':
+      // 收口结论来自服务端判据：状态、计时与结论行都在这一处落定，界面不自造终态。
+      return applySettledSilentTurn(state, action.interactionId, action.verdict, action.nowMs);
     case 'reconcile-questions':
       return reconcileQuestions(state, action.questions, action.authoritative === true);
     default:

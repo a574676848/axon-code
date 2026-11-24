@@ -8,6 +8,7 @@ use crate::ports::{
 };
 use axon_domain::{DaemonSessionId, InteractionId, SessionActionStatus};
 use rusqlite::Connection;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, Mutex,
@@ -21,6 +22,10 @@ pub mod action_repository;
 mod agent_continuation_repository;
 #[path = "sqlite_runtime_store/agent_mailbox_repository.rs"]
 mod agent_mailbox_repository;
+
+#[path = "sqlite_runtime_store/busy_retry.rs"]
+mod busy_retry;
+pub(crate) use busy_retry::with_busy_retry;
 
 #[path = "sqlite_runtime_store/client_delivery_repository.rs"]
 mod client_delivery_repository;
@@ -167,6 +172,8 @@ pub struct SqliteRuntimeStore {
     control: Arc<DatabaseHandle>,
     outbox: Arc<DatabaseHandle>,
     events_root: PathBuf,
+    /// 按会话分片的事件面写入锁，见 `event_log_write_lock`。
+    event_log_write_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
 }
 
 /// 单个数据库文件的连接池与建库状态。
@@ -295,7 +302,26 @@ impl SqliteRuntimeStore {
                 busy_timeout,
             )),
             events_root,
+            event_log_write_locks: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// 取一条会话的事件面写入锁。
+    ///
+    /// 序号在控制面事务里分配、文件追加在事务提交之后，两步之间原本没有任何互斥：
+    /// 两个写者可以按相反顺序落盘，后落盘的那个必然撞上「序号与文件尾不一致」，
+    /// 只能回退水位并按文件尾重排。重排会把已经发布给订阅者的序号改掉，订阅端把这一
+    /// 批当成重复帧丢掉，界面上于是出现「服务端早就收口、界面还在跑」，随后再被运行
+    /// 证据判成过期。因此分配与落盘必须落在同一把会话锁里。
+    ///
+    /// 锁按会话分片：一条慢会话不会挡住别的会话。进程内互斥管不到别的进程，
+    /// 那一层仍由文件追加自身的乐观校验与既有重排兜底。
+    pub(crate) fn event_log_write_lock(&self, session_id: &DaemonSessionId) -> Arc<Mutex<()>> {
+        let mut locks = self
+            .event_log_write_locks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Arc::clone(locks.entry(session_id.as_str().to_owned()).or_default())
     }
 
     /// 从连接池取用一条控制面连接。
@@ -641,6 +667,9 @@ impl SqliteRuntimeStore {
         turn_activity_repository::activities_for(self, session_id, interaction_ids)
     }
 }
+#[cfg(test)]
+#[path = "sqlite_runtime_store_contention_tests.rs"]
+mod contention_tests;
 #[cfg(test)]
 #[path = "sqlite_runtime_store_context_snapshot_tests.rs"]
 mod context_snapshot_tests;

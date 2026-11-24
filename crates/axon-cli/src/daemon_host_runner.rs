@@ -33,6 +33,9 @@ pub(super) use support::{
     DaemonPidFileGuard, SystemClock, spawn_lease_fence_wake,
 };
 
+#[path = "daemon_host_runner_lease.rs"]
+mod lease;
+
 #[path = "daemon_host_runner_workers.rs"]
 mod workers;
 
@@ -490,7 +493,13 @@ fn build_daemon_host(
     )
     .with_active_turn_steer_sink(DaemonPrimaryTurnSteerSink {
         active_primary_turns: active_primary_turns.clone(),
-    });
+    })
+    /*
+     * 租约丢失即收口：主 turn 的租约一旦被证明不在自己手上，就按与 ESC 同一条取消
+     * 令牌让本轮在检查点收口。不接线时这一轮会跑到收尾，然后因为写入被围栏拒绝而
+     * 整段输出落不了地，用户那边只看到一条永远收不了口的轮次。
+     */
+    .with_lease_lost(lease::lease_lost_hook(active_primary_turns.clone()));
     Ok(host)
 }
 

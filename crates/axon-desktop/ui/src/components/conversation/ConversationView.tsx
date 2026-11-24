@@ -167,12 +167,15 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
    * 会话级读数：上下文快照与运行态证据都只经网关读，头部与换窗进度行读同一份快照。
    * 快照通常不带窗口字段，分母回落到当前生效模型的配置事实，因此这一组读数必须排在
    * `effectiveModel` 之后：回退值要是这一轮真正在跑的模型，不是配置默认模型。
+   * 证据过期时由这一组顺手完成收口：判据来自服务端，不在这里另开一条核对路径。
    */
   const { contextSnapshot, evidence } = useConversationObservations(
     selection?.sessionId ?? null,
     conversation.working,
     conversation.state.turns.length,
     effectiveModel.contextWindow,
+    conversation.state.turns,
+    (interactionId, verdict) => conversation.settleSilentTurn(interactionId, verdict),
   );
   /**
    * 最近一次记忆反思提示：随首页历史带回，换目标即清空，翻页不回退。空白一律当没有。

@@ -1,11 +1,18 @@
 //! 会话清理后的 SQLite 安全维护。
 //!
-//! Cron 会递归维护 `.axon` 内已知本机数据库。只读检查先行，锁冲突跳过；
-//! 空闲页为零的库不做 VACUUM，避免定时任务长时间争抢运行时写锁。
+//! Cron 会递归维护 `.axon` 内已知本机数据库。只读检查先行，锁冲突跳过；空闲页为零的库
+//! 不做 VACUUM；**有活动连接的库整库独占维护一律跳过**。
+//!
+//! 最后一条是硬规则：`VACUUM` 要把整库重写一遍，全程持有独占锁。运行态库（会话控制面、
+//! 待消费队列）在这样的窗口里既不能读也不能写，逐帧追加与网关读请求会一起卡住并按
+//! `busy_timeout` 报 `database is locked`。是否「活着」按 WAL 共享内存文件判定：它只在
+//! 有连接打开该库时存在且非空，因此这条规则不依赖库名清单，也不依赖谁在跑。
 
 use std::{fs, path::Path, time::Duration};
 
 use rusqlite::Connection;
+
+use super::session_governance::has_live_connection;
 
 /// SQLite 文件后缀。
 const SQLITE_FILE_SUFFIX: &str = ".sqlite3";
@@ -64,6 +71,14 @@ fn collect_sqlite_files(
 }
 
 fn vacuum_database_if_needed(path: &Path) -> Result<bool, String> {
+    // 先判「有没有人在用」：整库独占维护不能落在活库上，锁等待预算救不了这件事。
+    if has_live_connection(path) {
+        axon_logger::debug(&format!(
+            "跳过 SQLite VACUUM：库有活动连接，整库独占维护留给离线维护窗口 {}",
+            path.display()
+        ));
+        return Ok(false);
+    }
     let connection = open_database(path)?;
     let free_page_count: i64 = connection
         .query_row("PRAGMA freelist_count", [], |row| row.get(0))

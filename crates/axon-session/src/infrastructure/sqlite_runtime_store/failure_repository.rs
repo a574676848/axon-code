@@ -17,6 +17,15 @@ pub(super) fn fail_action(
     max_attempts: u32,
     now_ms: u64,
 ) -> Result<Vec<SessionEventRecord>, RuntimeStoreError> {
+    /*
+     * 锁序固定为「先会话锁、后数据库写事务」：本函数在事务里推进水位，提交后再落盘，
+     * 两步必须在同一把会话锁内，否则与逐帧追加交错会写出乱序尾并触发「序号与文件尾
+     * 不符」的重排。
+     */
+    let lock = store.event_log_write_lock(session_id);
+    let guard = lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut connection = store.connection()?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -76,7 +85,7 @@ pub(super) fn fail_action(
     )
     .map_err(super::helpers::storage)?;
     transaction.commit().map_err(super::helpers::storage)?;
-    super::event_log_repository::write_events_at(
+    let written = super::event_log_repository::write_events_at_locked(
         store,
         session_id,
         &host.generation,
@@ -84,5 +93,7 @@ pub(super) fn fail_action(
         &[(event_type.to_owned(), error.to_owned())],
         now_ms,
         None,
-    )
+    );
+    drop(guard);
+    written
 }

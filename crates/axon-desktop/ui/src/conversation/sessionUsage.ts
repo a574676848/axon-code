@@ -10,6 +10,7 @@
  * 因此基线由网关按车道聚合后随历史页一起下发，本地只叠加基线取回之后发生的轮次。
  */
 
+import { interactionStillRunning } from './historyProjection';
 import { currentContextTokens, totalTokens, type TokenUsage } from './transcript';
 import type { TurnState } from './transcript/state';
 
@@ -61,6 +62,8 @@ export function lastObservedUsage(turns: readonly { usage: TokenUsage }[]): Toke
  * 把同一轮既算进基线又算进增量。
  */
 export interface SessionTokenBaseline {
+  /** 基线所属的会话标识：跨会话的读数一律不采用。 */
+  sessionId: string;
   /** 基线覆盖的累计用量。 */
   usage: SessionUsageTotals;
   /** 基线覆盖的墙钟耗时（毫秒）。 */
@@ -75,6 +78,55 @@ export interface SessionTokenBaseline {
    * 这些轮次收口后不会回填到已经取回的基线，整条由本地增量承担。
    */
   openTurnIds: ReadonlySet<string>;
+}
+
+/** 组装基线要读的那一页事实：只取基线关心的几项。 */
+export interface SessionBaselinePage {
+  /** 网关按会话聚合出的累计用量；读不到结论时为空。 */
+  sessionUsage: SessionUsageTotals | null;
+  /** 网关按会话聚合出的累计耗时（毫秒）；读不到结论时为空。 */
+  sessionElapsedMs: number | null;
+  /** 这一页覆盖到的轮次：标识与权威处理状态。 */
+  interactions: readonly { interactionId: string; status: string }[];
+}
+
+/**
+ * 从一页车道历史组装累计读数基线。
+ *
+ * 车道标识在这一步就钉进基线：基线只对它自己那条会话成立。取页是异步的，切换目标之后
+ * 才落地的旧页因此不会被当成新目标的读数，新建会话也不会继承上一条会话的消耗。
+ */
+export function sessionBaselineOf(
+  sessionId: string,
+  page: SessionBaselinePage,
+): SessionTokenBaseline | null {
+  if (page.sessionUsage === null) return null;
+  return {
+    sessionId,
+    usage: page.sessionUsage,
+    elapsedMs: page.sessionElapsedMs ?? 0,
+    turnIds: new Set(page.interactions.map((item) => item.interactionId)),
+    // 取页那一刻仍在跑的那几条：账本还没落账，整条由本地增量承担。
+    openTurnIds: new Set(
+      page.interactions
+        .filter((item) => interactionStillRunning(item.status))
+        .map((item) => item.interactionId),
+    ),
+  };
+}
+
+/**
+ * 基线只对它自己那条会话成立。
+ *
+ * 换会话之后旧基线仍留在原地（它属于上一条车道），新建会话更不会去取一份新基线：没有
+ * 这道核对，上一条会话的累计用量、耗时与命中率会原样挂在新会话的指标条上。
+ */
+export function baselineForSession(
+  baseline: SessionTokenBaseline | null,
+  sessionId: string | null,
+): SessionTokenBaseline | null {
+  if (baseline === null || sessionId === null) return null;
+  return baseline.sessionId === sessionId ? baseline : null;
 }
 
 /** 会话累计读数组。 */

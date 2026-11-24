@@ -15,7 +15,12 @@ use std::time::Duration;
 /// 空闲连接保留上限；超出的归还连接直接关闭，避免长尾线程堆积文件句柄。
 const MAX_IDLE_CONNECTIONS: usize = 8;
 /// 单条连接等待写锁的毫秒数；超时返回 Busy 交由上层可观测地失败，而不是无限阻塞。
-const BUSY_TIMEOUT_MS: u64 = 1_000;
+///
+/// 预算按「最长合法写事务」定：一次 WAL 自动回写（1000 页上限）叠上杀毒扫描可以吃掉
+/// 数百毫秒，突发写入再排几拍，1 秒会给出误报。这里放宽到 2 秒，配合
+/// `with_busy_retry` 吃掉的瞬时争用，实测里的 `database is locked` 属于「等不到」而不是
+/// 「库坏了」。
+const BUSY_TIMEOUT_MS: u64 = 2_000;
 /// 生产默认的写锁等待上限。
 const DEFAULT_BUSY_TIMEOUT: Duration = Duration::from_millis(BUSY_TIMEOUT_MS);
 /// 每条连接共享的 PRAGMA 配置。
