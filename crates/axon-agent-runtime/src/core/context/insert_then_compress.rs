@@ -363,8 +363,14 @@ pub(crate) enum CompressionOutcome {
 /// replacement history 完整校验通过后调用。
 pub trait WindowRolloverTransaction {
     /// 生成待校验的窗口交接 checkpoint。
-    fn prepare(&mut self, active_messages: &[AgentModelMessage])
-    -> AxonResult<CanonicalCheckpoint>;
+    ///
+    /// `turn_id` 是这次换窗所属的轮次：事务实现把它带进生命周期事实，界面据此把
+    /// 「窗口轮转」行归到真正发生它的那一轮。
+    fn prepare(
+        &mut self,
+        active_messages: &[AgentModelMessage],
+        turn_id: TurnId,
+    ) -> AxonResult<CanonicalCheckpoint>;
 
     /// 自动换窗前校验记忆交接；主动换窗同样必须先完成当前窗口保存。
     fn validate_memory_handoff(
@@ -402,6 +408,11 @@ pub trait WindowRolloverTransaction {
     /// 换窗是会话自救的唯一动作，失败原因不可辨等于把会话钉死在满上下文。
     fn note_failure_reason(&mut self, _reason: &str) {}
 
+    /// 门禁拒绝属于可自愈的推迟：事务收尾时只清状态，不发布失败事实。
+    ///
+    /// 默认实现忽略；只有会把推迟与真实失败分开投影的事务才需要覆盖。
+    fn note_deferral(&mut self) {}
+
     /// prepare、校验或 commit 失败后的状态清理通知。
     fn abort(&mut self) {}
 }
@@ -413,6 +424,7 @@ where
     fn prepare(
         &mut self,
         active_messages: &[AgentModelMessage],
+        _turn_id: TurnId,
     ) -> AxonResult<CanonicalCheckpoint> {
         self(active_messages)
     }
@@ -508,21 +520,24 @@ impl WindowRolloverRuntime<'_> {
         } else {
             WindowRolloverValidationMode::Automatic
         };
-        if let Err(error) = self.rollover.validate_memory_handoff(validation_mode) {
+        if self
+            .rollover
+            .validate_memory_handoff(validation_mode)
+            .is_err()
+        {
+            /*
+             * 门禁拒绝是可自愈的推迟，不是失败：模型会在同一轮按 fallback 提示补写便签，
+             * 随后重试换窗就成功了。因此这里不产生任何用户可见的失败事实，只让事务按
+             * 「推迟」收尾（清状态、不发布），并计入自动换窗退避，避免同一读数每一步重试。
+             */
+            self.rollover.note_deferral();
             self.rollover.abort();
-            turn_events.push(compression_failed_event(
-                turn_id,
-                &format!("换窗前任务状态未完成保存：{error:?}"),
-                0,
-                "memory_handoff_missing",
-                CompactionFailureMetrics {
-                    trigger: validation_mode.trigger_code(),
-                    before_messages: messages.len(),
-                    after_messages: messages.len(),
-                },
-            ));
             // 未保存时保留历史和修复提示，但不得继续发送原窗口。
             self.runtime.emit_fallback(messages);
+            if validation_mode == WindowRolloverValidationMode::Automatic {
+                self.runtime
+                    .note_auto_rollover_failure(current_context_tokens.unwrap_or_default());
+            }
             return CompressionOutcome::Prompted;
         }
         // 门禁通过后才捕获 FreshWindow 装配上下文，失败路径不复制历史。
@@ -551,7 +566,7 @@ impl WindowRolloverRuntime<'_> {
         let duration_ms = || now_ms().saturating_sub(started_at_ms);
         // 便签由模型自己写，常常只剩一句结论；最近两步工具动作由调用方的来源补进新窗口。
         self.runtime.rollover_digest = self.runtime.take_digest();
-        let outcome = match self.rollover.prepare(provider_messages) {
+        let outcome = match self.rollover.prepare(provider_messages, turn_id) {
             Ok(checkpoint) => complete_compaction(
                 CompactionCompletionContext {
                     runtime: &self.runtime,

@@ -267,7 +267,7 @@ impl<'a> RunProgressSink<'a> {
             lifecycle_correlation(&view.kind, view.attempt_index),
             WireEventKind::TurnLifecycle(WireTurnLifecycle {
                 part_id: view.id,
-                turn_id: view.kind.clone(),
+                turn_id: view.turn_id.unwrap_or_else(|| view.kind.clone()),
                 phase: lifecycle_phase(&view.phase),
                 status: view.status,
                 title: view.title,

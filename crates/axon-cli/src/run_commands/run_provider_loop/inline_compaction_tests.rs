@@ -8,10 +8,11 @@ use axon_agent_runtime::{
     ProviderStreamAccumulator, ProviderStreamProtocol, ProviderStreamingTransportOutcome,
     WindowRolloverPolicyRuntime, WindowRolloverRuntime,
 };
+use axon_domain::TurnId;
 use axon_protocol::wire::{WireContextRollover, WireEventKind};
 
 use super::super::super::run_compaction_projection::{
-    COMPACTION_COMPLETED_KIND, COMPACTION_FAILED_KIND, COMPACTION_STARTED_KIND,
+    COMPACTION_COMPLETED_KIND, COMPACTION_STARTED_KIND,
 };
 
 const TEST_CONTEXT_WINDOW: u64 = 32_000;
@@ -216,7 +217,9 @@ fn non_conflict_projection_failures_are_not_retried() {
 fn commit_rollover_directly(request: &RunRequest) -> Result<(), String> {
     let messages = &request.model_payload.messages;
     let mut rollover = InlineWindowRollover::new(request, None);
-    let checkpoint = rollover.prepare(messages).expect("prepare 必须成功");
+    let checkpoint = rollover
+        .prepare(messages, TurnId(1))
+        .expect("prepare 必须成功");
     let policy_runtime = WindowRolloverPolicyRuntime::new(CompressionPolicy {
         trigger_tokens: TEST_ROLLOVER_LIMIT,
         context_window: TEST_CONTEXT_WINDOW,
@@ -436,8 +439,8 @@ fn inline_rollover_projects_started_completed_and_context_rollover() {
 }
 
 #[test]
-fn handoff_failure_before_prepare_is_projected_instead_of_silent() {
-    let root = temp_workspace("inline-rollover-handoff-failure");
+fn handoff_deferral_is_not_projected_as_failure() {
+    let root = temp_workspace("inline-rollover-handoff-deferral");
     let request = request_with_rollover(root.clone());
     initialize_session(&request);
 
@@ -446,7 +449,7 @@ fn handoff_failure_before_prepare_is_projected_instead_of_silent() {
         let mut emit = |event: RunProgressWireEvent| events.push(event);
         let sink = RunProgressSink::with_session_id(&mut emit, request.session_id.clone());
         let mut rollover = InlineWindowRollover::new(&request, Some(&sink));
-        // 便签未写入时门禁必然失败，此时尚未进入 prepare：仍必须投影失败事实。
+        // 便签未写入时门禁必然失败：这是可自愈的推迟，不是用户可见的失败。
         assert!(
             rollover
                 .validate_memory_handoff(WindowRolloverValidationMode::Automatic)
@@ -456,10 +459,9 @@ fn handoff_failure_before_prepare_is_projected_instead_of_silent() {
         rollover.abort();
     }
 
-    assert_eq!(
-        lifecycle_kinds(&events),
-        vec![COMPACTION_FAILED_KIND.to_owned()],
-        "prepare 之前的门禁失败此前完全静默，必须补上失败投影"
+    assert!(
+        lifecycle_kinds(&events).is_empty(),
+        "便签门禁拒绝是可自愈的推迟，不得发布失败行；真正的失败仍由 prepare 与 commit 路径投影"
     );
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -477,7 +479,9 @@ fn projection_failure_rolls_back_archive_and_window_identity() {
 
     let messages = &request.model_payload.messages;
     let mut rollover = InlineWindowRollover::new(&request, None);
-    let checkpoint = rollover.prepare(messages).expect("prepare 必须成功");
+    let checkpoint = rollover
+        .prepare(messages, TurnId(1))
+        .expect("prepare 必须成功");
     let policy_runtime = WindowRolloverPolicyRuntime::new(CompressionPolicy {
         trigger_tokens: TEST_ROLLOVER_LIMIT,
         context_window: TEST_CONTEXT_WINDOW,
@@ -584,7 +588,9 @@ fn source_failure_happens_before_thread_projection() {
 
     let messages = &request.model_payload.messages;
     let mut rollover = InlineWindowRollover::new(&request, None);
-    let checkpoint = rollover.prepare(messages).expect("prepare 必须成功");
+    let checkpoint = rollover
+        .prepare(messages, TurnId(1))
+        .expect("prepare 必须成功");
     let policy_runtime = WindowRolloverPolicyRuntime::new(CompressionPolicy {
         trigger_tokens: TEST_ROLLOVER_LIMIT,
         context_window: TEST_CONTEXT_WINDOW,

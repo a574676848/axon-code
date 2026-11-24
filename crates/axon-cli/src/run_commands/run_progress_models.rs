@@ -11,6 +11,8 @@ use axon_protocol::{diff::FileChange, wire::WireLifecycleStatus};
 pub(crate) struct RunLifecycleStatusView {
     /// 稳定 lifecycle part id。
     pub(crate) id: String,
+    /// 这条生命周期事实属于哪一轮；缺省时线上字段回落到 kind。
+    pub(crate) turn_id: Option<String>,
     /// 状态标题。
     pub(crate) title: String,
     /// 稳定事件类别。
@@ -46,6 +48,7 @@ impl RunLifecycleStatusView {
     ) -> Self {
         Self {
             id: id.into(),
+            turn_id: None,
             title: title.into(),
             kind: kind.into(),
             summary: summary.into(),
@@ -84,6 +87,15 @@ impl RunLifecycleStatusView {
         let tool_name = tool_name.into();
         if !tool_name.trim().is_empty() {
             self.tool_name = Some(tool_name);
+        }
+        self
+    }
+
+    /// 记下这条事实属于哪一轮；只有真正知道轮次的生产者才设置它。
+    pub(crate) fn with_turn_id(mut self, turn_id: impl Into<String>) -> Self {
+        let turn_id = turn_id.into();
+        if !turn_id.trim().is_empty() {
+            self.turn_id = Some(turn_id);
         }
         self
     }

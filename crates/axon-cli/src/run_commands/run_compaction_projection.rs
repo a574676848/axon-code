@@ -30,7 +30,7 @@ const COMPACTION_PART_PREFIX: &str = "lifecycle:compaction";
 /// 压缩触发码。
 ///
 /// 当前只剩 turn 内联轮转一个触发源，但这一段属于 part id 契约：CLI 回归用例与
-/// 桌面端渲染测试都按 `lifecycle:compaction:inline:<session>` 拼装，不能省略。
+/// 桌面端渲染测试都按 `lifecycle:compaction:inline:<session>:<window>` 拼装，不能省略。
 const TRIGGER_CODE_INLINE: &str = "inline";
 /// 面向用户的触发来源展示名。
 const TRIGGER_LABEL_INLINE: &str = "内联窗口轮转";
@@ -39,6 +39,8 @@ const TRIGGER_LABEL_INLINE: &str = "内联窗口轮转";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CompactionLifecycleView {
     pub(super) part_id: String,
+    /// 这次换窗属于哪一轮；界面的历史行据此归位。
+    pub(super) turn_id: String,
     pub(super) kind: &'static str,
     pub(super) title: String,
     pub(super) summary: String,
@@ -49,9 +51,15 @@ pub(super) struct CompactionLifecycleView {
 
 impl CompactionLifecycleView {
     /// 压缩开始；part id 在同一轮转内保持稳定。
-    pub(super) fn started(part_id: String, summary: String, started_at_ms: u64) -> Self {
+    pub(super) fn started(
+        part_id: String,
+        turn_id: String,
+        summary: String,
+        started_at_ms: u64,
+    ) -> Self {
         Self {
             part_id,
+            turn_id,
             kind: COMPACTION_STARTED_KIND,
             title: COMPACTION_TITLE.to_owned(),
             summary,
@@ -64,12 +72,14 @@ impl CompactionLifecycleView {
     /// 压缩成功；携带量化结果便于排查「模型失忆」。
     pub(super) fn completed(
         part_id: String,
+        turn_id: String,
         summary: String,
         started_at_ms: Option<u64>,
         duration_ms: Option<u64>,
     ) -> Self {
         Self {
             part_id,
+            turn_id,
             kind: COMPACTION_COMPLETED_KIND,
             title: COMPACTION_TITLE.to_owned(),
             summary,
@@ -80,14 +90,19 @@ impl CompactionLifecycleView {
     }
 
     /// 压缩失败；摘要必须显式声明当前历史保持不变。
+    ///
+    /// 只用于真正的失败（归档、提交或 replacement 校验）。「便签尚未保存」属于运行时的
+    /// 可自愈推迟，不在这里发布。
     pub(super) fn failed(
         part_id: String,
+        turn_id: String,
         summary: String,
         started_at_ms: Option<u64>,
         duration_ms: Option<u64>,
     ) -> Self {
         Self {
             part_id,
+            turn_id,
             kind: COMPACTION_FAILED_KIND,
             title: COMPACTION_TITLE.to_owned(),
             summary,
@@ -112,8 +127,19 @@ pub(super) fn is_compaction_kind(kind: &str) -> bool {
 }
 
 /// 单一轮转的稳定 part id；开始与结束共用，TUI 才能把「进行中」替换为「完成」。
-pub(super) fn compaction_part_id(session_id: &str) -> String {
-    format!("{COMPACTION_PART_PREFIX}:{TRIGGER_CODE_INLINE}:{session_id}")
+///
+/// 身份取自这次换窗本身（会话 + 目标窗口号）：同一会话的多次换窗因此各有各的行，
+/// 不会在历史里互相覆盖，也不再需要按轮次另行区分。
+pub(super) fn compaction_part_id(session_id: &str, window_number: u64) -> String {
+    format!("{COMPACTION_PART_PREFIX}:{TRIGGER_CODE_INLINE}:{session_id}:{window_number}")
+}
+
+/// 从轮转的领域身份还原 part id；身份缺失时返回 `None`。
+pub(super) fn compaction_part_id_from_lifecycle(lifecycle_id: &str) -> Option<String> {
+    let rest = lifecycle_id.strip_prefix("inline-rollover:")?;
+    Some(format!(
+        "{COMPACTION_PART_PREFIX}:{TRIGGER_CODE_INLINE}:{rest}"
+    ))
 }
 
 /// 投影一条压缩生命周期事实。
@@ -131,7 +157,8 @@ pub(super) fn emit_compaction_lifecycle(
         view.summary.clone(),
         COMPACTION_UI_PHASE,
         None,
-    );
+    )
+    .with_turn_id(view.turn_id.clone());
     status_view = match view.status {
         WireLifecycleStatus::Completed => status_view.completed(),
         WireLifecycleStatus::Failed => status_view.failed(),
@@ -204,27 +231,56 @@ mod tests {
 
     #[test]
     fn started_and_completed_share_the_same_part_id() {
-        let part_id = compaction_part_id("session-1");
-        let started = CompactionLifecycleView::started(part_id.clone(), "开始".to_owned(), 10);
+        let part_id = compaction_part_id("session-1", 3);
+        let started = CompactionLifecycleView::started(
+            part_id.clone(),
+            "7".to_owned(),
+            "开始".to_owned(),
+            10,
+        );
         let completed = CompactionLifecycleView::completed(
             part_id.clone(),
+            "7".to_owned(),
             "完成".to_owned(),
             Some(10),
             Some(5),
         );
 
         assert_eq!(started.part_id, completed.part_id);
+        assert_eq!(started.turn_id, "7");
         assert!(!is_text_projectable_kind(started.kind));
         assert!(is_text_projectable_kind(completed.kind));
     }
 
-    /// part id 是外部契约：桌面端渲染测试按同一格式拼装，改这里必须同步那边。
+    /// part id 是外部契约：身份取自这次换窗本身（会话 + 目标窗口号）。
+    /// 真实失败（归档、提交或 replacement 校验）仍然发布失败事实，并带上轮次与窗口身份。
     #[test]
-    fn part_id_keeps_the_inline_trigger_segment() {
-        assert_eq!(
-            compaction_part_id("session-1"),
-            "lifecycle:compaction:inline:session-1"
+    fn failed_lifecycle_keeps_turn_and_window_identity() {
+        let view = CompactionLifecycleView::failed(
+            compaction_part_id("session-1", 2),
+            "9".to_owned(),
+            failed_summary("窗口归档提交失败"),
+            Some(1_000),
+            Some(20),
         );
+
+        assert_eq!(view.status, WireLifecycleStatus::Failed);
+        assert_eq!(view.turn_id, "9");
+        assert_eq!(view.part_id, "lifecycle:compaction:inline:session-1:2");
+        assert!(view.summary.contains("当前任务历史保持不变"));
+    }
+
+    #[test]
+    fn part_id_carries_the_window_being_rolled_over() {
+        assert_eq!(
+            compaction_part_id("session-1", 3),
+            "lifecycle:compaction:inline:session-1:3"
+        );
+        assert_eq!(
+            compaction_part_id_from_lifecycle("inline-rollover:session-1:3").as_deref(),
+            Some("lifecycle:compaction:inline:session-1:3")
+        );
+        assert_eq!(compaction_part_id_from_lifecycle("unknown:id"), None);
     }
 
     #[test]

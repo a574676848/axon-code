@@ -469,7 +469,7 @@ fn test_maybe_compress_rejects_checkpoint_over_window_output_budget() {
 }
 
 #[test]
-fn requested_rollover_requires_saved_state_before_prepare() {
+fn requested_rollover_defers_until_state_saved() {
     struct UnsavedMemoryHandoff;
 
     impl WindowRolloverTransaction for UnsavedMemoryHandoff {
@@ -485,6 +485,7 @@ fn requested_rollover_requires_saved_state_before_prepare() {
         fn prepare(
             &mut self,
             _messages: &[AgentModelMessage],
+            _turn_id: TurnId,
         ) -> axon_domain::AxonResult<CanonicalCheckpoint> {
             panic!("未通过记忆交接门禁时不得生成 checkpoint")
         }
@@ -527,15 +528,10 @@ fn requested_rollover_requires_saved_state_before_prepare() {
         message.content.contains("当前任务窗口已耗尽")
             && message.content.contains("builtin.notes_write_file")
     }));
-    assert_eq!(
-        turn_events[0]
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.get("reason"))
-            .and_then(serde_json::Value::as_str),
-        Some("memory_handoff_missing")
+    assert!(
+        turn_events.is_empty(),
+        "便签门禁拒绝是可自愈的推迟，不发布用户可见的失败事实"
     );
-    assert!(turn_events[0].summary.contains("换窗前任务状态未完成保存"));
 }
 
 #[test]
@@ -546,6 +542,7 @@ fn commit_failure_keeps_the_current_history_for_the_next_turn() {
         fn prepare(
             &mut self,
             messages: &[AgentModelMessage],
+            _turn_id: TurnId,
         ) -> axon_domain::AxonResult<CanonicalCheckpoint> {
             Ok(canonical_checkpoint(messages, "继续"))
         }

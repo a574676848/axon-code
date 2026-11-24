@@ -12,12 +12,13 @@ use axon_agent_runtime::{
     SessionNotes, SessionNotesRuntime, WindowArchiveResult, WindowRolloverEngine,
     WindowRolloverTransaction, WindowRolloverValidationMode,
 };
-use axon_domain::{AxonError, AxonResult};
+use axon_domain::{AxonError, AxonResult, TurnId};
 
 use super::super::RunRequest;
 use super::super::run_compaction_projection::{
-    CompactionLifecycleView, compaction_part_id, completed_summary, context_rollover_fact,
-    emit_compaction_lifecycle, emit_context_rollover, failed_summary, started_summary,
+    CompactionLifecycleView, compaction_part_id, compaction_part_id_from_lifecycle,
+    completed_summary, context_rollover_fact, emit_compaction_lifecycle, emit_context_rollover,
+    failed_summary, started_summary,
 };
 use super::super::run_execution::now_ms;
 use super::super::run_progress::RunProgressSink;
@@ -97,6 +98,12 @@ pub(super) struct InlineWindowRollover<'request, 'sink> {
     active_failure_reason: Option<String>,
     active_through_sequence: Option<u64>,
     active_checkpoint_text: String,
+    /// 本次轮转的领域身份（`inline-rollover:<session>:<window>`）；开始、完成、失败共用。
+    active_lifecycle_id: Option<String>,
+    /// 本次轮转属于哪一轮；事件按它归位。
+    active_turn_id: Option<String>,
+    /// 便签门禁拒绝属于可自愈的推迟，不是失败：这类收尾不发布失败事实。
+    deferred: bool,
 }
 
 impl<'request, 'sink> InlineWindowRollover<'request, 'sink> {
@@ -113,14 +120,18 @@ impl<'request, 'sink> InlineWindowRollover<'request, 'sink> {
             active_failure_reason: None,
             active_through_sequence: None,
             active_checkpoint_text: String::new(),
+            active_lifecycle_id: None,
+            active_turn_id: None,
+            deferred: false,
         }
     }
 
-    fn build_prepared(
+    /// 加载会话目录与最新便签；goal anchor 必须先落盘，窗口号才是可信的。
+    fn load_notes(
         &self,
         messages: &[AgentModelMessage],
         started_at_ms: u64,
-    ) -> AxonResult<(CanonicalCheckpoint, PreparedInlineWindowRollover)> {
+    ) -> AxonResult<(PathBuf, SessionNotes, String)> {
         let root = resolved_axon_root(&self.request.config_path).map_err(|error| {
             AxonError::runtime_failure(format!("解析 Axon 根目录失败: {error}"))
         })?;
@@ -135,6 +146,22 @@ impl<'request, 'sink> InlineWindowRollover<'request, 'sink> {
         SessionNotesRuntime::initialize_goal_anchor(&session_dir, user_objective, persisted_at_ms)?;
         let notes = SessionNotes::load_from_session(&session_dir)?
             .unwrap_or_else(|| SessionNotes::new(Default::default(), persisted_at_ms));
+        let lifecycle_id = format!(
+            "inline-rollover:{}:{}",
+            self.request.session_id, notes.window_number
+        );
+        Ok((session_dir, notes, lifecycle_id))
+    }
+
+    fn build_prepared(
+        &self,
+        messages: &[AgentModelMessage],
+        session_dir: PathBuf,
+        notes: SessionNotes,
+        lifecycle_id: String,
+        started_at_ms: u64,
+    ) -> AxonResult<(CanonicalCheckpoint, PreparedInlineWindowRollover)> {
+        let persisted_at_ms = i64::try_from(started_at_ms).unwrap_or(i64::MAX);
         let (summary, checkpoint_source) =
             notes.render_canonical_summary_with_source(&session_dir, messages)?;
         let checkpoint = CanonicalCheckpoint::parse(&summary, messages).map_err(|error| {
@@ -145,10 +172,7 @@ impl<'request, 'sink> InlineWindowRollover<'request, 'sink> {
             current_window_number: notes.window_number,
             previous_window_id: notes.current_window_id,
             expected_revision: notes.revision,
-            lifecycle_id: format!(
-                "inline-rollover:{}:{}",
-                self.request.session_id, notes.window_number
-            ),
+            lifecycle_id,
             checkpoint: checkpoint.clone(),
             checkpoint_source,
             started_at_ms,
@@ -159,7 +183,11 @@ impl<'request, 'sink> InlineWindowRollover<'request, 'sink> {
 }
 
 impl WindowRolloverTransaction for InlineWindowRollover<'_, '_> {
-    fn prepare(&mut self, messages: &[AgentModelMessage]) -> AxonResult<CanonicalCheckpoint> {
+    fn prepare(
+        &mut self,
+        messages: &[AgentModelMessage],
+        turn_id: TurnId,
+    ) -> AxonResult<CanonicalCheckpoint> {
         if super::run_cancelled(self.request) {
             return Err(AxonError::runtime_failure("agent_run_interrupted"));
         }
@@ -171,30 +199,49 @@ impl WindowRolloverTransaction for InlineWindowRollover<'_, '_> {
 
         let started_at_ms = now_ms();
         self.active_failure_reason = None;
-        emit_compaction_lifecycle(
-            self.progress,
-            &CompactionLifecycleView::started(
-                compaction_part_id(&self.request.session_id),
-                started_summary(),
-                started_at_ms,
-            ),
-        );
-        self.active_started_at_ms = Some(started_at_ms);
-        // prepare 阶段一进来就把上一次的失败原因清空，因此这里必须把本次真实错误重新录进去：
-        // 否则随后的 abort() 只能用默认文案「窗口轮转未通过门禁」，
-        // 事件流里就再也看不到是便签渲染、还是 checkpoint 落库出的问题。
-        let (checkpoint, prepared) = match self.build_prepared(messages, started_at_ms) {
+        self.deferred = false;
+        // 先取窗口号再发布开始事实：身份来自这次换窗本身，开始与结束必须同 id。
+        let (session_dir, notes, lifecycle_id) = match self.load_notes(messages, started_at_ms) {
             Ok(value) => value,
             Err(error) => {
-                self.active_failure_reason =
-                    Some(format!("生成窗口交接 checkpoint 失败：{error:?}"));
+                self.active_failure_reason = Some(format!("加载会话便签失败：{error:?}"));
                 axon_logger::warning(&format!(
-                    "内联窗口轮转 prepare 失败：session={} thread={} error={error:?}",
+                    "内联窗口轮转加载便签失败：session={} thread={} error={error:?}",
                     self.request.session_id, self.request.run_session_id
                 ));
                 return Err(error);
             }
         };
+        let part_id = compaction_part_id(&self.request.session_id, notes.window_number);
+        let turn_id_text = turn_id.0.to_string();
+        emit_compaction_lifecycle(
+            self.progress,
+            &CompactionLifecycleView::started(
+                part_id,
+                turn_id_text.clone(),
+                started_summary(),
+                started_at_ms,
+            ),
+        );
+        self.active_started_at_ms = Some(started_at_ms);
+        self.active_lifecycle_id = Some(lifecycle_id.clone());
+        self.active_turn_id = Some(turn_id_text);
+        // prepare 阶段一进来就把上一次的失败原因清空，因此这里必须把本次真实错误重新录进去：
+        // 否则随后的 abort() 只能用默认文案「窗口轮转未通过门禁」，
+        // 事件流里就再也看不到是便签渲染、还是 checkpoint 落库出的问题。
+        let (checkpoint, prepared) =
+            match self.build_prepared(messages, session_dir, notes, lifecycle_id, started_at_ms) {
+                Ok(value) => value,
+                Err(error) => {
+                    self.active_failure_reason =
+                        Some(format!("生成窗口交接 checkpoint 失败：{error:?}"));
+                    axon_logger::warning(&format!(
+                        "内联窗口轮转 prepare 失败：session={} thread={} error={error:?}",
+                        self.request.session_id, self.request.run_session_id
+                    ));
+                    return Err(error);
+                }
+            };
         self.prepared = Some(prepared);
         Ok(checkpoint)
     }
@@ -213,10 +260,17 @@ impl WindowRolloverTransaction for InlineWindowRollover<'_, '_> {
             SessionNotesRuntime::ensure_state_saved_for_window(&session_dir, notes.window_number)
         })();
         if let Err(error) = &result {
-            // 门禁发生在 prepare 之前，必须在这里补记开始时刻与失败原因，
-            // 否则随后到来的 abort() 会因为「没有进行中的轮转」而不投影任何事实。
-            self.active_started_at_ms.get_or_insert_with(now_ms);
-            self.active_failure_reason = Some(format!("换窗前任务状态未完成保存：{error:?}"));
+            /*
+             * 便签尚未保存不是失败，而是一次可自愈的推迟：运行时会按 fallback 提示让模型
+             * 补写便签，然后在同一轮的下一步重试。把它发布成失败行，用户每轮都会看到一条
+             * 红色结论，而实际换窗随后就成功了。这里只留诊断日志，不产生用户可见事实。
+             */
+            self.deferred = true;
+            self.active_failure_reason = None;
+            axon_logger::debug(&format!(
+                "内联窗口轮转推迟：session={} thread={} 原因=便签尚未保存 error={error:?}",
+                self.request.session_id, self.request.run_session_id
+            ));
         }
         result
     }
@@ -293,10 +347,13 @@ impl WindowRolloverTransaction for InlineWindowRollover<'_, '_> {
             return;
         };
         let duration_ms = committed.rollover.duration_ms;
+        let turn_id = self.active_turn_id.take().unwrap_or_default();
+        self.active_lifecycle_id = None;
         emit_compaction_lifecycle(
             self.progress,
             &CompactionLifecycleView::completed(
-                compaction_part_id(&self.request.session_id),
+                compaction_part_id(&self.request.session_id, committed.rollover.window_number),
+                turn_id,
                 completed_summary(
                     committed.before_messages,
                     committed.after_messages,
@@ -333,13 +390,29 @@ impl WindowRolloverTransaction for InlineWindowRollover<'_, '_> {
         self.active_failure_reason = Some(reason.to_owned());
     }
 
+    fn note_deferral(&mut self) {
+        self.deferred = true;
+    }
+
     fn abort(&mut self) {
         self.prepared = None;
         self.committed = None;
         let Some(started_at_ms) = self.active_started_at_ms.take() else {
             return;
         };
-        let reason = match self.active_failure_reason.take() {
+        let deferred = std::mem::take(&mut self.deferred);
+        let turn_id = self.active_turn_id.take().unwrap_or_default();
+        let lifecycle_id = self.active_lifecycle_id.take();
+        let reason = self.active_failure_reason.take();
+        if deferred {
+            // 推迟不产生用户面事实：模型会在同一轮补写便签后重试，换窗随后成功。
+            axon_logger::debug(&format!(
+                "内联窗口轮转推迟，不发布失败事实：session={} thread={}",
+                self.request.session_id, self.request.run_session_id
+            ));
+            return;
+        }
+        let reason = match reason {
             Some(reason) => reason,
             None => {
                 // 走到这里说明失败原因没有被任何阶段记录下来：事件流只会有默认文案。
@@ -352,10 +425,21 @@ impl WindowRolloverTransaction for InlineWindowRollover<'_, '_> {
                 INLINE_ROLLOVER_ABORTED_REASON.to_owned()
             }
         };
+        let Some(part_id) = lifecycle_id
+            .as_deref()
+            .and_then(compaction_part_id_from_lifecycle)
+        else {
+            axon_logger::warning(&format!(
+                "内联窗口轮转失败但缺少轮转身份，无法发布失败事实：session={} thread={}",
+                self.request.session_id, self.request.run_session_id
+            ));
+            return;
+        };
         emit_compaction_lifecycle(
             self.progress,
             &CompactionLifecycleView::failed(
-                compaction_part_id(&self.request.session_id),
+                part_id,
+                turn_id,
                 failed_summary(&reason),
                 Some(started_at_ms),
                 Some(now_ms().saturating_sub(started_at_ms)),
