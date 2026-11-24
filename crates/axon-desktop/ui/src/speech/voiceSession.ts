@@ -1,0 +1,60 @@
+import { call, isDesktopHost } from '../backend';
+import type { VoiceServerFrame } from './voiceProtocol';
+
+/*
+ * 语音会话的宿主通道。
+ *
+ * 命令名与事件名必须与 Rust 侧一致：`voice_start` 建连并等首个 ready，
+ * `voice_stop` 结束当前句，`axon://voice` 下发服务端帧。浏览器调试桥没有
+ * 原始字节通道，因此语音采集只在桌面宿主内提供；这里对非宿主返回空订阅。
+ */
+
+/** 与 Rust 侧 `VOICE_EVENT` 一致的事件名。 */
+const VOICE_EVENT = 'axon://voice';
+
+/** 语音会话的可选开关：朗读与是否提交成一轮。 */
+export interface VoiceSessionOptions {
+  /** 是否让本轮回复由语音流直接朗读；仅语音对话模式有效。 */
+  tts?: boolean;
+  /** 定稿是否提交成一轮对话；输入坞听写传 false，只把文本交给界面。 */
+  submit?: boolean;
+}
+
+/** 开始一轮语音会话；返回时连接已就绪。 */
+export async function startVoiceSession(
+  workspaceId: string,
+  replyDestination: string,
+  sessionId: string,
+  options: VoiceSessionOptions = {},
+): Promise<void> {
+  await call('voice_start', {
+    workspaceId,
+    replyDestination,
+    /*
+     * 目标会话：语音定稿与文本输入落进同一条会话，因此这里必须是当前会话的标识。
+     * 网关缺这一项即拒，宿主不派生、也不回落到「最近一条」，缺了就只能报错。
+     */
+    sessionId,
+    tts: options.tts ?? false,
+    submit: options.submit ?? false,
+  });
+}
+
+/** 结束当前句；服务端随后回 `final`。 */
+export async function stopVoiceSession(): Promise<void> {
+  await call('voice_stop');
+}
+
+/** 打断当前轮：服务端立即停播并回到聆听。 */
+export async function cancelVoiceSession(reason: 'user_cancel' | 'client_close' = 'user_cancel'): Promise<void> {
+  await call('voice_cancel', { reason });
+}
+
+/** 订阅服务端语音帧；非桌面宿主返回空订阅。 */
+export async function listenVoiceSession(
+  handler: (frame: VoiceServerFrame) => void,
+): Promise<() => void> {
+  if (!isDesktopHost()) return () => undefined;
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen<VoiceServerFrame>(VOICE_EVENT, (event) => handler(event.payload));
+}

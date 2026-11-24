@@ -1,0 +1,224 @@
+# Axon 桌面工作台（axon-desktop）
+
+本文件描述已安装 Axon 的桌面工作台在运行态可观察与可操作的入口、它消费的运行态面、状态文件、自检与调试桥。取值以当前实例的实际回执为准。
+
+## 启动与入口
+
+| 入口 | 说明 |
+|---|---|
+| `axon desktop` | 稳定入口：经安装根 launcher 转发到 `current.json` 指向版本目录内的桌面二进制；launcher 会脱离控制台并把标准输入输出丢弃 |
+| `axon-desktop.exe --self-check` | 单行 JSON 自检，退出码 0 成功、1 失败 |
+| `axon-desktop.exe --serve <端口> [静态目录]` | 启动本地调试桥，端口省略时取 `14222` |
+| 不带参数运行版本目录内二进制 | 启动工作台窗口 |
+
+- 工作台是**网关的客户端**：数据一律经网关协议取得，不直连运行态数据库。
+- 直接调用版本目录二进制只用于自检与调试桥；日常启动一律走 `axon desktop`，以便升级换目录后快捷方式仍有效。
+- 工作台同一时刻只连一个后端，后端由「连接档案」描述（本机或云端）。档案记在客户端数据根的状态文件里，不写进 `config.toml`；切换档案等于重启应用，本进程经 `app.exit(0)` 退出后由中继进程经 launcher 重新拉起。
+- `--serve` 调试桥在云端档案生效时**拒绝启动**（非 0 退出并打印固定中文原因）：该桥零鉴权且分派表覆盖全部命令，其响应契约没有状态码通道，因此只能拒绝启动而不能返回 403。
+
+## 它消费的运行态面
+
+| 面 | 用途 |
+|---|---|
+| `GET /api/v1/meta` | 连接档案的连接判定：一次请求同时拿到能力位、服务器时间与上传上限；失败区分凭据不匹配、证书有问题与连不上 |
+| `GET /api/v1/system/status` | 连接判定与运行态读数：后端版本、租约（`lease.active` 为 false 时连接健康档降为「后台已停机」，侧栏连接行不再显示延迟）、排队深度，并与 `/meta` 交叉校验服务器时间；同一响应里的 `webSocketPort` 是事件流端口的唯一来源，连接档案只填一个 HTTP 地址时由它校正事件流地址 |
+| `GET /api/v1/config`、`GET /api/v1/config/schema`、`PUT /api/v1/config` | 设置页的配置读写与校验 |
+| `GET/PUT /api/v1/secrets*` | 密钥状态与写入，值不回读 |
+| `POST /api/v1/providers/discover` | 「探查模型」 |
+| `GET/PUT /api/v1/mcp/config`、`GET /api/v1/skills`、`DELETE /api/v1/skills/{id}` | MCP 配置、技能清单与技能移除（设置 › 技能 的「移除」经它删除技能目录，确认后才发请求） |
+| `GET/PUT /api/v1/documents/soul`、`/documents/agents` | 人设与行为文件 |
+| `GET /api/v1/workspaces`、`GET /api/v1/sessions` | 工作区与会话列表 |
+| `POST /api/v1/workspaces`、`POST /api/v1/sessions` | 注册工作区、新建会话（会话标识由服务端生成）。桌面新建先落本机草稿（侧栏出现「新会话」，控制面还没有行），首条消息提交时才调它物化；同一工作区同一时刻只有一条草稿 |
+| `POST /api/v1/sessions/<sessionId>/interrupt` | 中断该会话当前运行 |
+| `POST /api/v1/sessions/<sessionId>/jobs/<jobId>/stop` | 停止该会话的后台作业 |
+| `POST /api/v1/sessions/<sessionId>/subagents/<agent>/messages` | 给该会话的子代理追加消息 |
+| `GET /api/v1/sessions/<sessionId>/interactions`、`/jobs`、`/jobs/<jobId>/output`、`/subagents` | 会话详情与作业输出增量 |
+| `ws://<remote.gateway.websocket_bind>/gateway/v1/ws` | 会话事件流，按 `subscribeId` 并存多路订阅 |
+| `GET /api/v1/crons` 系列 | Cron 管理与运行历史 |
+| `GET /api/v1/observability/*` | 指标与审计看板（设置 › 用量统计，按概览、实时、活动、诊断、请求日志分页签） |
+| `GET/POST /api/v1/observability/pricing/*` | 用量看板的成本口径与费率规则（设置 › 模型定价，含每日自动同步开关） |
+| `POST /api/v1/mcp/status`、`/refresh` | 指标条的 MCP 读数与输入坞的 `/mcp`：读 daemon 启动快照里的加载结论，`/refresh` 才会重探 |
+| `ws://<http 监听地址>/api/v1/voice` | 语音上行与朗读下行：鉴权后发 `start`（必带目标会话 `sessionId`，另有 `tts` 与 `submit`），推 `0x01` 音频帧收 `final`；`submit=false` 是听写，只回文本，`submit=true` 才提交成一轮并下发 `turn` |
+| `POST /api/v1/voice/tts`、`/preview`、`/presets`、`GET /api/v1/voice/status` | 单条朗读、音色试听、音色清单与语音运行时读数 |
+| `GET /api/v1/goals`、`/goals/<goalId>` | 目标看板的列表与详情；目标执行会话的逐字稿与侧栏会话同链路：`GET /api/v1/sessions/<id>/interactions` 取索引、`/interactions/<id>/events` 取逐轮帧、WS `interaction:<id>` 订阅实时尾 |
+
+工作台打开的会话订阅会计入 `axon daemon health` 的 `streamSubscribers`：切换会话与关闭窗口后该数应回落到 0，不回落说明订阅未释放。
+
+## 正文图文渲染
+
+助手正文里的图片按内容直接渲染，判据只有图片后缀与体积，不限定图片所在目录。
+
+| 写法 | 呈现 |
+|---|---|
+| `![说明](路径)` | 内联图片；路径含空格时用 `![说明](<路径>)` |
+| `![说明](https://...)` 或 `http://...` | 由 webview 直接加载，不经本地读取通道 |
+| 裸文本里的图片路径 | 图片路径芯片；悬浮出缩略图，点击在右侧栏打开 |
+
+- 相对路径以当前工作区根为准，与输入坞 `@` 引用同作用域；`~/` 与盘符开头的路径原样交给后端。
+- 读取通道与附件卡同一条：桌面窗口走 `attachment_preview`（宿主返回数据地址，界面转成 Blob 地址后交给浏览器），调试桥走 `/attachment/`。图片后缀清单为 png、jpg、jpeg、webp、gif、bmp、ico、svg、tif、tiff、avif、heic，单张上限 8 MiB。
+- 读不出来时给一张破图占位并附上原路径，不把说明文字混进正文；图片进入视野后才读字节，地址按持有者计数回收：滚出视野、卡片撤掉或灯箱关上即释放，不常驻缓存，再次进入视野才重新读一次。
+- 预览按图片路径本身放行，不限定所在目录：判据是已知图片后缀与 8 MiB 上限，非图片与不存在的路径一律读不出来。
+
+## 历史加载与折叠
+
+- 会话历史按轮加载：打开会话先取最近一页索引（默认 20 轮），每轮当场立起「用户气泡 + 过程抬头 + 最终回复」，随后把**最新一轮**读整轮展开；更早的轮次由正文顶部的「加载更早」一次向前取一轮，取到空页即到底，按钮消失。前置一轮时正文区按实际高度差补偿滚动位置，阅读位置不跳。
+- 每轮的分割线读数随索引一起回来（用时、token 分桶、首字、速率），不必先展开这一轮；点开过程抬头才读那一轮的完整正文，收起即释放过程单元。
+- 生成过程中的读数不等收口：用量帧一到就出这一轮的分割线并在节拍里走字，指标条的会话累计同步进位。
+- 历史轮次按两条判据回收，与 TUI 的 cell history GC 同一口径：**体量**上单轮正文过大（工具输出、推理、diff）即折，**窗口**上只保留最近 8 轮展开，更早的一律折成一行摘要。两条判据都只作用于老轮次：最近两轮（正在跑的一轮与上一轮）始终展开，因此发送新一轮不会把上一轮折起来。摘要形如「用户那一句」加动作短语（例如「已读取文件，已搜索代码，修改了文件等」）。
+- 折叠是**释放**而不是隐藏：折叠后该轮的工具输出与推理正文不再留在界面内存里，展开时按 Interaction 标识重新回放后才换回正文。正在运行的一轮、以及用户点开过的一轮不会被自动回收。正文只挂载末尾窗口内的 240 个单元，更早的整轮折算成一行「更早的 N 条内容已折叠」。
+- 界面长时间没有心跳（窗口可见且未最小化时静默超过 20 秒），或页面渲染进程的常驻集合越过阈值（物理内存的八分之一，夹在 768 MiB 与 4 GiB 之间，只数渲染进程），会被宿主切到随包发布的错误引导页 `error.html`：页面给出失败类型、内存分项、可重新加载界面、可复制诊断信息。每次接管往 `data/logs/desktop-ui-failure.jsonl` 追加一行读数。会话、任务与运行状态都在 Daemon 里，不受界面重新加载影响。
+
+## 窗口材质、启动时序与界面快捷键
+
+| 项 | 运行态事实 |
+|---|---|
+| 窗口材质 | Windows 11 走 DWM Mica，macOS 走 `Sidebar` Vibrancy；托盘底座在窗口激活且未最大化时半透，失焦或最大化立刻退回实色。Windows 10 与 Linux 不回退 Acrylic，直接实色 |
+| 启动时序 | 窗口创建时不可见，几何（尺寸、位置、最大化、全屏）静默恢复；前端首帧就绪后由 `desktop_notify_ready` 触发显示，宿主另有 350ms 超时兜底 |
+| 最大化事件 | 宿主只在最大化状态真的翻转时推 `axon://window-maximized-changed`，界面不轮询 `isMaximized()` |
+| `Ctrl + K` / `Cmd + K` | 打开命令面板：搜索页面跳转、设置分区、主题与工作区会话 |
+| `Ctrl + F` / `Cmd + F` | 转义为命令面板（桌面工具里查找的语义是跳过去，不是高亮网页文字） |
+| `Ctrl + Alt + Space` | 系统级全局快捷键：窗口收进托盘或不在前台时，直接唤回主窗口并把光标送进输入坞 |
+| `F5`、`Ctrl + R`、`Ctrl + P`、`Ctrl + U` | 被压制：桌面应用没有刷新、打印与查看源码 |
+| `F12`、`Ctrl + Shift + I` | 只在开发构建可用，生产构建被压制 |
+| 右键菜单 | 除 `[data-allow-native-menu]` 区域外由应用内菜单接管；正文、代码与报错详情仍可取词复制 |
+
+## 运行态文件
+
+桌面端有自己的数据根，与后端运行时根 `~/.axon` 平级、互不包含（`AXON_CLIENT_ROOT` 覆盖，缺省为 `~/.axon-desktop`）。历史版本把它放在平台应用数据目录或 `~/.axon/client`，v1 状态则写在 `~/.axon/desktop-state.json`；代码不做自动迁移，需要保留旧数据时由管理员手工跑一次一次性迁移脚本（不随仓库与发行包交付）：默认试运行，执行时复制并逐字节校验，旧文件保持原样；目标已有 v2 时可显式选择以 v1 为准，脚本先备份现有 v2 再放入 v1，桌面端下次启动完成 v1 到 v2 的格式迁移。
+
+| 路径 | 内容 |
+|---|---|
+| `desktop-state.v2.json` | 客户端状态：主题、通知开关、左侧导航折叠偏好、输入坞最近选过的模型名称与思考强度、生效与上一次生效的档案 id、引导版本，以及每个档案的工作区与会话投影 |
+| `desktop-state.json.superseded` | 迁移前的 v1 状态归档，只生成一份，不再读写 |
+| `desktop-state.v1.json.bak` | 首次写入 v2 之前的 v1 备份 |
+| `attachments/` | 附件暂存目录，按一次附件一个子目录落盘 |
+| `logs/desktop-ui-failure.jsonl` | 界面接管日志，一行分项读数 |
+| `draft-history/<档案 id>.jsonl` | 云档案的输入历史（本机档案不用这里） |
+| `relaunch-failed.json` | 切档后拉起失败的一次性记录，启动时消费即改名为 `relaunch-failed.handled.json` |
+
+后端运行时根下仍有两份属于后端的数据：`data/runtime/draft_history.jsonl`（本机档案的输入历史，与 TUI 同名同格式，落盘保留 1000 条）与配置相邻的 `.env`（本机档案的凭据）。桌面端的输入坞与终端共用这一份历史，不分会话：所有会话的输入进同一个列表，重复输入的条目回到最新位置，超过 1000 条时最早的条目被淘汰；翻历史期间方向键固定在条目之间走，退出历史之后才回到「首行按上、末行按下」的判定。状态文件损坏时会另存 `<原文件名>.corrupt` 并回落默认值，不再静默清空。
+
+窗口几何（尺寸、位置、最大化、全屏）另存在系统的应用数据目录下的 `.window-state.json` 里，与两个根都分开：它描述的是窗口这一层，不参与运行态数据。
+
+## 调试桥
+
+只在显式传 `--serve` 时监听 `127.0.0.1:<端口>`（缺省 `14222`），仅绑定 loopback、不校验鉴权；正常启动不监听任何端口。
+
+| 方法与路径 | 用途 |
+|---|---|
+| `GET /events` | 与桌面窗口同一批会话帧的 SSE 流 |
+| `POST /rpc` | 体为 `{"cmd":"<命令>","args":{...}}`，回执 `{"ok":true,"data":...}` 或 `{"ok":false,"error":"..."}`；未知命令回 `未知命令：<cmd>` |
+| `GET /attachment/<encoded>` | 读取图片字节；`<encoded>` 为百分号编码的图片路径，按图片后缀与 8 MiB 上限判定，不符返回 404 |
+| 其余 `GET` | 传入静态目录时按目录返回静态文件 |
+
+当前可调用的命令族：
+
+| 族 | 命令 |
+|---|---|
+| 连接档案 | `connection_state`、`connection_retry_probe`、`connection_test`、`connection_save_profile`、`connection_delete_profile`、`connection_rename_profile`、`connection_switch_profile`、`connection_set_session_secret`、`connection_complete_onboarding`、`connection_skip_onboarding` |
+| 配置 | `config_read`、`config_validate`、`config_validate_values`、`config_write`、`config_apply_values`、`config_reset_key` |
+| Provider 与模型 | `provider_profile_upsert`、`provider_profile_remove`、`discover_models` |
+| 工作区与会话菜单 | `workspace_list`、`workspace_add`、`workspace_remove`、`workspace_list_entries`、`workspace_read_file`、`workspace_read_bytes`、`workspace_stat_path`、`workspace_applications`、`workspace_open_default`、`workspace_open_with`、`workspace_reveal`、`session_create`、`session_rename`、`session_reorder`、`session_set_pinned`、`session_set_archived` |
+| 会话 | `conversation_submit`、`conversation_history`、`conversation_watch`、`conversation_watch_turns`、`conversation_unsubscribe`、`conversation_interrupt`、`conversation_stop_job`、`conversation_send_subagent_message`、`conversation_session_jobs`、`conversation_session_subagents`、`conversation_job_output`（`sessionId`、`jobId`、`offset`；按字节游标读一次作业输出增量，供后台任务卡的实时输出使用） |
+| 语音 | `voice_presets`、`voice_preview`、`voice_tts`、`voice_start`、`voice_stop`、`voice_cancel`、`voice_playback_drained`、`voice_microphone_status`、`voice_open_microphone_settings` |
+| Cron | `cron_list`、`cron_config`、`cron_get`、`cron_history`、`cron_create`、`cron_update`、`cron_pause`、`cron_resume`、`cron_run`、`cron_remove` |
+| MCP 与 Skill | `mcp_list`、`mcp_upsert`、`mcp_upsert_raw`、`mcp_remove`、`mcp_runtime_status`、`mcp_runtime_refresh`、`skills_list` |
+| 文档与输入历史 | `document_catalog`、`document_read`、`document_write`、`open_document`、`open_external_url`、`input_history_list`、`input_history_append` |
+| 凭据 | `secret_status_of`、`secret_set`、`secret_clear` |
+| 系统与偏好 | `system_info`、`check_update`、`gateway_health`、`gateway_start_service`、`desktop_preferences`、`desktop_set_notifications`、`desktop_set_sidebar_collapsed`、`desktop_set_theme`、`desktop_set_composer_model`、`desktop_set_composer_reasoning_effort`、`pick_directory`、`attachment_stage` |
+| 目标看板 | `goal_list`（`limit`、`workspaceId`）、`goal_get`（`goalId`）；两条都只读，参数非法在本地直接返回中文错误，不发请求 |
+
+- 读类命令可直接用于排障（`system_info`、`gateway_health`、`conversation_history`、`cron_history`）。
+- **数据通路按生效档案分流**：本机档案下文件列表、文件读取、目录探测、附件暂存与预览走本机原生路径，不经网关（同一台机器上再绕一次 HTTP 只是白付一跳）；云档案下同一批命令改走 `/api/v1/files`、`/files/content`、`/fs/dirs` 与 `POST /api/v1/attachments`，预览改由服务端取字节。命令名、参数与返回值在两种档案下完全一致，分流只发生在数据访问层。
+- 控制面（配置、密钥状态、供应商发现、MCP 配置、技能清单、人设与准则）两种档案都经网关，以保持单一数据来源。
+- 本机打开类动作（`workspace_open_default`、`workspace_open_with`、`workspace_applications`、`workspace_reveal`）只在**本机档案**下可用；云档案下统一拒绝并回「云档案下不支持在本机打开，请在远端服务上操作」。
+- 本机档案下 `workspace_read_file`、`workspace_read_bytes`、`workspace_stat_path`、`workspace_list_entries` 与上述四条打开类动作接受任意绝对路径（含 `~` 路径），工作区之外的文件同样可以预览、定位与用其他应用打开；纯相对路径仍以工作区根为准，不得含 `..`，也不得经符号链接跳出工作区。
+- 附件单文件上限 64 MiB：本机档案直接落到客户端自有根，云档案按块流式 multipart 上传，不把整份文件读进内存两次。
+- 写类命令（`config_write`、`config_apply_values`、`secret_set`、`mcp_upsert`、`cron_*`、`session_*`、`conversation_submit`、`conversation_interrupt` 等）都是状态变更，先取得用户明确授权。
+- 凭据类命令只回报状态与掩码，不打印密钥原文。
+- `system_info` 的 `github` 字段给出本次构建对应的仓库、发布页、问题反馈与许可标识（都来自构建期元数据）。
+- 连接读数只经 `connection_state` 取得：它给出生效档案、模式、后端地址与版本、延迟、能力位与健康结论。试连接（`connection_test`）只发一次 `GET /api/v1/meta`，失败按凭据不匹配、证书有问题、连不上三类分别回报；它不落档案也不落凭据库。
+- `check_update` 按该仓库读取最新发布。失败不是命令失败：`error` 是中文归因、`hint` 是下一步动作，两者都不含 HTTP 状态码或库内部字符串；界面上归因收在「关于」页的「详情」里。
+- 读取私有仓库需要令牌：配置目录 `.env` 中的 `AXON_GITHUB_TOKEN`（或 `GH_TOKEN`、`GITHUB_TOKEN`）。未配置时按匿名请求读取，额度为每小时 60 次，超限的 `hint` 会给出重置倒计时。
+- `open_external_url` 只接受 `http` 与 `https`，其余协议直接拒绝。
+
+## 指标条读数与输入坞指令
+
+| 位置 | 内容 |
+|---|---|
+| 指标条会话读数组 | 顺序固定为 `耗时 <时长>` → `累计 <紧凑数值>` → `命中率 <百分比>` → `<已用>/<窗口>` → `剩余 <窗口−已用>`（如 `耗时 3h 12m 00s 累计 6.26M 命中率 99.72% 554K/1M 剩余 446K`，上下文档不带图形）。耗时等于各轮墙钟耗时之和，累计等于各轮输入、缓存读写、输出与推理之和，命中率是缓存读取占完整输入的会话累计比例，三者都按整条会话聚合而不是最近一轮；基线取网关按会话聚合出的已收口轮次读数，打开历史会话即读作该会话的既有消耗，本视图内新发生的轮次（含正在生成的那一轮）再叠加增量，因此第一轮还在生成时这三段就已经在进位。耗时为零时不占位；会话还没有 run session 时基线读作全零，不因此藏起读数；累计与命中率在还没有任何用量观测时整段不占位，有第一份用量帧之后即开始进位；上下文只在观测到窗口占用后才出现，剩余段紧跟其后，占用或窗口任一未知时剩余段不显示（上下文段仍显示已用值），新建会话没有数据时整段不占位 |
+| 指标条浮层（累计） | 悬停 `累计` 展开 `Token 用量` 卡：右上角是本会话累计的总量（与指标条同一套压缩单位，如 `120M`），中间一条按分桶占比铺开的色带，下面每行带同色块，依次是 `缓存命中 <百分比>`（比值，不带色块）、`未缓存输入`、`缓存读取`、`缓存写入`、`输出`、`推理`，为零的桶不占行 |
+| 指标条浮层（上下文） | 悬停上下文段展开 `上下文已用` 卡：标题带已用百分比，右上角是 `已用 / 窗口`，中间一条色带，下面每行带同色块，给出系统提示词、工具定义、对话消息与口径差额（估算值带 `~`）；没有构成观测时明细写「本轮未观测到上下文构成」 |
+| 指标条首屏 | 还没进入会话时只保留辅助簇（LSP、MCP、技能），不出现耗时、累计、命中率与上下文 |
+| 指标条辅助簇 | `MCP <已加载台数>`；有服务器没加载起来时写 `MCP <正常> · <异常> 异常` 并整段转危险色，悬停给出总台数与原因；一台都没有且没有错误时不占位 |
+| 指标条辅助簇（技能） | 紧跟 MCP 写 `技能 <条数>`，取自技能目录下的一级技能目录，与设置 › 技能页同一份清单，悬停写 `共 <条数> 项已安装技能`；清单未读到或零条时不占位 |
+| 输入坞 `/mcp` | 清 MCP 健康负缓存并强制重建启动快照，也就是重连一遍 MCP；执行期间输入坞上方显示 `正在重载 MCP 服务器…` 与已耗时，返回后换成一行回执，同时在输入坞上沿摊开服务器清单 |
+| 输入坞 模型与思考强度 | 右下角选择器常驻展示当前生效的模型名称与思考强度，就地可改。改选只作用于当前会话，同时记进客户端状态文件；新开会话优先沿用这一份记录，模型名称已不在配置的模型目录里时整份作废，回到 `agent.default_model` 与 `agent.reasoning_effort`。历史会话不受影响，它显示并沿用该会话最新一轮记录里的模型 |
+
+- `/mcp` 的回执只有四种口径：`已重载 MCP：N 台全部正常`、`已重载 MCP：N 台正常，M 台异常`、`已重载 MCP：这个工作区没有配置 MCP 服务器`、`重载 MCP 失败：<原因>`。
+- 执行态复用工作状态行（工作脉搏 + 文案 + 已耗时 + 底边墨色光泽），但不给 `按 ESC 中断` 提示：本机指令不可打断；执行期间重复提交同一条指令会被忽略。
+- 清单逐台列出：加载成功的写服务器名、工具数与工具名（等宽、最多两行）；失败的写服务器名与失败原因，并排在清单最前。清单贴输入坞上沿、与输入坞同宽，超出高度在清单内部滚动，关闭按钮或下一次提交即收起。
+- 读数与 `/mcp` 都按**当前工作区**取数（各工程的 `.mcp.json` 各算各的），并且不轮询：进入工作区读一次，只有敲 `/mcp` 才会重探。
+- 读不到结论（网关不可达、daemon 未运行）时指标条显式写 `MCP 异常` 并给原因，不隐藏这一段。
+- `/mcp` 只在正文恰好是这一条指令时生效；`/mcp 带参数` 按普通消息发给模型。
+
+## 语音输入与朗读
+
+**当前入口隐藏**：本机语音模型已移除，识别与合成改由云端提供方承担，提供方接入前桌面端不显示任何语音入口（输入坞麦克风、顶栏自动朗读开关、消息朗读按钮、设置 › 语音输入设备与语音播报、人设页音色）。协议与宿主命令仍在，下面描述的是恢复入口后的行为口径。
+
+| 入口 | 可观察行为 |
+|---|---|
+| 输入坞麦克风 | 首次使用在应用内确认一次；宿主按系统麦克风隐私结论放行或拦截，被拦截时给出「打开系统麦克风设置」与「重新检测」，不出现浏览器式地址栏权限提示 |
+| 说话期 | 输入坞上方给一条 40px 白底录音条：实测振幅声波、分:秒计时，实时识别文字直接显示在条内（没有识别到时给一句下一步提示），右端提示「Esc 关闭」 |
+| 定稿 | 再点麦克风或按 Esc 即定稿：识别文字追加进输入框（保留撤销历史），不提交成一轮；单次上限 120 秒自动停止；网关拒收或空转写时安静收口，不报错 |
+| 关闭 | 再点一次麦克风，或在窗口任意位置按 Esc：立即关闭语音并让服务端对当前句定稿；这一下 Esc 不打断正在进行的回复，语音关掉之后 Esc 才回到中断语义。点麦克风前会先查 `GET /api/v1/voice/status` 的 `runtimeAvailable`，为 `false` 时直接给「尚未接入云端语音提供方」的结论 |
+| 朗读 | 助手消息底部单条朗读；顶栏会话开关控制自动朗读；开启时该轮回复由语音流直传 `0x02` 音频边生成边播，不再触发一次整段合成 |
+| 输入设备 | 设置 › 系统设置 › 语音输入设备：下拉列出系统真实枚举的麦克风并记住选择，右侧可试听实时电平（只读电平、不录音，离开设置页即释放） |
+
+- 语音会话只在桌面宿主内可用：音频采集与 `0x01` 帧头由宿主补，调试桥没有原始字节通道。
+- 语音落进界面传进来的那条会话：`start` 帧的 `sessionId` 就是当前打开的会话（首屏起语音时先建一条再带上它的标识），与文本输入共用同一条会话，不新建渠道，也不新建轮次表。该字段缺失或空白时首帧被拒，宿主与网关都不派生标识。
+- 提供方未接入时 `start` 回 `provider_unavailable`，三个合成接口回 409 `provider_unavailable`：界面不被这些错误挡住，直接给出下一步动作。
+
+## 目标看板
+
+侧栏「目标看板」在「自动化任务」下方，展开态与 56px 图标轨都有入口。它呈现已建立的目标，事实全部经网关只读 goals 面读取。
+
+| 项 | 可观察行为 |
+|---|---|
+| 分栏 | 待开始 / 进行中 / 已暂停 / 已结束四栏；等待中与进行中同栏，用状态点与语义状态胶囊区分。栏目按容器宽度从一列逐级加到四列 |
+| 卡片 | 标题、状态标签、目标预览（与标题相同时自动去重）、结构化进展提示（下一步或等待原因）、工作区与最近活动时刻，右下只有一个入口 |
+| 入口文案 | 看板卡片上，目标同时有执行记录与可解析工作区时写「进入会话」，否则写「查看详情」。列表不为全局目标解析工作区，因此全局目标在卡片上一律显示「查看详情」；详情弹窗会按最近执行的会话 cwd 解析一次，唯一命中时给出「进入会话」 |
+| 工具栏 | 搜索（支持一键清空，覆盖标题、目标预览、工作区、下一步）、状态分段（全部 / 未完成 / 已结束）与计数；服务端读取达到上限时计数旁写「已达上限，仅显示 256 个」 |
+| 渲染上限 | 每栏最多 20 张，超出给「显示其余 N 个」；初始挂载上限 80 张 |
+| 刷新 | 有未完成目标时每 4 秒静默刷新，全部进入终态即停；请求串行、旧响应不覆盖新响应；窗口隐藏时跳过本轮；失败不弹窗，连续失败才由页面错误条说明 |
+| 只读会话 | 卡片入口进入该目标**自己的会话**（`kind=goal`）：执行轮次、逐字稿与指标都落在这一条会话上，工具更新另有一条已收口的记录。没有执行记录、或全局目标没解析出工作区的卡片先开详情，由详情给出进入入口：40px 可拖拽顶栏（返回看板、状态点与标题、状态标签、工作区与活动时刻、详情入口，支持 `Esc` 返回）、840px 同轴可展开目标概览卡（收起展示摘要与步数，展开展示完整目标、序号步骤与验收清单）、逐字稿；不渲染输入坞 |
+| 空态与错误 | 空态（含筛选无匹配清除入口、排队等待调度与暂无执行记录）、加载、读取失败、目标已被清理、旧版后台（「网关不含该接口，后台服务版本可能过旧」）各有独立呈现；订阅被拒时给横幅并保留返回入口 |
+| 焦点 | 进入会话视图焦点落到返回按钮，返回后回到来源卡片 |
+
+- 详情读取失败为 `goal_not_found` 时文案是「目标不存在或已被清理」，与「后台版本过旧」区分开。
+- 目标看板不提供启动、暂停、取消与追发消息：这些在界面上没有合法投递目标。
+
+## 界面级调试（CDP）
+
+启动窗口前设置调试端口，再启动桌面端：
+
+```powershell
+$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9333'
+axon desktop
+```
+
+- 端口可用 `GET http://127.0.0.1:9333/json` 列出页面目标；`Runtime.evaluate` 读回 DOM 与状态，`Input.dispatchMouseEvent` 派发真实鼠标事件，`Input.insertText` 输入文本。
+- 收尾必须关闭该环境变量（新开 shell 或清空），不得把调试端口带进日常使用。
+
+## 排障对照
+
+| 现象 | 先检查 |
+|---|---|
+| `axon desktop` 没有窗口 | `axon --version` 是否可用；`current.json` 指向版本目录内是否存在 `axon-desktop.exe` |
+| 界面显示未连接 | 面板写明网关地址、端口与响应状态，从第二轮起标注「连续 N 轮」；单轮探活超时（预算 5 秒，含一次退避重试）只记瞬时，连续两轮失败才切换成未连接态。服务侧用 `axon daemon status` 与 `axon daemon health` 核，监听地址与 token 见 [gateway-http.md](gateway-http.md) |
+| 无法判断桌面端自身状态 | `axon-desktop.exe --self-check` 的单行 JSON 与退出码 |
+| 调试桥连不上 | 是否显式传了 `--serve`；端口是否被占用；基址必须是 `127.0.0.1` |
+| 界面内容与预期不符 | 桌面二进制内嵌前端产物：确认构建顺序为**先重建前端产物、再重建桌面端** |
+| 订阅数不回落 | `axon daemon health` 的 `streamSubscribers`；配合 [gateway-websocket.md](gateway-websocket.md) 的订阅脚本核对成对释放 |
+| 目标看板报「后台服务版本可能过旧」 | Daemon 是否为新版本：旧 daemon 没有 goals 路由，升级后重试 |
+| 目标卡片只能「查看详情」 | 该目标没有执行记录、执行记录没有绑定会话，或全局目标在详情里也解析不到工作区；这几种情况没有可订阅的会话（执行子会话尚未建立时也不会凭空出现） |

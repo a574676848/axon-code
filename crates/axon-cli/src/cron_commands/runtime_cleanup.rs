@@ -1,0 +1,592 @@
+//! Daemon runtime SQLite 的 R1~R7 保留清理。
+//!
+//! 会话清理定时任务必须覆盖目标态的全部运行态事实：Interaction、
+//! Task、Execution、Result、Decision、Event、Session Window、调度、宿主与
+//! 升级准入。删除按有界批次推进，整轮另受墙上时钟预算约束：预算耗尽即停止，
+//! 剩余数据由下一轮 Cron 幂等继续，避免清理长时间争抢 Daemon 的写锁。
+
+use std::{
+    collections::HashSet,
+    path::Path,
+    time::{Duration, Instant},
+};
+
+use rusqlite::{Connection, OpenFlags, TransactionBehavior, params_from_iter};
+
+use super::runtime_cleanup_counts::count_expired_rows;
+use super::runtime_cleanup_families::{
+    delete_expired_client_presence, delete_expired_daemon_instances, delete_expired_decisions,
+    delete_expired_events, delete_expired_upgrade_admissions, delete_session_families_by_ids,
+    delete_settled_completion_deliveries, delete_settled_completion_notifications,
+    delete_terminal_goals, delete_terminal_interactions,
+    retention::{
+        delete_expired_agent_messages, delete_expired_continuations, delete_expired_user_questions,
+    },
+};
+use super::runtime_event_archive;
+
+pub(super) const CONTROL_DATABASE_FILE: &str = "control.sqlite3";
+/// 待消费队列库文件名：与 `SqliteRuntimeStore` 的库划分保持一致。
+pub(super) const OUTBOX_DATABASE_FILE: &str = "outbox.sqlite3";
+/// 单批删除的行数上限：直接决定单次 IMMEDIATE 事务的写锁持有时间。
+pub(super) const RUNTIME_CLEANUP_BATCH_LIMIT: usize = 256;
+/// 单轮清理的墙上时钟预算：超出后停止本轮，剩余过期数据由下轮 Cron 继续。
+///
+/// 实测每批 256 行在一个 1.5 GiB 级库上约需 5 ms 到 15 ms，20 秒预算只够推进
+/// 千余批的一半，而单条 desktop 车道一天就能写入数十万帧。预算过小会让清理
+/// 永远追不上写入速率，因此放宽到 60 秒；批次上限不变，写锁持有时间不受影响。
+const RUNTIME_CLEANUP_TIME_BUDGET: Duration = Duration::from_secs(60);
+const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+/// 单轮增量回收的页数：4 KiB 页下约等于 16 MiB，避免删了行文件却不缩。
+const INCREMENTAL_VACUUM_PAGE_BATCH: u32 = 4_096;
+
+/// 终态工作项类别：普通入站轮的终态由工作项的 terminal_kind 表达；派发轮没有工作项，
+/// 终态直接写在 `inbox.terminal_kind` 上，两处共用这一组取值。
+pub(super) const INTERACTION_TERMINAL_KINDS: [&str; 2] = ["understood", "rejected"];
+/// 终态 Task 状态：长期承诺结束后才允许回收。
+pub(super) const TASK_TERMINAL_STATUSES: [&str; 3] = ["completed", "failed", "cancelled"];
+/// 活跃 Execution 状态：保护其 Task 与 Session Window 不被回收。
+pub(super) const EXECUTION_ACTIVE_STATUSES: [&str; 3] = ["queued", "waiting", "running"];
+/// 活跃 Session 状态：仍在推进的 Session Window 不参与回收。
+pub(super) const SESSION_ACTIVE_STATUSES: [&str; 5] =
+    ["running", "compacting", "waiting", "recovering", "draining"];
+/// Event 保底保留条数：即使全部超出保留期也保留最新一段，避免 sequence 回退。
+pub(super) const LEDGER_EVENT_MIN_RETAINED: i64 = 1_000;
+
+/// 一次运行态清理的分表计数。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct RuntimeCleanupCounts {
+    pub(crate) sessions: usize,
+    pub(crate) session_events: usize,
+    pub(crate) schedules: usize,
+    pub(crate) interactions: usize,
+    pub(crate) goals: usize,
+    pub(crate) executions: usize,
+    pub(crate) results: usize,
+    pub(crate) result_reads: usize,
+    pub(crate) decisions: usize,
+    pub(crate) events: usize,
+    pub(crate) daemon_instances: usize,
+    pub(crate) upgrade_admissions: usize,
+    pub(crate) client_presence: usize,
+    pub(crate) completion_notifications: usize,
+    pub(crate) completion_deliveries: usize,
+    pub(crate) agent_messages: usize,
+    pub(crate) continuations: usize,
+    pub(crate) user_questions: usize,
+}
+
+impl RuntimeCleanupCounts {
+    pub(super) fn merge(&mut self, other: Self) {
+        self.sessions = self.sessions.saturating_add(other.sessions);
+        self.session_events = self.session_events.saturating_add(other.session_events);
+        self.schedules = self.schedules.saturating_add(other.schedules);
+        self.interactions = self.interactions.saturating_add(other.interactions);
+        self.goals = self.goals.saturating_add(other.goals);
+        self.executions = self.executions.saturating_add(other.executions);
+        self.results = self.results.saturating_add(other.results);
+        self.result_reads = self.result_reads.saturating_add(other.result_reads);
+        self.decisions = self.decisions.saturating_add(other.decisions);
+        self.events = self.events.saturating_add(other.events);
+        self.daemon_instances = self.daemon_instances.saturating_add(other.daemon_instances);
+        self.upgrade_admissions = self
+            .upgrade_admissions
+            .saturating_add(other.upgrade_admissions);
+        self.client_presence = self.client_presence.saturating_add(other.client_presence);
+        self.completion_notifications = self
+            .completion_notifications
+            .saturating_add(other.completion_notifications);
+        self.completion_deliveries = self
+            .completion_deliveries
+            .saturating_add(other.completion_deliveries);
+        self.agent_messages = self.agent_messages.saturating_add(other.agent_messages);
+        self.continuations = self.continuations.saturating_add(other.continuations);
+        self.user_questions = self.user_questions.saturating_add(other.user_questions);
+    }
+
+    /// 是否发生了任何行删除。
+    pub(crate) fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// 按保留期清理运行态事实，返回分表删除计数。
+pub(crate) fn cleanup_runtime_data(
+    root: &Path,
+    cutoff_ms: u64,
+) -> Result<RuntimeCleanupCounts, String> {
+    run_runtime_cleanup(root, cutoff_ms, false)
+}
+
+/// 只统计将要删除的行，不产生任何写入。
+pub(crate) fn count_runtime_cleanup(
+    root: &Path,
+    cutoff_ms: u64,
+) -> Result<RuntimeCleanupCounts, String> {
+    run_runtime_cleanup(root, cutoff_ms, true)
+}
+
+fn run_runtime_cleanup(
+    root: &Path,
+    cutoff_ms: u64,
+    dry_run: bool,
+) -> Result<RuntimeCleanupCounts, String> {
+    run_runtime_cleanup_with_budget(root, cutoff_ms, dry_run, RUNTIME_CLEANUP_TIME_BUDGET)
+}
+
+/// 带显式时间预算的清理入口：容量验收与预算截断测试直接复用。
+fn run_runtime_cleanup_with_budget(
+    root: &Path,
+    cutoff_ms: u64,
+    dry_run: bool,
+    time_budget: Duration,
+) -> Result<RuntimeCleanupCounts, String> {
+    let control_path = control_database_path(root);
+    let outbox_path = outbox_database_path(root);
+    if !control_path.exists() && !outbox_path.exists() {
+        return Ok(RuntimeCleanupCounts::default());
+    }
+    let cutoff_ms = i64::try_from(cutoff_ms).unwrap_or(i64::MAX);
+    let mut control = open_if_exists(&control_path)?;
+    let mut outbox = open_if_exists(&outbox_path)?;
+    if dry_run {
+        return count_expired_rows(control.as_ref(), outbox.as_ref(), cutoff_ms);
+    }
+    let deadline = Instant::now() + time_budget;
+    let mut counts = RuntimeCleanupCounts::default();
+    let events_root = runtime_event_archive::events_root(&control_path);
+    let archive_root = runtime_event_archive::event_archive_root(&control_path);
+    // 事件按会话目录存放：保留期一到整目录删除，不再按行归档成 .jsonl.zst。
+    let removed_dirs = runtime_event_archive::archive_expired_session_dirs(
+        &events_root,
+        &archive_root,
+        u64::try_from(cutoff_ms).unwrap_or(u64::MAX),
+    )?;
+    if removed_dirs > 0 {
+        counts.session_events = counts.session_events.saturating_add(removed_dirs);
+        axon_logger::info(&format!("运行态事件目录清理完成：{removed_dirs} 个会话"));
+    }
+    if let Some(connection) = control.as_mut() {
+        counts.merge(delete_terminal_goals(connection, cutoff_ms, deadline)?);
+        counts.merge(delete_terminal_interactions(
+            connection, cutoff_ms, deadline,
+        )?);
+        counts.merge(delete_expired_decisions(connection, cutoff_ms, deadline)?);
+        counts.merge(delete_expired_events(connection, cutoff_ms, deadline)?);
+        counts.merge(delete_expired_upgrade_admissions(
+            connection, cutoff_ms, deadline,
+        )?);
+        counts.merge(delete_expired_daemon_instances(
+            connection, cutoff_ms, deadline,
+        )?);
+    }
+    if let Some(connection) = outbox.as_mut() {
+        counts.merge(delete_expired_client_presence(
+            connection, cutoff_ms, deadline,
+        )?);
+        // 渠道投递记录通过外键引用通知本体，必须先删派生 delivery，再删 notification。
+        counts.merge(delete_settled_completion_deliveries(
+            connection, cutoff_ms, deadline,
+        )?);
+        counts.merge(delete_settled_completion_notifications(
+            connection, cutoff_ms, deadline,
+        )?);
+        // mailbox 消息与 continuation 是 run 级协作事实：前者 24 小时、后者 7 天的自身
+        // 保留窗口先于 Cron 水位到期，因此这里的回收不会删掉仍可投递或仍可装配的事实。
+        counts.merge(delete_expired_agent_messages(
+            connection, cutoff_ms, deadline,
+        )?);
+        counts.merge(delete_expired_continuations(
+            connection, cutoff_ms, deadline,
+        )?);
+        counts.merge(delete_expired_user_questions(
+            connection, cutoff_ms, deadline,
+        )?);
+    }
+    // 时间维度清理之后再看磁盘水位：越过上限就按最旧优先继续淘汰到低水位，
+    // 但仍在推进的会话目录一律不淘汰。
+    let protected_dirs = active_event_dir_names(root)?;
+    let evicted = runtime_event_archive::enforce_events_disk_budget(
+        &events_root,
+        &archive_root,
+        runtime_event_archive::high_water_bytes(),
+        runtime_event_archive::low_water_bytes(),
+        &protected_dirs,
+    )?;
+    if evicted > 0 {
+        counts.session_events = counts.session_events.saturating_add(evicted);
+        axon_logger::warning(&format!(
+            "事件目录越过磁盘高水位，已淘汰 {evicted} 个最旧会话"
+        ));
+    }
+    if !counts.is_empty() || evicted > 0 {
+        if let Some(connection) = control.as_ref() {
+            reclaim_database_space(connection)?;
+        }
+        if let Some(connection) = outbox.as_ref() {
+            reclaim_database_space(connection)?;
+        }
+    }
+    Ok(counts)
+}
+
+/// 仍在推进的会话事件目录名集合，按事件目录的编码规则给出。
+///
+/// 磁盘淘汰按会话目录删除，比较对象是目录名（`EventLog::encode_segment` 的结果），
+/// 不是原始会话标识。
+fn active_event_dir_names(root: &Path) -> Result<HashSet<String>, String> {
+    let path = control_database_path(root);
+    if !path.exists() {
+        return Ok(HashSet::new());
+    }
+    let connection = open_read_only_database(&path)?;
+    let sql = format!(
+        "SELECT session_id FROM sessions WHERE status IN ({active})",
+        active = quoted_list(&SESSION_ACTIVE_STATUSES),
+    );
+    let mut statement = connection
+        .prepare(&sql)
+        .map_err(|_| "Daemon runtime 活跃 Session 目录查询失败".to_owned())?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|_| "Daemon runtime 活跃 Session 目录读取失败".to_owned())?;
+    let mut names = HashSet::new();
+    for row in rows {
+        let session_id = row.map_err(|_| "Daemon runtime 活跃 Session 目录读取失败".to_owned())?;
+        names.insert(axon_eventlog::EventLog::encode_segment(&session_id));
+    }
+    Ok(names)
+}
+
+/// 读取候选中仍活跃或仍被 Execution 引用的 Session。
+pub(super) fn protected_runtime_session_ids(
+    root: &Path,
+    candidate_ids: &[String],
+) -> Result<Vec<String>, String> {
+    let path = control_database_path(root);
+    if candidate_ids.is_empty() || !path.exists() {
+        return Ok(Vec::new());
+    }
+    let connection = open_read_only_database(&path)?;
+    let mut protected = Vec::new();
+    for ids in candidate_ids.chunks(RUNTIME_CLEANUP_BATCH_LIMIT) {
+        let placeholders = placeholders(ids.len());
+        let active_sql = format!(
+            "SELECT session_id FROM sessions
+             WHERE session_id IN ({placeholders}) AND status IN ({active})",
+            active = quoted_list(&SESSION_ACTIVE_STATUSES),
+        );
+        let mut statement = connection
+            .prepare(&active_sql)
+            .map_err(|_| "Daemon runtime 活跃 Session 查询失败".to_owned())?;
+        let rows = statement
+            .query_map(params_from_iter(ids.iter()), |row| row.get::<_, String>(0))
+            .map_err(|_| "Daemon runtime 活跃 Session 查询失败".to_owned())?;
+        protected.extend(
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|_| "Daemon runtime 活跃 Session 读取失败".to_owned())?,
+        );
+
+        let execution_sql = format!(
+            "SELECT DISTINCT session_id FROM work_items
+             WHERE session_id IN ({placeholders})"
+        );
+        let mut statement = connection
+            .prepare(&execution_sql)
+            .map_err(|_| "Daemon runtime Execution 引用查询失败".to_owned())?;
+        let rows = statement
+            .query_map(params_from_iter(ids.iter()), |row| row.get::<_, String>(0))
+            .map_err(|_| "Daemon runtime Execution 引用查询失败".to_owned())?;
+        protected.extend(
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|_| "Daemon runtime Execution 引用读取失败".to_owned())?,
+        );
+    }
+    protected.sort();
+    protected.dedup();
+    Ok(protected)
+}
+
+/// 精确统计待清理会话 ID 对应的 runtime Session family，不产生写入。
+pub(super) fn count_runtime_session_families(
+    root: &Path,
+    session_ids: &[String],
+) -> Result<RuntimeCleanupCounts, String> {
+    let path = control_database_path(root);
+    if session_ids.is_empty() || !path.exists() {
+        return Ok(RuntimeCleanupCounts::default());
+    }
+    let connection = open_read_only_database(&path)?;
+    let mut counts = RuntimeCleanupCounts::default();
+    for ids in session_ids.chunks(RUNTIME_CLEANUP_BATCH_LIMIT) {
+        let placeholders = placeholders(ids.len());
+        counts.sessions = counts.sessions.saturating_add(count_ids_in(
+            &connection,
+            "sessions",
+            &placeholders,
+            ids,
+        )?);
+        counts.schedules = counts.schedules.saturating_add(count_ids_in(
+            &connection,
+            "schedules",
+            &placeholders,
+            ids,
+        )?);
+    }
+    Ok(counts)
+}
+
+/// 按待清理会话 ID 清理 runtime Session family。
+pub(super) fn cleanup_runtime_session_families(
+    root: &Path,
+    session_ids: &[String],
+) -> Result<RuntimeCleanupCounts, String> {
+    let path = control_database_path(root);
+    if session_ids.is_empty() || !path.exists() {
+        return Ok(RuntimeCleanupCounts::default());
+    }
+    let mut connection = open_database(&path)?;
+    let deadline = Instant::now() + RUNTIME_CLEANUP_TIME_BUDGET;
+    let archive_root = runtime_event_archive::event_archive_root(&path);
+    let mut counts = RuntimeCleanupCounts::default();
+    for ids in session_ids.chunks(RUNTIME_CLEANUP_BATCH_LIMIT) {
+        if Instant::now() >= deadline {
+            // 预算耗尽只结束本轮，剩余会话由下一轮 Cron 幂等续跑；
+            // 直接报错会让整条清理链在 Daemon 侧记为失败。
+            break;
+        }
+        counts.merge(delete_session_families_by_ids(
+            &mut connection,
+            ids,
+            &archive_root,
+        )?);
+    }
+    if !counts.is_empty() {
+        reclaim_database_space(&connection)?;
+    }
+    Ok(counts)
+}
+
+fn count_ids_in(
+    connection: &Connection,
+    table: &str,
+    placeholders: &str,
+    ids: &[String],
+) -> Result<usize, String> {
+    let sql = format!("SELECT COUNT(*) FROM {table} WHERE session_id IN ({placeholders})");
+    let count: i64 = connection
+        .query_row(&sql, params_from_iter(ids.iter()), |row| row.get(0))
+        .map_err(|_| format!("Daemon runtime {table} Session family 统计失败"))?;
+    Ok(usize::try_from(count).unwrap_or(usize::MAX))
+}
+
+/// Task 保留谓词（`?1` 为保留截止时间）：终态、无活跃 Execution、无未读 Result。
+pub(super) fn task_expiry_filter() -> String {
+    format!(
+        "FROM goals
+         WHERE status IN ({terminal})
+           AND updated_at_ms < ?1
+           AND NOT EXISTS (
+               SELECT 1 FROM work_items e
+               WHERE e.goal_id = goals.goal_id AND e.status IN ({active})
+           )
+           AND NOT EXISTS (
+               SELECT 1 FROM goal_results r
+               LEFT JOIN goal_result_reads rr ON rr.result_id = r.result_id
+               WHERE r.goal_id = goals.goal_id AND rr.result_id IS NULL
+           )",
+        terminal = quoted_list(&TASK_TERMINAL_STATUSES),
+        active = quoted_list(&EXECUTION_ACTIVE_STATUSES),
+    )
+}
+
+/// 按有界批次执行「选主键 -> 删依赖 -> 删根」的清理循环。
+///
+/// 每个族至少推进一批，之后每次提交都会检查墙上时钟预算；预算耗尽立即返回
+/// 已删除计数，剩余数据留待下一轮 Cron，从而保证单轮清理时长有界。
+pub(super) fn delete_family<F>(
+    connection: &mut Connection,
+    cutoff_ms: i64,
+    deadline: Instant,
+    select_sql: &str,
+    mut delete_ids: F,
+) -> Result<RuntimeCleanupCounts, String>
+where
+    F: FnMut(&rusqlite::Transaction<'_>, &[String]) -> Result<RuntimeCleanupCounts, String>,
+{
+    let mut counts = RuntimeCleanupCounts::default();
+    let batch = i64::try_from(RUNTIME_CLEANUP_BATCH_LIMIT).unwrap_or(i64::MAX);
+    let mut advanced = false;
+    loop {
+        // 每个族至少推进一批；此后一旦预算耗尽就交还给 Daemon，剩余数据由下一轮 Cron 续跑。
+        if advanced && Instant::now() >= deadline {
+            break;
+        }
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| "Daemon runtime 清理事务启动失败".to_owned())?;
+        let ids = {
+            let mut statement = transaction
+                .prepare_cached(select_sql)
+                .map_err(|_| "Daemon runtime 过期记录查询失败".to_owned())?;
+            statement
+                .query_map([cutoff_ms, batch], |row| row.get::<_, String>(0))
+                .map_err(|_| "Daemon runtime 过期记录查询失败".to_owned())?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|_| "Daemon runtime 过期记录读取失败".to_owned())?
+        };
+        if ids.is_empty() {
+            transaction
+                .rollback()
+                .map_err(|_| "Daemon runtime 清理事务回滚失败".to_owned())?;
+            break;
+        }
+        counts.merge(delete_ids(&transaction, &ids)?);
+        transaction
+            .commit()
+            .map_err(|_| "Daemon runtime 清理事务提交失败".to_owned())?;
+        advanced = true;
+    }
+    Ok(counts)
+}
+
+pub(super) fn delete_ids_in(
+    transaction: &rusqlite::Transaction<'_>,
+    table: &str,
+    column: &str,
+    placeholders: &str,
+    ids: &[String],
+) -> Result<usize, String> {
+    let sql = format!("DELETE FROM {table} WHERE {column} IN ({placeholders})");
+    let mut statement = transaction
+        .prepare_cached(&sql)
+        .map_err(|_| format!("Daemon runtime {table} 清理失败"))?;
+    statement
+        .execute(params_from_iter(ids.iter()))
+        .map_err(|_| format!("Daemon runtime {table} 清理失败"))
+}
+
+pub(super) fn count_rows(
+    connection: &Connection,
+    sql: &str,
+    cutoff_ms: i64,
+) -> Result<usize, String> {
+    let count: i64 = connection
+        .query_row(sql, [cutoff_ms], |row| row.get(0))
+        .map_err(|_| "Daemon runtime 保留期统计失败".to_owned())?;
+    Ok(usize::try_from(count).unwrap_or(usize::MAX))
+}
+
+fn open_database(path: &Path) -> Result<Connection, String> {
+    let connection =
+        Connection::open(path).map_err(|_| "Daemon runtime SQLite 数据库打开失败".to_owned())?;
+    connection
+        .busy_timeout(SQLITE_BUSY_TIMEOUT)
+        .map_err(|_| "Daemon runtime SQLite busy timeout 配置失败".to_owned())?;
+    connection
+        .execute_batch(
+            "PRAGMA foreign_keys = ON;
+             PRAGMA synchronous = NORMAL;",
+        )
+        .map_err(|_| "Daemon runtime SQLite 连接配置失败".to_owned())?;
+    Ok(connection)
+}
+
+/// 库文件存在才打开：两个库各自独立，缺一个不影响另一个的清理。
+fn open_if_exists(path: &Path) -> Result<Option<Connection>, String> {
+    if path.exists() {
+        open_database(path).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+fn open_read_only_database(path: &Path) -> Result<Connection, String> {
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|_| "Daemon runtime SQLite 数据库只读打开失败".to_owned())?;
+    connection
+        .busy_timeout(SQLITE_BUSY_TIMEOUT)
+        .map_err(|_| "Daemon runtime SQLite busy timeout 配置失败".to_owned())?;
+    connection
+        .pragma_update(None, "foreign_keys", true)
+        .map_err(|_| "Daemon runtime SQLite 只读连接配置失败".to_owned())?;
+    Ok(connection)
+}
+
+fn control_database_path(root: &Path) -> std::path::PathBuf {
+    root.join(axon_config::AXON_RUNTIME_DATA_DIR)
+        .join(CONTROL_DATABASE_FILE)
+}
+
+fn outbox_database_path(root: &Path) -> std::path::PathBuf {
+    root.join(axon_config::AXON_RUNTIME_DATA_DIR)
+        .join(OUTBOX_DATABASE_FILE)
+}
+
+/// 运行态侧自判的过期会话：最后一次活动早于保留期、已不在推进、且无在途 Execution。
+///
+/// 单一会话索引只覆盖一部分会话（子代理车道与历史 desktop 车道不在其中），
+/// 只按该索引取候选会让这些会话根记录永久滞留，其事件也就永远没有回收入口。
+/// 在途判定按状态过滤：终态工作项不构成引用，真正拦删除的是排队/等待/运行中的行。
+pub(super) fn stale_runtime_session_ids(
+    root: &Path,
+    cutoff_ms: u64,
+) -> Result<Vec<String>, String> {
+    let path = control_database_path(root);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let connection = open_read_only_database(&path)?;
+    let cutoff_ms = i64::try_from(cutoff_ms).unwrap_or(i64::MAX);
+    let sql = format!(
+        "SELECT session_id FROM sessions
+         WHERE last_activity_at_ms < ?1
+           AND status NOT IN ({active})
+           AND NOT EXISTS (
+               SELECT 1 FROM work_items AS execution
+               WHERE execution.session_id = sessions.session_id
+                 AND execution.status IN ({execution_active})
+           )
+         ORDER BY last_activity_at_ms ASC",
+        active = quoted_list(&SESSION_ACTIVE_STATUSES),
+        execution_active = quoted_list(&EXECUTION_ACTIVE_STATUSES),
+    );
+    let mut statement = connection
+        .prepare(&sql)
+        .map_err(|_| "Daemon runtime 过期 Session 查询失败".to_owned())?;
+    let rows = statement
+        .query_map([cutoff_ms], |row| row.get::<_, String>(0))
+        .map_err(|_| "Daemon runtime 过期 Session 查询失败".to_owned())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|_| "Daemon runtime 过期 Session 读取失败".to_owned())
+}
+
+/// 直接内联状态白名单：取值来自本模块常量，不存在外部输入。
+pub(super) fn quoted_list(values: &[&str]) -> String {
+    values
+        .iter()
+        .map(|value| format!("'{value}'"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+pub(super) fn placeholders(count: usize) -> String {
+    std::iter::repeat_n("?", count)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn reclaim_database_space(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute_batch(&format!(
+            "PRAGMA incremental_vacuum({INCREMENTAL_VACUUM_PAGE_BATCH})"
+        ))
+        .map_err(|_| "Daemon runtime SQLite 增量空间回收失败".to_owned())
+}
+
+#[cfg(test)]
+#[path = "runtime_cleanup_agent_state_tests.rs"]
+mod agent_state_tests;
+#[cfg(test)]
+#[path = "runtime_cleanup_tests.rs"]
+mod tests;

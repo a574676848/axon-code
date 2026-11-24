@@ -1,0 +1,15 @@
+{
+  "gate": "A-10",
+  "contract": "PWC-1",
+  "fixture": "limits.yaml benchmark.read_units=4 / read_delay_ms=150 / rounds=5",
+  "serial_ms": 601,
+  "parallel_ms": 150,
+  "wall_time_reduction": 0.75,
+  "threshold": 0.5,
+  "token_overhead": 0.0,
+  "token_note": "阶段 1 不改提示词，token 增幅恒为 0；A-10 的 token 判据在阶段 3 复测。",
+  "measured_at": "2026-10-27T14:20:00+08:00",
+  "command": "cargo test -p axon-cli --lib run_tool_benchmark -- --nocapture",
+  "raw_line": "A10_REPORT {\"delay_ms\":150,\"gate\":\"A-10\",\"note\":\"阶段 1 不改提示词，token 增幅恒为 0\",\"parallel_ms\":150,\"rounds\":5,\"serial_ms\":601,\"token_overhead\":0.0,\"units\":4,\"wall_time_reduction\":0.75}",
+  "status": "pass"
+}

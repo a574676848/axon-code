@@ -1,0 +1,558 @@
+//! 任务结果事实包、执行证据与语义显著性合同。
+
+use std::collections::BTreeSet;
+
+use serde::{Deserialize, Serialize};
+
+use crate::SalienceVector;
+
+/// 语义显著性输出 schema 版本；v4 起引入 specificity 维度。
+pub const SEMANTIC_SALIENCE_SCHEMA_VERSION: u32 = 4;
+/// 引入 specificity 维度的起始版本。
+pub const SEMANTIC_SALIENCE_SPECIFICITY_SCHEMA_VERSION: u32 = 4;
+/// 兼容期接受的最低版本；低于此版本的输出整轮丢弃。
+///
+/// v3 输出没有 specificity 维度，靠 `SemanticSalienceSignals::effective_specificity`
+/// 补一个与既有门槛等价的折中值，避免升版瞬间把反思线掐停。
+pub const SEMANTIC_SALIENCE_ACCEPTED_MIN_VERSION: u32 = 3;
+/// 信号最大值，单位 basis point。
+pub const SEMANTIC_SALIENCE_MAX_BASIS_POINTS: u16 = 10_000;
+
+/// 漂移原因的最大字符数。
+pub const DRIFT_REASON_MAX_CHARS: usize = 80;
+
+/// 风格候选的最大字符数。
+pub const STYLE_CANDIDATE_MAX_CHARS: usize = 120;
+
+/// 触发纠偏的漂移阈值，单位 basis point。
+pub const PERSONA_DRIFT_GUARD_BASIS_POINTS: u16 = 7_000;
+
+/// 允许的用户状态记号。
+pub const USER_AFFECT_TOKENS: [&str; 5] =
+    ["neutral", "positive", "frustrated", "urgent", "unknown"];
+/// Personal 候选的稳定性阈值。
+pub const PERSONAL_STABILITY_MIN_BASIS_POINTS: u16 = 7_000;
+/// Personal 候选的未来复用价值阈值。
+pub const PERSONAL_FUTURE_UTILITY_MIN_BASIS_POINTS: u16 = 7_000;
+/// Personal 候选的 scope 置信度阈值。
+pub const PERSONAL_SCOPE_CONFIDENCE_MIN_BASIS_POINTS: u16 = 7_000;
+/// Experience/Knowledge/Procedure 候选的未来复用价值阈值。
+pub const EXPERIENCE_FUTURE_UTILITY_MIN_BASIS_POINTS: u16 = 6_500;
+/// Experience/Knowledge/Procedure 候选的执行验证阈值。
+pub const EXPERIENCE_VERIFICATION_MIN_BASIS_POINTS: u16 = 7_000;
+/// Experience/Knowledge/Procedure 候选的对象具体性阈值。
+///
+/// 这是 v4 新增维度 specificity 的门槛；其余维度复用上面的既有常量。
+pub const EXECUTION_SPECIFICITY_MIN_BP: u16 = 6_500;
+
+/// 轻量反思档的加权显著度下限，单位 basis point。
+///
+/// 分档策略对齐业界主流做法：强档沿用确定性门禁，弱档承接「证据达标但信号偏弱」的轮次，
+/// 避免一次硬阈值否决就把整轮反思丢弃。
+pub const REFLECTION_WEAK_MIN_BASIS_POINTS: u16 = 5_500;
+
+/// 单条运行时执行证据。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionEvidenceRecord {
+    /// 本轮内稳定的证据引用。
+    pub evidence_ref: String,
+    /// 工具完整名称。
+    pub tool_name: String,
+    /// 工具执行状态。
+    pub status: ExecutionEvidenceStatus,
+    /// 证据类型。
+    pub kind: ExecutionEvidenceKind,
+    /// 是否由运行时回执确认完成。
+    pub runtime_verified: bool,
+    /// 后续验证回执引用。
+    #[serde(default)]
+    pub verification_refs: Vec<String>,
+}
+
+/// 执行证据状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExecutionEvidenceStatus {
+    /// 工具已派发，但失败、取消或结果不明。
+    Attempted,
+    /// 运行时回执确认工具已实际执行，但尚无独立验证。
+    Executed,
+    /// 实际执行且存在运行时验证回执。
+    Verified,
+    /// 实际执行后的验证失败，与完成结论矛盾。
+    Contradicted,
+}
+
+/// 执行证据类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExecutionEvidenceKind {
+    /// 普通工具执行。
+    ToolExecution,
+    /// 文件系统写入。
+    ArtifactWrite,
+    /// 对结果的读取、检查或测试。
+    Validation,
+    /// Skill 指令加载；本身不代表 Skill 已完成执行。
+    SkillInvocation,
+}
+
+/// 本轮执行证据索引。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionEvidenceIndex {
+    /// 按运行顺序保存的回执事实。
+    pub records: Vec<ExecutionEvidenceRecord>,
+}
+
+impl ExecutionEvidenceIndex {
+    /// 是否存在已验证的非 Skill 工具执行。
+    #[must_use]
+    pub fn has_verified_execution(&self) -> bool {
+        self.records.iter().any(|record| {
+            record.runtime_verified
+                && record.status == ExecutionEvidenceStatus::Verified
+                && record.kind != ExecutionEvidenceKind::SkillInvocation
+        })
+    }
+
+    /// 指定引用中是否至少存在一条已验证的非 Skill 执行证据。
+    #[must_use]
+    pub fn has_verified_evidence_ref(&self, evidence_refs: &[String]) -> bool {
+        self.records.iter().any(|record| {
+            record.runtime_verified
+                && record.status == ExecutionEvidenceStatus::Verified
+                && record.kind != ExecutionEvidenceKind::SkillInvocation
+                && evidence_refs
+                    .iter()
+                    .any(|evidence_ref| evidence_ref == &record.evidence_ref)
+        })
+    }
+
+    /// 返回所有可被 assessor 引用的证据引用。
+    #[must_use]
+    pub fn evidence_refs(&self) -> BTreeSet<&str> {
+        self.records
+            .iter()
+            .flat_map(|record| {
+                std::iter::once(record.evidence_ref.as_str())
+                    .chain(record.verification_refs.iter().map(String::as_str))
+            })
+            .collect()
+    }
+}
+
+/// 被选中 Skill 的实际执行状态。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectedSkillExecution {
+    /// Skill 名称。
+    pub skill_name: String,
+    /// 是否有运行时回执证明其指令被加载并用于后续执行。
+    pub execution_verified: bool,
+    /// 支撑该结论的回执引用。
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+}
+
+/// 主代理本轮终态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TurnFinalStatus {
+    /// 正常完成。
+    Completed,
+    /// 执行失败。
+    Failed,
+    /// 被用户中断。
+    Interrupted,
+}
+
+impl TurnFinalStatus {
+    /// 稳定的机器标识；卡片与回执用它，不依赖 serde 的大小写策略。
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Interrupted => "interrupted",
+        }
+    }
+}
+
+/// 供轻量 assessor 与深反思消费的有界事实包。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnOutcomeEnvelope {
+    /// 会话 ID。
+    pub conversation_id: String,
+    /// 本轮 ID。
+    pub turn_id: String,
+    /// canonical 主代理路径。
+    pub agent_path: String,
+    /// 有界用户意图文本。
+    pub user_intent_summary: String,
+    /// 有界最终结果文本。
+    pub assistant_outcome_summary: String,
+    /// 用户消息证据引用。
+    pub user_message_ref: String,
+    /// 运行时执行证据。
+    pub execution_evidence: ExecutionEvidenceIndex,
+    /// 可选 Skill 执行状态。
+    pub selected_skill: Option<SelectedSkillExecution>,
+    /// 本轮终态。
+    pub final_status: TurnFinalStatus,
+}
+
+impl TurnOutcomeEnvelope {
+    /// 返回 assessor 可合法引用的全部证据引用。
+    #[must_use]
+    pub fn evidence_refs(&self) -> BTreeSet<&str> {
+        let mut refs = self.execution_evidence.evidence_refs();
+        refs.insert(self.user_message_ref.as_str());
+        refs
+    }
+}
+
+/// 语义显著性候选类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SemanticMemoryCandidateType {
+    /// 用户画像。
+    Profile,
+    /// 用户长期偏好。
+    Preference,
+    /// 可复用实践经验。
+    Experience,
+    /// 稳定知识。
+    Knowledge,
+    /// 可复用流程。
+    Procedure,
+    /// 表达风格偏好；由人格系统承接，不写入 Memory。
+    Style,
+}
+
+/// 语义显著性信号，统一使用 basis point。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticSalienceSignals {
+    /// 与用户身份和长期背景的相关度。
+    pub identity_relevance: u16,
+    /// 结论跨时间保持成立的概率。
+    pub stability: u16,
+    /// 对未来任务的复用价值。
+    pub future_utility: u16,
+    /// 相对既有认知的新颖度。
+    pub novelty: u16,
+    /// 明确纠正旧认知的强度。
+    pub correction_strength: u16,
+    /// 运行时执行证据的闭环强度。
+    pub verification_strength: u16,
+    /// Personal 与 Workspace 归属判断置信度。
+    pub scope_confidence: u16,
+
+    /// 是否指向具体对象（文件、命令、符号、字段），而非泛泛而谈。
+    ///
+    /// v4 新增维度：v3 输出没有该字段，反序列化落 0，
+    /// 因此判定必须走 [`Self::effective_specificity`]，不能直接读这个值。
+    #[serde(default)]
+    pub specificity: u16,
+}
+
+impl SemanticSalienceSignals {
+    /// 版本无关的有效 specificity。
+    ///
+    /// v4 起直接用模型给的值；v3 及更早没有该维度，用 verification_strength
+    /// 截到 specificity 门槛作为折中。净效果：旧输出在执行类准入上与升版前
+    /// 完全等价，既不放松也不收紧，不会因升版把反思线掐停。
+    #[must_use]
+    pub fn effective_specificity(&self, schema_version: u32) -> u16 {
+        if schema_version >= SEMANTIC_SALIENCE_SPECIFICITY_SCHEMA_VERSION {
+            return self.specificity;
+        }
+        self.verification_strength.min(EXECUTION_SPECIFICITY_MIN_BP)
+    }
+
+    /// 投影成五维显著度；版本差异由 [`Self::effective_specificity`] 吸收。
+    #[must_use]
+    pub fn to_salience_vector(&self, schema_version: u32) -> SalienceVector {
+        SalienceVector {
+            utility: self.future_utility,
+            persistence: self.stability,
+            verification: self.verification_strength,
+            specificity: self.effective_specificity(schema_version),
+            novelty: self.novelty,
+        }
+    }
+}
+
+/// 轻量语义显著性评估结果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticSalienceAssessment {
+    /// 输出 schema 版本。
+    pub schema_version: u32,
+    /// 是否值得启动完整反思。
+    pub should_reflect: bool,
+    /// 候选记忆类型。
+    #[serde(default)]
+    pub candidate_types: Vec<SemanticMemoryCandidateType>,
+    /// 多维语义信号。
+    pub signals: SemanticSalienceSignals,
+    /// 仅允许引用 envelope 内证据。
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    /// 有界可审计原因。
+    pub reason: String,
+    /// 本轮推断出的用户状态；取值见 [`USER_AFFECT_TOKENS`]。
+    #[serde(default)]
+    pub user_affect: Option<String>,
+    /// 用户疲劳度：low / normal / high。
+    #[serde(default)]
+    pub user_fatigue: Option<String>,
+    /// 助手回复相对人格底色的漂移程度，单位 basis point。
+    #[serde(default)]
+    pub persona_drift_bp: Option<u16>,
+    /// 漂移原因；漂移达到阈值时必填，限 80 字。
+    #[serde(default)]
+    pub drift_reason: Option<String>,
+    /// 用户显式表达的表达风格偏好原文；仅在 style 候选时给出。
+    #[serde(default)]
+    pub style_candidate: Option<String>,
+}
+
+impl SemanticSalienceAssessment {
+    /// 漂移原因与风格候选的长度与必填约束。
+    #[must_use]
+    fn drift_and_style_are_valid(&self) -> bool {
+        let drift = self.persona_drift_bp.unwrap_or(0);
+        let reason_ok = self.drift_reason.as_deref().is_none_or(|reason| {
+            !reason.trim().is_empty() && reason.chars().count() <= DRIFT_REASON_MAX_CHARS
+        });
+        // 达到阈值时必须给出原因，否则纠偏无从表达。
+        let reason_required =
+            drift < PERSONA_DRIFT_GUARD_BASIS_POINTS || self.drift_reason.is_some();
+        let style_ok = self.style_candidate.as_deref().is_none_or(|candidate| {
+            !candidate.trim().is_empty() && candidate.chars().count() <= STYLE_CANDIDATE_MAX_CHARS
+        });
+        reason_ok && reason_required && style_ok
+    }
+
+    /// 用户状态记号是否合法；缺失按未知处理。
+    #[must_use]
+    pub fn user_affect_is_valid(&self) -> bool {
+        self.user_affect
+            .as_deref()
+            .is_none_or(|affect| USER_AFFECT_TOKENS.contains(&affect))
+    }
+
+    /// 疲劳度只接受三个规范记号；缺省视为未给出。
+    #[must_use]
+    pub fn user_fatigue_is_valid(&self) -> bool {
+        self.user_fatigue
+            .as_deref()
+            .is_none_or(|fatigue| matches!(fatigue, "low" | "normal" | "high"))
+    }
+
+    /// 输出结构是否可信：只看格式与取值域，不判证据真伪。
+    ///
+    /// 拆出来是为了让「格式坏了」与「证据对不上」在统计与处置上能分开：
+    /// 前者只能整轮丢弃，后者还有复核空间。
+    #[must_use]
+    pub fn schema_is_trustworthy(&self) -> bool {
+        self.schema_version >= SEMANTIC_SALIENCE_ACCEPTED_MIN_VERSION
+            && self.schema_version <= SEMANTIC_SALIENCE_SCHEMA_VERSION
+            && !self.reason.trim().is_empty()
+            && signals_in_range(&self.signals)
+            // Provider 兼容层不接受 schema 的 `uniqueItems`，去重约束改由运行时保守校验。
+            && !has_duplicates(&self.candidate_types)
+            && !has_duplicates(&self.evidence_refs)
+            && self.user_affect_is_valid()
+            && self.user_fatigue_is_valid()
+            && self.drift_and_style_are_valid()
+            && !self
+                .persona_drift_bp
+                .is_some_and(|drift| drift > SEMANTIC_SALIENCE_MAX_BASIS_POINTS)
+    }
+
+    /// 严格校验模型输出，任何越界或伪造引用都保守拒绝。
+    #[must_use]
+    pub fn is_valid_for(&self, envelope: &TurnOutcomeEnvelope) -> bool {
+        if !self.schema_is_trustworthy() {
+            return false;
+        }
+        if !self.should_reflect {
+            return self.candidate_types.is_empty() && self.evidence_refs.is_empty();
+        }
+        if self.candidate_types.is_empty() || self.evidence_refs.is_empty() {
+            return false;
+        }
+        let allowed_refs = envelope.evidence_refs();
+        self.evidence_refs
+            .iter()
+            .all(|evidence_ref| allowed_refs.contains(evidence_ref.as_str()))
+    }
+
+    /// 将语义判断与确定性执行证据结合，决定是否启动完整反思。
+    #[must_use]
+    pub fn qualifies_for_reflection(&self, envelope: &TurnOutcomeEnvelope) -> bool {
+        self.is_valid_for(envelope)
+            && self.should_reflect
+            && self
+                .candidate_types
+                .iter()
+                .any(|candidate| match candidate {
+                    SemanticMemoryCandidateType::Profile
+                    | SemanticMemoryCandidateType::Preference => {
+                        self.signals.stability >= PERSONAL_STABILITY_MIN_BASIS_POINTS
+                            && self.signals.future_utility
+                                >= PERSONAL_FUTURE_UTILITY_MIN_BASIS_POINTS
+                            && self.signals.scope_confidence
+                                >= PERSONAL_SCOPE_CONFIDENCE_MIN_BASIS_POINTS
+                            && self
+                                .evidence_refs
+                                .iter()
+                                .any(|reference| reference == &envelope.user_message_ref)
+                    }
+                    SemanticMemoryCandidateType::Experience
+                    | SemanticMemoryCandidateType::Knowledge
+                    | SemanticMemoryCandidateType::Procedure => {
+                        self.signals.future_utility >= EXPERIENCE_FUTURE_UTILITY_MIN_BASIS_POINTS
+                            && self.signals.verification_strength
+                                >= EXPERIENCE_VERIFICATION_MIN_BASIS_POINTS
+                            && envelope
+                                .execution_evidence
+                                .has_verified_evidence_ref(&self.evidence_refs)
+                    }
+                    // 表达风格由人格系统承接，不通过 Memory 反思通道处理。
+                    SemanticMemoryCandidateType::Style => false,
+                })
+    }
+
+    /// 把「强档确定性门禁」与「弱档加权显著度」合成三档决策。
+    ///
+    /// 强档完全沿用既有硬门禁，保证严格语义不变；证据达标但信号偏弱的轮次落到弱档，
+    /// 仍启动一次轻量反思，由子代理自行判断是否值得落库。
+    #[must_use]
+    pub fn reflection_tier(&self, envelope: &TurnOutcomeEnvelope) -> ReflectionTier {
+        if self.qualifies_for_reflection(envelope) {
+            return ReflectionTier::Strong;
+        }
+        if !self.is_valid_for(envelope) || !self.should_reflect {
+            return ReflectionTier::Skip;
+        }
+        let mut best = ReflectionTier::Skip;
+        for candidate in &self.candidate_types {
+            let score = match candidate {
+                SemanticMemoryCandidateType::Profile | SemanticMemoryCandidateType::Preference => {
+                    let has_user_ref = self
+                        .evidence_refs
+                        .iter()
+                        .any(|reference| reference == &envelope.user_message_ref);
+                    if !has_user_ref {
+                        continue;
+                    }
+                    personal_significance(&self.signals)
+                }
+                SemanticMemoryCandidateType::Experience
+                | SemanticMemoryCandidateType::Knowledge
+                | SemanticMemoryCandidateType::Procedure => {
+                    if !envelope
+                        .execution_evidence
+                        .has_verified_evidence_ref(&self.evidence_refs)
+                    {
+                        continue;
+                    }
+                    experiential_significance(&self.signals)
+                }
+                SemanticMemoryCandidateType::Style => continue,
+            };
+            if score >= REFLECTION_WEAK_MIN_BASIS_POINTS {
+                best = best.max(ReflectionTier::Weak);
+            }
+        }
+        best
+    }
+}
+
+/// 反思分档。
+///
+/// 分档而非二值门禁：证据达标但信号偏弱的轮次进入弱档，避免单点阈值否决整轮反思。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReflectionTier {
+    /// 不启动反思。
+    Skip,
+    /// 轻量反思：只允许低置信写入或明确跳过。
+    Weak,
+    /// 完整反思：沿用确定性门禁。
+    Strong,
+}
+
+impl ReflectionTier {
+    /// 供 prompt 与回执使用的稳定记号。
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Skip => "skip",
+            Self::Weak => "weak",
+            Self::Strong => "strong",
+        }
+    }
+}
+
+/// personal 候选的加权显著度：稳定性与复用价值为主，身份相关与作用域置信为辅。
+fn personal_significance(signals: &SemanticSalienceSignals) -> u16 {
+    weighted_basis_points(&[
+        (signals.stability, 35),
+        (signals.future_utility, 30),
+        (signals.identity_relevance, 20),
+        (signals.scope_confidence, 15),
+    ])
+}
+
+/// experiential 候选的加权显著度：执行验证为主，复用价值为辅。
+fn experiential_significance(signals: &SemanticSalienceSignals) -> u16 {
+    weighted_basis_points(&[
+        (signals.verification_strength, 40),
+        (signals.future_utility, 35),
+        (signals.novelty, 10),
+        (signals.scope_confidence, 15),
+    ])
+}
+
+fn weighted_basis_points(parts: &[(u16, u32)]) -> u16 {
+    let weighted: u32 = parts
+        .iter()
+        .map(|(value, weight)| u32::from(*value) * *weight)
+        .sum();
+    u16::try_from((weighted / 100).min(u32::from(SEMANTIC_SALIENCE_MAX_BASIS_POINTS)))
+        .unwrap_or(SEMANTIC_SALIENCE_MAX_BASIS_POINTS)
+}
+
+fn signals_in_range(signals: &SemanticSalienceSignals) -> bool {
+    [
+        signals.identity_relevance,
+        signals.stability,
+        signals.future_utility,
+        signals.novelty,
+        signals.correction_strength,
+        signals.verification_strength,
+        signals.scope_confidence,
+        signals.specificity,
+    ]
+    .into_iter()
+    .all(|value| value <= SEMANTIC_SALIENCE_MAX_BASIS_POINTS)
+}
+
+/// 判断列表是否包含重复项；列表规模固定很小，线性比较即可。
+fn has_duplicates<T: PartialEq>(items: &[T]) -> bool {
+    items
+        .iter()
+        .enumerate()
+        .any(|(index, item)| items[..index].contains(item))
+}
+
+#[cfg(test)]
+#[path = "turn_outcome_tests.rs"]
+mod tests;

@@ -1,0 +1,28 @@
+{
+  "recordedAt": "2026-11-18T20:14:49.300987+08:00",
+  "recordedOn": {
+    "platform": "win32",
+    "node": "Alex-ThinkBook"
+  },
+  "measurements": {
+    "p1_endpoint_reads_assertion": 1,
+    "runtime_data_mib": 1.53,
+    "event_append_p99_ms": 1.339,
+    "control_tx_p95_ms": 0.411,
+    "sessions_first_page_ms": 2.0,
+    "session_first_screen_ms": 37.0,
+    "inbound_session_lookup_p95_ms": 0.0118,
+    "subscription_admission_cached_us": 0.3
+  },
+  "manual": {
+    "p2_offline_start_ms": 1821,
+    "p9_idle_cpu_percent": 0.45,
+    "p10_cold_start_ms": 2373,
+    "p11_upload_1mib_ms": 19,
+    "p11_upload_8mib_ms": 17,
+    "p11_upload_32mib_ms": 17
+  },
+  "pending": [
+    "P12 本机操作零网关命中（当日日志不存在，需先跑一次真机操作再测）"
+  ]
+}

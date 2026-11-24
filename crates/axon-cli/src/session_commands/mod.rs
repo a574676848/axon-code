@@ -1,0 +1,527 @@
+use std::collections::BTreeSet;
+use std::path::Path;
+
+use axon_crypto::sha256_hex;
+use clap::{Args, Subcommand};
+use serde::Serialize;
+
+use axon_domain::{DaemonSessionId, RuntimeHostId};
+use axon_session::{
+    JsonlThreadEventStore, RuntimeStore as _, SqliteRuntimeStore, ThreadEvent,
+    ThreadEventReadIssue, ThreadListQuery, ThreadService,
+};
+
+use crate::{
+    CliRunResult, OutputFormat,
+    management_commands::{cli_error, json_result, resolved_config_path},
+    runtime_paths::{runtime_axon_data_path_static, runtime_axon_root_path},
+};
+
+mod output;
+mod read_notes;
+mod replay;
+mod session_delete;
+mod session_prune;
+mod session_repair;
+mod session_repair_report;
+mod session_resolution;
+mod sessions_list;
+mod thread_cli;
+
+use output::{SessionOutputCommand, run_session_output};
+use replay::{SessionReplayCommand, run_session_replay};
+use session_delete::run_session_delete;
+use session_prune::run_session_prune;
+use session_repair::{SessionRepairCommand, run_session_repair};
+pub(crate) use session_resolution::{TargetKind, open_control_store, resolve_session_target};
+use sessions_list::{SessionsListCommand, run_sessions_list};
+pub(crate) use thread_cli::session_summary_views_for_root;
+use thread_cli::{
+    SessionExportCommand, SessionForkCommand, SessionListCommand, SessionReadCommand,
+    SessionResumeCommand, SessionShowCommand, run_session_export, run_session_fork,
+    run_session_list, run_session_read, run_session_resume, run_session_show,
+};
+
+/// 会话清单默认页大小；TUI 的会话目录与它同源，两处条数因此一致。
+pub(crate) const SESSION_CLI_DEFAULT_LIMIT: usize = 20;
+const SESSION_CLI_MAX_LIMIT: usize = 100;
+const SESSION_DIAGNOSTIC_ISSUE_PREVIEW_LIMIT: usize = 3;
+
+/// `axon debug session` 参数。
+#[derive(Debug, Clone, Args, PartialEq, Eq)]
+pub struct SessionCommand {
+    /// session 子命令。
+    #[command(subcommand)]
+    pub command: Option<SessionSubcommand>,
+}
+
+/// `axon debug session` 子命令。
+#[derive(Debug, Clone, Subcommand, PartialEq, Eq)]
+pub enum SessionSubcommand {
+    /// 列出统一 Thread 会话。
+    List(SessionListCommand),
+    /// 查看单个 Thread 摘要。
+    Show(SessionShowCommand),
+    /// 读取单个 Thread 详情。
+    Read(SessionReadCommand),
+    /// 恢复 Thread，让后续 run 继续追加到同一会话。
+    Resume(SessionResumeCommand),
+    /// Fork 一个新 Thread。
+    Fork(SessionForkCommand),
+    /// 轮换运行实例：保留会话与历史，只换一段新的运行窗口。
+    Reset(SessionResetCommand),
+    /// 删除运行窗口：控制面会话族与 thread 分片一起删，失败整体回滚。
+    Delete(SessionDeleteCommand),
+    /// 清理归属会话已经消失的非主会话；只删确定的孤儿，归属仍在的一律不动。
+    Prune(SessionPruneCommand),
+    /// 导出单个会话的 ref-only 摘要。
+    Export(SessionExportCommand),
+    /// 回放 resume 链：沿 parent 回溯并按时间正序输出整条会话链。
+    Replay(SessionReplayCommand),
+    /// 读取 tool output 归档内容。
+    Output(SessionOutputCommand),
+    /// 修复存量事件日志：序号重排与事件归属回填（默认 dry-run）。
+    Repair(SessionRepairCommand),
+    /// 只读诊断 Thread 事件流与会话树。
+    Doctor(SessionDoctorCommand),
+}
+
+/// `axon debug session doctor` 参数。
+#[derive(Debug, Clone, Args, PartialEq, Eq)]
+pub struct SessionDoctorCommand {
+    /// 显式请求修复；当前诊断命令默认只读，避免隐式改写事件流。
+    #[arg(long)]
+    pub repair: bool,
+}
+
+/// `axon sessions reset` 参数。
+///
+/// 只换运行窗口，不动会话本身与历史：新的 `current_run_id` 之后，旧的运行态读数不再累加。
+#[derive(Debug, Clone, Args, PartialEq, Eq)]
+pub struct SessionResetCommand {
+    /// 会话 ID（`axon sessions list` 给出）。
+    pub session_id: String,
+}
+
+/// `axon debug session delete` 参数。
+#[derive(Debug, Clone, Args, PartialEq, Eq)]
+pub struct SessionDeleteCommand {
+    /// 会话 ID（`axon sessions`）或 Thread ID（`axon debug session`）。
+    pub session_id: String,
+}
+
+/// `axon debug session prune` 参数。
+#[derive(Debug, Clone, Args, PartialEq, Eq)]
+pub struct SessionPruneCommand {
+    /// 只清理归属会话已消失的非主会话；不写这一项时命令拒绝执行。
+    #[arg(long)]
+    pub orphans: bool,
+}
+
+pub(crate) fn run_session(
+    command: &SessionCommand,
+    format: OutputFormat,
+    config_path: Option<&Path>,
+) -> CliRunResult {
+    let path = match resolved_config_path(config_path) {
+        Ok(path) => path,
+        Err(error) => return cli_error(error),
+    };
+    let subcommand =
+        command
+            .command
+            .as_ref()
+            .unwrap_or(&SessionSubcommand::List(SessionListCommand {
+                limit: Some(SESSION_CLI_DEFAULT_LIMIT),
+                cursor: None,
+                cwd: None,
+                archived: false,
+            }));
+    match subcommand {
+        SessionSubcommand::List(command) => run_session_list(format, &path, command),
+        SessionSubcommand::Show(command) => {
+            run_session_show(format, &path, command, TargetKind::Thread)
+        }
+        SessionSubcommand::Read(command) => {
+            run_session_read(format, &path, command, TargetKind::Thread)
+        }
+        SessionSubcommand::Resume(command) => {
+            run_session_resume(format, &path, command, TargetKind::Thread)
+        }
+        SessionSubcommand::Fork(command) => {
+            run_session_fork(format, &path, command, TargetKind::Thread)
+        }
+        SessionSubcommand::Reset(command) => run_session_reset(format, &path, command),
+        SessionSubcommand::Delete(command) => {
+            run_session_delete(format, &path, command, TargetKind::Thread)
+        }
+        SessionSubcommand::Prune(command) => run_session_prune(format, &path, command),
+        SessionSubcommand::Export(command) => {
+            run_session_export(format, &path, command, TargetKind::Thread)
+        }
+        SessionSubcommand::Replay(command) => {
+            run_session_replay(format, &path, command, TargetKind::Thread)
+        }
+        SessionSubcommand::Output(command) => run_session_output(format, command),
+        SessionSubcommand::Repair(command) => run_session_repair(format, &path, command),
+        SessionSubcommand::Doctor(command) => run_session_doctor(format, &path, command),
+    }
+}
+
+/// `axon sessions` 参数：面向用户的会话入口。
+///
+/// 与 `axon debug session` 共用同一批处理器；顶层 `list` 读运行态会话清单
+/// （title / 最近活动 / 轮次），`debug session list` 保留 thread 级视图。
+#[derive(Debug, Clone, Args, PartialEq, Eq)]
+pub struct SessionsCommand {
+    /// session 子命令；省略时等价于 `list`。
+    #[command(subcommand)]
+    pub command: Option<SessionsSubcommand>,
+}
+
+/// `axon sessions` 子命令。
+#[derive(Debug, Clone, Subcommand, PartialEq, Eq)]
+pub enum SessionsSubcommand {
+    /// 列出运行态会话。
+    List(SessionsListCommand),
+    /// 查看单个会话摘要。
+    Show(SessionShowCommand),
+    /// 读取单个会话详情。
+    Read(SessionReadCommand),
+    /// 恢复会话，让后续 `axon run --continue` 追加到同一会话。
+    Resume(SessionResumeCommand),
+    /// Fork 一个新会话。
+    Fork(SessionForkCommand),
+    /// 轮换运行实例：保留会话与历史，只换一段新的运行窗口。
+    Reset(SessionResetCommand),
+    /// 删除会话：控制面行、入站事实、指标与事件日志一起清，失败整体回滚。
+    Delete(SessionDeleteCommand),
+    /// 导出会话摘要。
+    Export(SessionExportCommand),
+    /// 回放整条会话链。
+    Replay(SessionReplayCommand),
+    /// 读取 tool output 归档内容。
+    Output(SessionOutputCommand),
+    /// 诊断会话事件流。
+    Doctor(SessionDoctorCommand),
+}
+
+pub(crate) fn run_sessions(
+    command: &SessionsCommand,
+    format: OutputFormat,
+    config_path: Option<&Path>,
+) -> CliRunResult {
+    let path = match resolved_config_path(config_path) {
+        Ok(path) => path,
+        Err(error) => return cli_error(error),
+    };
+    match command.command.as_ref() {
+        None => run_sessions_list(format, &path, &SessionsListCommand::default()),
+        Some(SessionsSubcommand::List(list)) => run_sessions_list(format, &path, list),
+        Some(SessionsSubcommand::Show(sub)) => {
+            run_session_show(format, &path, sub, TargetKind::Session)
+        }
+        Some(SessionsSubcommand::Read(sub)) => {
+            run_session_read(format, &path, sub, TargetKind::Session)
+        }
+        Some(SessionsSubcommand::Resume(sub)) => {
+            run_session_resume(format, &path, sub, TargetKind::Session)
+        }
+        Some(SessionsSubcommand::Fork(sub)) => {
+            run_session_fork(format, &path, sub, TargetKind::Session)
+        }
+        Some(SessionsSubcommand::Reset(sub)) => run_session_reset(format, &path, sub),
+        Some(SessionsSubcommand::Delete(sub)) => {
+            run_session_delete(format, &path, sub, TargetKind::Session)
+        }
+        Some(SessionsSubcommand::Export(sub)) => {
+            run_session_export(format, &path, sub, TargetKind::Session)
+        }
+        Some(SessionsSubcommand::Replay(sub)) => {
+            run_session_replay(format, &path, sub, TargetKind::Session)
+        }
+        Some(SessionsSubcommand::Output(sub)) => run_session_output(format, sub),
+        Some(SessionsSubcommand::Doctor(sub)) => run_session_doctor(format, &path, sub),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionDoctorReport {
+    status: &'static str,
+    store_path: String,
+    event_count: usize,
+    thread_count: usize,
+    unreadable_thread_shards: usize,
+    orphan_parent_count: usize,
+    orphan_fork_count: usize,
+    repair_requested: bool,
+    repair_performed: bool,
+    raw_prompt_exported: bool,
+    warnings: Vec<String>,
+    checks: Vec<SessionDoctorCheckView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionDoctorCheckView {
+    name: &'static str,
+    status: &'static str,
+    summary: String,
+}
+
+fn run_session_reset(
+    format: OutputFormat,
+    config_path: &Path,
+    command: &SessionResetCommand,
+) -> CliRunResult {
+    let data_root = match runtime_axon_data_path_static(config_path) {
+        Ok(root) => root,
+        Err(error) => return cli_error(error),
+    };
+    let store = SqliteRuntimeStore::from_root(data_root);
+    if let Err(error) = store.initialize() {
+        return cli_error(error.to_string());
+    }
+    // 会话标识是 reset 唯一的入口：它轮换的是会话的运行窗口，Thread 标识不属于这里。
+    let given = command.session_id.trim().to_owned();
+    let session = match DaemonSessionId::new(given.clone()) {
+        Ok(session) => session,
+        Err(_) => return cli_error(format!("会话 ID 非法：{given}")),
+    };
+    let resolved = match store.get_session(&session) {
+        Ok(record) => record,
+        Err(_) => {
+            return cli_error(format!(
+                "未找到会话：{given}。先用 `axon sessions list` 确认可用会话 ID"
+            ));
+        }
+    };
+    let now_ms = axon_time::unix_now_ms();
+    let host_id = match RuntimeHostId::new(format!("cli-reset-{}", std::process::id())) {
+        Ok(host_id) => host_id,
+        Err(error) => return cli_error(error.to_string()),
+    };
+    let host = match store.claim_host(&host_id, std::process::id(), None, now_ms, 60_000) {
+        Ok(host) => host,
+        Err(error) => return cli_error(error.to_string()),
+    };
+    let record = match store.reset_session(&resolved.session_id, &resolved.cwd, &host, now_ms) {
+        Ok(record) => record,
+        Err(error) => return cli_error(error.to_string()),
+    };
+    render_reset(
+        format,
+        &SessionResetReport {
+            status: "session_reset",
+            session_id: record.session_id.as_str().to_owned(),
+            current_run_id: record.current_run_id,
+            cwd: record.cwd,
+        },
+    )
+}
+
+fn run_session_doctor(
+    format: OutputFormat,
+    config_path: &Path,
+    command: &SessionDoctorCommand,
+) -> CliRunResult {
+    if command.repair {
+        return cli_error(
+            "session doctor 保持只读；存量修复请用 `axon debug session repair --reorder|--attribute`（默认 dry-run，加 --apply 才写文件）",
+        );
+    }
+    let root = match runtime_axon_root_path(config_path) {
+        Ok(path) => path,
+        Err(error) => return cli_error(error),
+    };
+    let store = JsonlThreadEventStore;
+    let scan = match store.scan_all(&root) {
+        Ok(scan) => scan,
+        Err(error) => return cli_error(error),
+    };
+    let projection = match ThreadService::new(JsonlThreadEventStore).list_thread_page_from_records(
+        &scan.records,
+        &ThreadListQuery {
+            limit: SESSION_CLI_MAX_LIMIT,
+            ..ThreadListQuery::default()
+        },
+    ) {
+        Ok(page) => page.threads,
+        Err(error) => return cli_error(error),
+    };
+    let records = &scan.records;
+    let started = records
+        .iter()
+        .filter_map(|record| match record.event {
+            ThreadEvent::ThreadStarted { .. } => Some(record.thread_id.as_str()),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    let orphan_parent_count = records
+        .iter()
+        .filter(|record| match &record.event {
+            ThreadEvent::ThreadStarted {
+                parent_thread_id: Some(parent),
+                ..
+            } => !started.contains(parent.as_str()),
+            _ => false,
+        })
+        .count();
+    let orphan_fork_count = records
+        .iter()
+        .filter(|record| match &record.event {
+            ThreadEvent::ThreadStarted {
+                forked_from_thread_id: Some(source),
+                ..
+            } => !started.contains(source.as_str()),
+            _ => false,
+        })
+        .count();
+    let mut warnings = thread_event_issue_summaries(&scan.issues);
+    let event_store_ok = scan.issues.is_empty();
+    let mut checks = vec![
+        SessionDoctorCheckView {
+            name: "event_store",
+            status: if event_store_ok { "ok" } else { "failed" },
+            summary: format!(
+                "可读 records={} unreadable_shards={}",
+                records.len(),
+                scan.issues.len()
+            ),
+        },
+        SessionDoctorCheckView {
+            name: "projection",
+            status: "ok",
+            summary: format!("可读 shard 投影可重建，threads={}", projection.len()),
+        },
+    ];
+    checks.push(SessionDoctorCheckView {
+        name: "thread_tree",
+        status: if orphan_parent_count == 0 && orphan_fork_count == 0 {
+            "ok"
+        } else {
+            "failed"
+        },
+        summary: format!("orphan_parent={orphan_parent_count} orphan_fork={orphan_fork_count}"),
+    });
+    // 追读口径：结论未知与无归属是两种「正文看起来是空的」现场，必须点名并写清原因。
+    if let Ok(store) = open_control_store(config_path) {
+        match read_notes::scan_read_notes(&store) {
+            Ok(scan) => checks.push(SessionDoctorCheckView {
+                name: "read_conclusions",
+                status: if scan.is_clean() { "ok" } else { "failed" },
+                summary: scan.summary(),
+            }),
+            Err(message) => warnings.push(format!("追读口径检查无法执行：{message}")),
+        }
+    } else {
+        warnings.push("运行态库不可用：本轮未检查轮次结论与帧归属".to_owned());
+    }
+    let failed = checks.iter().any(|check| check.status != "ok");
+    let report = SessionDoctorReport {
+        status: if failed {
+            "session_doctor_failed"
+        } else {
+            "session_doctor_ok"
+        },
+        store_path: display_path(&JsonlThreadEventStore::path(&root)),
+        event_count: records.len(),
+        thread_count: projection.len(),
+        unreadable_thread_shards: scan.issues.len(),
+        orphan_parent_count,
+        orphan_fork_count,
+        repair_requested: command.repair,
+        repair_performed: false,
+        raw_prompt_exported: false,
+        warnings,
+        checks,
+    };
+    render_doctor(format, &report)
+}
+
+pub(super) fn thread_event_issue_summaries(issues: &[ThreadEventReadIssue]) -> Vec<String> {
+    let mut warnings = issues
+        .iter()
+        .take(SESSION_DIAGNOSTIC_ISSUE_PREVIEW_LIMIT)
+        .map(|issue| format!("thread shard {}: {}", issue.shard, issue.error))
+        .collect::<Vec<_>>();
+    let remaining = issues
+        .len()
+        .saturating_sub(SESSION_DIAGNOSTIC_ISSUE_PREVIEW_LIMIT);
+    if remaining > 0 {
+        warnings.push(format!("另有 {remaining} 个不可读 thread shard"));
+    }
+    warnings
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionResetReport {
+    status: &'static str,
+    session_id: String,
+    current_run_id: String,
+    cwd: String,
+}
+
+fn render_reset(format: OutputFormat, report: &SessionResetReport) -> CliRunResult {
+    match format {
+        OutputFormat::Json => json_result(report),
+        OutputFormat::Text => CliRunResult {
+            exit_code: 0,
+            stdout: format!(
+                "已轮换运行实例: {}\n- current_run_id: {}\n- cwd: {}\n",
+                report.session_id, report.current_run_id, report.cwd
+            ),
+            stderr: String::new(),
+        },
+    }
+}
+
+fn render_doctor(format: OutputFormat, report: &SessionDoctorReport) -> CliRunResult {
+    match format {
+        OutputFormat::Json => json_result(report),
+        OutputFormat::Text => {
+            let mut stdout = format!("Axon session doctor: {}\n", report.status);
+            for check in &report.checks {
+                let _ = std::fmt::Write::write_fmt(
+                    &mut stdout,
+                    format_args!("- {}: {} {}\n", check.name, check.status, check.summary),
+                );
+            }
+            for warning in &report.warnings {
+                let _ =
+                    std::fmt::Write::write_fmt(&mut stdout, format_args!("- 告警: {warning}\n"));
+            }
+            CliRunResult {
+                exit_code: if report.status == "session_doctor_ok" {
+                    0
+                } else {
+                    2
+                },
+                stdout,
+                stderr: String::new(),
+            }
+        }
+    }
+}
+
+pub(crate) fn bounded_session_limit(limit: Option<usize>) -> Result<usize, &'static str> {
+    let limit = limit.unwrap_or(SESSION_CLI_DEFAULT_LIMIT);
+    if limit == 0 || limit > SESSION_CLI_MAX_LIMIT {
+        return Err("session limit 必须在 1..=100 范围内");
+    }
+    Ok(limit)
+}
+
+fn display_path(path: &Path) -> String {
+    path.display().to_string()
+}
+
+#[cfg(test)]
+#[path = "sessions_list_tests.rs"]
+mod sessions_list_tests;
+
+#[cfg(test)]
+#[path = "session_reset_tests.rs"]
+mod session_reset_tests;

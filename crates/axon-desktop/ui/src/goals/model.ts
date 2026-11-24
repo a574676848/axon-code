@@ -1,0 +1,305 @@
+/*
+ * 目标看板的纯函数层：状态映射、栏目归组、筛选、计数与卡片上限。
+ *
+ * 这一层不碰 React、不碰 IPC：页面级状态由 CDP 真机验收，仓库不引入 DOM 测试框架，
+ * 因此凡是能算成纯函数的判定都收在这里，由 `npm test` 逐条锁死。
+ */
+
+import type { GoalCardView, GoalStatus } from '../goalTypes';
+
+/** 栏目标识：看板从左到右的四栏。 */
+export type GoalColumnId = 'proposed' | 'running' | 'paused' | 'settled';
+
+/** 状态点语义，与 `StateDot` 一致。 */
+export type GoalDotState = 'done' | 'warning' | 'error' | 'idle' | 'ongoing';
+
+/** 状态标签色调，与 `Chip` 一致。 */
+export type GoalChipTone = 'neutral' | 'ok' | 'warning' | 'danger' | 'accent';
+
+/** 一个目标状态在界面上的四件事：文案、状态点、胶囊色调、归入哪一栏。 */
+export interface GoalStatusMeta {
+  label: string;
+  /** 与 `StateDot` 的取值一一对应。 */
+  dot: GoalDotState;
+  /** 与 `Chip` 的语义色调一一对应。 */
+  chipTone: GoalChipTone;
+  column: GoalColumnId;
+}
+
+const STATUS_META: Record<GoalStatus, GoalStatusMeta> = {
+  proposed: { label: '待开始', dot: 'idle', chipTone: 'neutral', column: 'proposed' },
+  active: { label: '进行中', dot: 'ongoing', chipTone: 'accent', column: 'running' },
+  waiting: { label: '等待中', dot: 'warning', chipTone: 'warning', column: 'running' },
+  paused: { label: '已暂停', dot: 'warning', chipTone: 'warning', column: 'paused' },
+  completed: { label: '已完成', dot: 'done', chipTone: 'ok', column: 'settled' },
+  failed: { label: '已失败', dot: 'error', chipTone: 'danger', column: 'settled' },
+  cancelled: { label: '已取消', dot: 'idle', chipTone: 'neutral', column: 'settled' },
+};
+
+/** 状态映射；未知取值按「待开始」处理，界面永远不显示后端枚举。 */
+export const goalStatusMeta = (status: GoalStatus): GoalStatusMeta =>
+  STATUS_META[status] ?? STATUS_META.proposed;
+
+/**
+ * 执行状态的中文文案。
+ *
+ * 执行状态只出现在详情弹窗与卡片读数里，取值与网关投影一致；界面不直接显示
+ * `running`、`uncertain` 这类后端枚举。
+ */
+const EXECUTION_LABELS: Record<string, string> = {
+  queued: '排队中',
+  running: '进行中',
+  waiting: '等待中',
+  uncertain: '结果不确定',
+  completed: '已完成',
+  failed: '已失败',
+  cancelled: '已取消',
+};
+
+/** 执行状态文案；未知取值原样回落，不伪装成某个已知状态。 */
+export const executionStatusLabel = (status: string): string =>
+  EXECUTION_LABELS[status] ?? status;
+
+/** 四栏的固定顺序与标题。 */
+export const GOAL_COLUMNS: readonly { id: GoalColumnId; label: string }[] = [
+  { id: 'proposed', label: '待开始' },
+  { id: 'running', label: '进行中' },
+  { id: 'paused', label: '已暂停' },
+  { id: 'settled', label: '已结束' },
+];
+
+/** 单栏默认渲染上限。 */
+export const COLUMN_CARD_LIMIT = 20;
+/** 初始挂载上限：四栏各 20 张，合计 80 张。 */
+export const INITIAL_CARD_LIMIT = COLUMN_CARD_LIMIT * GOAL_COLUMNS.length;
+
+/** 工具栏的状态分段。 */
+export type GoalFilter = 'all' | 'open' | 'settled';
+
+/** 是否已收口（进入终态）。 */
+export const isSettled = (status: GoalStatus): boolean =>
+  goalStatusMeta(status).column === 'settled';
+
+/**
+ * 目标是否已经绑定一个可进入的执行会话。
+ *
+ * 判据是服务端给出的 `hasTranscript`：它回答「这一轮真有逐字稿吗」。`sessionId` 只说明
+ * 绑定关系，不能替代可进入性。
+ */
+export const hasSessionBinding = (goal: GoalCardView): boolean =>
+  goal.workspaceId !== null && goal.latestExecution?.hasTranscript === true;
+
+/**
+ * 卡片页脚的动作文案。
+ *
+ * 有执行记录且能定位工作区才是「进入会话」；缺任何一半都退回详情，
+ * 否则点下去只会拿到一条订阅失败横幅。
+ */
+export const cardActionLabel = (goal: GoalCardView): string =>
+  hasSessionBinding(goal) ? '进入会话' : '查看详情';
+
+/**
+ * 逐字稿不可进入时的可读原因。
+ *
+ * 原因码由网关给出（`execution-not-started` / `transcript-empty`），这里只翻译成
+ * 一句用户能行动的话：要么这次执行还没开始，要么确实没有留下正文。
+ */
+export function executionUnavailableText(reason: string | null | undefined): string {
+  if (reason === 'execution-not-started') return '这次执行还没开始，没有可回看的逐字稿';
+  if (reason === 'transcript-empty') return '这次执行没有留下逐字稿';
+  return '这次执行没有可回看的逐字稿';
+}
+
+/** 目标摘要去重：当预览与标题完全一致时不再重复展示第二遍。 */
+export function distinctObjectivePreview(
+  goal: Pick<GoalCardView, 'title' | 'objectivePreview'>,
+): string {
+  const preview = cleanPreview(goal.objectivePreview);
+  if (preview.length === 0 || preview === goal.title.trim()) return '';
+  return preview;
+}
+
+/**
+ * 纯文本预览：折叠换行与连续空白，去掉行内代码反引号。
+ *
+ * 目标的正文由模型写成 Markdown 片段，卡片与台账只有一两行的位置：
+ * 原样铺开会把 `E:\...` 的反引号与换行一起画出来，一眼看上去像坏了的排版。
+ * 这里只做「转成一句话」这一件事，不改动任何词句。
+ */
+export function cleanPreview(text: string): string {
+  return text.replace(/`+/g, '').replace(/\s+/g, ' ').trim();
+}
+
+/** 卡片上的结构化进展提示（区分等待原因与下一步动作）。 */
+export interface GoalProgressCue {
+  kind: 'waiting' | 'next';
+  label: string;
+  text: string;
+  tone: 'default' | 'warning';
+}
+
+/** 提取卡片进展提示：等待原因优先于下一步，都没有时返回 null。 */
+export function goalProgressCue(
+  goal: Pick<GoalCardView, 'waitingReason' | 'nextStep'>,
+): GoalProgressCue | null {
+  const waiting = goal.waitingReason?.trim() ?? '';
+  if (waiting.length > 0) {
+    return { kind: 'waiting', label: '等待', text: waiting, tone: 'warning' };
+  }
+  const next = goal.nextStep?.trim() ?? '';
+  if (next.length > 0) {
+    return { kind: 'next', label: '下一步', text: next, tone: 'default' };
+  }
+  return null;
+}
+
+/** 卡片定位行文案：优先等待原因，其次下一步；都没有就是空串。 */
+export function goalLocatorText(goal: GoalCardView): string {
+  const cue = goalProgressCue(goal);
+  return cue === null ? '' : `${cue.label} · ${cue.text}`;
+}
+
+/** 目标概览条的右侧统计文案。 */
+export function goalContractSummary(stepCount: number, acceptanceCount: number): string {
+  const parts: string[] = [];
+  if (stepCount > 0) parts.push(`${stepCount} 步`);
+  if (acceptanceCount > 0) parts.push(`${acceptanceCount} 项验收`);
+  return parts.length > 0 ? parts.join(' · ') : '目标说明';
+}
+
+
+/** 栏目头部的状态点：空栏保持静息，非空栏反映栏内真实状态。 */
+export function columnHeaderDot(
+  columnId: GoalColumnId,
+  members: readonly Pick<GoalCardView, 'status'>[],
+): GoalDotState {
+  if (members.length === 0) return 'idle';
+  if (columnId === 'running') {
+    return members.some((goal) => goal.status === 'active') ? 'ongoing' : 'warning';
+  }
+  if (columnId === 'paused') return 'warning';
+  if (columnId === 'settled') {
+    const hasCompleted = members.some((goal) => goal.status === 'completed');
+    const hasFailed = members.some((goal) => goal.status === 'failed');
+    if (hasFailed && !hasCompleted) return 'error';
+    return 'done';
+  }
+  return 'idle';
+}
+
+/** 搜索命中：标题、目标预览、工作区名、下一步与等待原因都在检索范围内。 */
+export function matchesQuery(goal: GoalCardView, query: string): boolean {
+  const needle = query.trim().toLowerCase();
+  if (needle.length === 0) return true;
+  return [
+    goal.title,
+    goal.objectivePreview,
+    goal.workspaceName ?? '',
+    goal.workspacePath ?? '',
+    goal.nextStep ?? '',
+    goal.waitingReason ?? '',
+  ].some((field) => field.toLowerCase().includes(needle));
+}
+
+/** 状态分段命中。 */
+export function matchesFilter(goal: GoalCardView, filter: GoalFilter): boolean {
+  if (filter === 'open') return !isSettled(goal.status);
+  if (filter === 'settled') return isSettled(goal.status);
+  return true;
+}
+
+/** 先按分段过滤，再按搜索串过滤；顺序固定，因此计数与卡片永远同源。 */
+export function selectGoals(
+  goals: readonly GoalCardView[],
+  query: string,
+  filter: GoalFilter,
+): GoalCardView[] {
+  return goals.filter(
+    (goal) => matchesFilter(goal, filter) && matchesQuery(goal, query),
+  );
+}
+
+/** 一段状态计数。 */
+export interface GoalCounts {
+  /** 本次读取到的目标数：口径固定取网关回执里的 `returned`。 */
+  total: number;
+  open: number;
+  settled: number;
+}
+
+/**
+ * 当前这次读取的分段计数。
+ *
+ * `total` 取网关回执的 `returned`（本次实际读到的目标数），不是过滤后的可见条数：
+ * 计数说明的是「这次读到了什么」，筛选只改变看板里摆哪些卡。
+ */
+export function countGoals(
+  goals: readonly GoalCardView[],
+  returned: number,
+): GoalCounts {
+  const settled = goals.filter((goal) => isSettled(goal.status)).length;
+  return { total: returned, open: goals.length - settled, settled };
+}
+
+/** 一栏的渲染切片。 */
+export interface GoalColumnSlice {
+  id: GoalColumnId;
+  label: string;
+  /** 栏目头的状态点。 */
+  dot: GoalDotState;
+  /** 该栏在过滤后的目标数。 */
+  total: number;
+  /** 本次实际渲染的卡片。 */
+  visible: GoalCardView[];
+  /** 收起时被折叠掉的张数；为 0 表示无需「显示其余」。 */
+  hidden: number;
+}
+
+/**
+ * 按四栏归组并应用单栏上限。
+ *
+ * `expanded` 里的栏目不再限制张数。四栏各 20 张即为初始挂载上限 80 张，
+ * 展开后仍受数据侧 256 条上限约束，因此不会出现一次挂载几百张卡的情况。
+ */
+export function boardColumns(
+  goals: readonly GoalCardView[],
+  expanded: readonly GoalColumnId[],
+  limit: number = COLUMN_CARD_LIMIT,
+): GoalColumnSlice[] {
+  return GOAL_COLUMNS.map((column) => {
+    const members = goals.filter(
+      (goal) => goalStatusMeta(goal.status).column === column.id,
+    );
+    const cap = expanded.includes(column.id)
+      ? members.length
+      : Math.min(limit, members.length);
+    return {
+      id: column.id,
+      label: column.label,
+      dot: columnHeaderDot(column.id, members),
+      total: members.length,
+      visible: members.slice(0, cap),
+      hidden: members.length - cap,
+    };
+  });
+}
+
+/** 是否还有未完成的目标；为真才继续 4 秒轮询。 */
+export const hasUnsettled = (goals: readonly GoalCardView[]): boolean =>
+  goals.some((goal) => !isSettled(goal.status));
+
+/**
+ * 计数旁的口径说明。
+ *
+ * 服务端按更新时间升序出页，所以读满上限时拿到的是「最早的那一批」，不是「最近的」。
+ * 这里只如实说「仅显示 N 个」，不给一个方向性错误的话。
+ */
+export function countSummary(
+  counts: GoalCounts,
+  truncated: boolean,
+  limit: number,
+): string {
+  const base = `共 ${counts.total} 个目标 · 未完成 ${counts.open} · 已结束 ${counts.settled}`;
+  if (!truncated) return base;
+  return `${base} · 已达上限，仅显示 ${limit} 个`;
+}

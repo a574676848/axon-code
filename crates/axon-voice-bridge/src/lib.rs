@@ -1,0 +1,431 @@
+//! 语音桥：把语音提供方的传输通道映射为 daemon 侧的会话状态机。
+//!
+//! 只依赖 [`HostTransport`]，不自己启动进程，也不持有任何模型；本机模型宿主已移除，
+//! 云端适配器（阿里百炼、火山引擎）或测试用的进程内脚本实现该 trait 即可接入。
+//! 上层（daemon 的 `/api/v1/voice`）负责把 [`VoiceEvent`] 映射成 WS 帧。
+
+/// 提供方协议随桥一起导出：消费者需要构造或匹配管道帧，但不必单独依赖协议 crate。
+pub use axon_voice_protocol;
+
+use std::time::{Duration, Instant};
+
+use axon_voice_protocol::{
+    Control, CueStatus, ErrorMsg, Final, Frame, Heartbeat, Partial, SessionEnd, SessionStart,
+    Speak, UtteranceEnd, Warm, Warmup, encode_audio_in,
+};
+
+/// 语音提供方传输层错误。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransportError {
+    /// 写失败。
+    Write(String),
+    /// 读失败。
+    Read(String),
+    /// 超时。
+    Timeout,
+    /// 通道关闭。
+    Closed,
+}
+
+impl std::fmt::Display for TransportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Write(reason) => write!(f, "写语音提供方失败：{reason}"),
+            Self::Read(reason) => write!(f, "读语音提供方失败：{reason}"),
+            Self::Timeout => f.write_str("等待语音提供方超时"),
+            Self::Closed => f.write_str("语音提供方通道已关闭"),
+        }
+    }
+}
+
+/// 语音提供方传输。
+pub trait HostTransport {
+    /// 发送控制帧。
+    ///
+    /// # Errors
+    ///
+    /// 传输失败。
+    fn send_control(&mut self, control: &Control) -> Result<(), TransportError>;
+    /// 发送原始帧。
+    ///
+    /// # Errors
+    ///
+    /// 传输失败。
+    fn send_bytes(&mut self, bytes: &[u8]) -> Result<(), TransportError>;
+    /// 在超时内读取一帧。
+    ///
+    /// # Errors
+    ///
+    /// 超时、通道关闭或读取失败。
+    fn recv(&mut self, timeout: Duration) -> Result<Frame, TransportError>;
+    /// 心跳是否仍在窗口内。
+    fn heartbeat_ok(&self, now: Instant) -> bool;
+    /// 会话是否仍存活。
+    fn alive(&mut self) -> bool;
+    /// 终止并回收，返回退出码（云端提供方通常为 `None`）。
+    fn terminate(&mut self) -> Option<i32>;
+    /// 发 close 并等待回执，必要时强制回收。
+    fn shutdown(&mut self);
+}
+
+/// 擦除后的传输：生产是云端提供方适配器，测试可注入进程内脚本实现。
+impl<T: HostTransport + ?Sized> HostTransport for Box<T> {
+    fn send_control(&mut self, control: &Control) -> Result<(), TransportError> {
+        (**self).send_control(control)
+    }
+
+    fn send_bytes(&mut self, bytes: &[u8]) -> Result<(), TransportError> {
+        (**self).send_bytes(bytes)
+    }
+
+    fn recv(&mut self, timeout: Duration) -> Result<Frame, TransportError> {
+        (**self).recv(timeout)
+    }
+
+    fn heartbeat_ok(&self, now: Instant) -> bool {
+        (**self).heartbeat_ok(now)
+    }
+
+    fn alive(&mut self) -> bool {
+        (**self).alive()
+    }
+
+    fn terminate(&mut self) -> Option<i32> {
+        (**self).terminate()
+    }
+
+    fn shutdown(&mut self) {
+        (**self).shutdown();
+    }
+}
+
+/// 桥错误。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BridgeError {
+    /// 传输失败。
+    Transport(TransportError),
+    /// 提供方返回错误帧。
+    Host(ErrorMsg),
+    /// 状态不允许。
+    NotReady,
+    /// 已有会话。
+    Busy,
+    /// 没有会话。
+    NoSession,
+    /// 协议编码失败。
+    Protocol(String),
+    /// 桥已关闭。
+    Closed,
+}
+
+impl std::fmt::Display for BridgeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Transport(error) => write!(f, "{error}"),
+            Self::Host(error) => write!(f, "提供方错误：{}", error.code),
+            Self::NotReady => f.write_str("提供方未就绪"),
+            Self::Busy => f.write_str("已有会话"),
+            Self::NoSession => f.write_str("当前没有会话"),
+            Self::Protocol(reason) => write!(f, "协议编码失败：{reason}"),
+            Self::Closed => f.write_str("桥已关闭"),
+        }
+    }
+}
+
+impl std::error::Error for BridgeError {}
+
+/// 桥对外事件。
+#[derive(Debug, Clone, PartialEq)]
+pub enum VoiceEvent {
+    /// 预热完成。
+    Warm(Warm),
+    /// 中间结果。
+    Partial(Partial),
+    /// 定稿。
+    Final(Final),
+    /// 对话音频。
+    Audio {
+        /// 轮次。
+        epoch: u32,
+        /// 包序号。
+        seq: u32,
+        /// s16le 载荷。
+        audio: Vec<u8>,
+    },
+    /// cue 音频。
+    CueAudio {
+        /// cue 标识。
+        cue_id: u32,
+        /// 包序号。
+        seq: u32,
+        /// s16le 载荷。
+        audio: Vec<u8>,
+    },
+    /// 提供方错误帧。
+    Error(ErrorMsg),
+    /// cue 缓存状态。
+    CueStatus(CueStatus),
+    /// 心跳。
+    Heartbeat(Heartbeat),
+    /// 已收到但当前不消费的控制消息。
+    Ignored(Control),
+    /// 关闭确认。
+    Closed,
+}
+
+/// 桥状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BridgeState {
+    /// 未预热。
+    Idle,
+    /// 已就绪。
+    Ready,
+    /// 会话中。
+    InSession,
+    /// 已关闭。
+    Closed,
+}
+
+/// 语音桥。
+pub struct VoiceBridge<T: HostTransport> {
+    transport: T,
+    state: BridgeState,
+    session_id: Option<String>,
+}
+
+impl<T: HostTransport> VoiceBridge<T> {
+    /// 新建。
+    pub fn new(transport: T) -> Self {
+        Self {
+            transport,
+            state: BridgeState::Idle,
+            session_id: None,
+        }
+    }
+
+    /// 当前状态。
+    #[must_use]
+    pub fn state(&self) -> BridgeState {
+        self.state
+    }
+
+    /// 预热到就绪；返回提供方报告的预热指标（已就绪时返回 `None`）。
+    ///
+    /// # Errors
+    ///
+    /// 提供方返回错误、超时或传输失败。
+    pub fn warmup(
+        &mut self,
+        family: &str,
+        model: &str,
+        timeout: Duration,
+    ) -> Result<Option<Warm>, BridgeError> {
+        match self.state {
+            BridgeState::Ready => return Ok(None),
+            BridgeState::Closed => return Err(BridgeError::Closed),
+            BridgeState::InSession => return Err(BridgeError::Busy),
+            BridgeState::Idle => {}
+        }
+        self.send_control(&Control::Warmup(Warmup {
+            family: family.to_owned(),
+            model: model.to_owned(),
+        }))?;
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline
+                .checked_duration_since(std::time::Instant::now())
+                .ok_or(BridgeError::Transport(TransportError::Timeout))?;
+            match self.transport.recv(remaining) {
+                Ok(Frame::Control(Control::Warm(warm))) => {
+                    self.state = BridgeState::Ready;
+                    return Ok(Some(warm));
+                }
+                Ok(Frame::Control(Control::Error(error))) => return Err(BridgeError::Host(error)),
+                Ok(Frame::Control(Control::Heartbeat(_))) => continue,
+                Ok(_) => continue,
+                Err(TransportError::Timeout) => {
+                    return Err(BridgeError::Transport(TransportError::Timeout));
+                }
+                Err(error) => return Err(BridgeError::Transport(error)),
+            }
+        }
+    }
+
+    /// 开始会话。
+    ///
+    /// # Errors
+    ///
+    /// 未就绪、已有会话或传输失败。
+    pub fn start(
+        &mut self,
+        session_id: &str,
+        mode: &str,
+        lang: &str,
+        hot_words: &[String],
+    ) -> Result<(), BridgeError> {
+        match self.state {
+            BridgeState::InSession => return Err(BridgeError::Busy),
+            BridgeState::Closed => return Err(BridgeError::Closed),
+            BridgeState::Ready => {}
+            BridgeState::Idle => return Err(BridgeError::NotReady),
+        }
+        self.send_control(&Control::SessionStart(SessionStart {
+            session_id: session_id.to_owned(),
+            mode: mode.to_owned(),
+            lang: lang.to_owned(),
+            hot_words: hot_words.to_vec(),
+            sample_rate: 16_000,
+        }))?;
+        self.state = BridgeState::InSession;
+        self.session_id = Some(session_id.to_owned());
+        Ok(())
+    }
+
+    /// 推入一段 16 kHz 单声道 PCM。
+    ///
+    /// # Errors
+    ///
+    /// 没有会话或传输失败。
+    pub fn push_audio(&mut self, pcm: &[u8]) -> Result<(), BridgeError> {
+        if self.state == BridgeState::Closed {
+            return Err(BridgeError::Closed);
+        }
+        if self.state != BridgeState::InSession {
+            return Err(BridgeError::NoSession);
+        }
+        if pcm.is_empty() {
+            return Err(BridgeError::Protocol("音频为空".to_owned()));
+        }
+        let frame =
+            encode_audio_in(pcm).map_err(|error| BridgeError::Protocol(error.to_string()))?;
+        self.transport
+            .send_bytes(&frame)
+            .map_err(BridgeError::Transport)
+    }
+
+    /// 取消当前轮。
+    ///
+    /// # Errors
+    ///
+    /// 没有会话或传输失败。
+    pub fn cancel(&mut self, reason: &str) -> Result<(), BridgeError> {
+        if self.state != BridgeState::InSession {
+            return Err(BridgeError::NoSession);
+        }
+        self.send_control(&Control::Cancel(axon_voice_protocol::Cancel {
+            reason: reason.to_owned(),
+        }))
+    }
+
+    /// 结束当前句，会话保持。
+    ///
+    /// # Errors
+    ///
+    /// 没有会话、朗读稿为空或传输失败。
+    pub fn end_utterance(&mut self, utterance_seq: u32) -> Result<(), BridgeError> {
+        if self.state != BridgeState::InSession {
+            return Err(BridgeError::NoSession);
+        }
+        self.send_control(&Control::UtteranceEnd(UtteranceEnd { utterance_seq }))
+    }
+
+    /// 下发一句已渲染的朗读稿；`seq` 每轮从 1 起。
+    ///
+    /// # Errors
+    ///
+    /// 没有会话、朗读稿为空或传输失败。
+    pub fn speak(
+        &mut self,
+        turn_id: &str,
+        epoch: u32,
+        seq: u32,
+        text: &str,
+    ) -> Result<(), BridgeError> {
+        if self.state != BridgeState::InSession {
+            return Err(BridgeError::NoSession);
+        }
+        if text.trim().is_empty() {
+            return Err(BridgeError::Protocol("朗读稿为空".to_owned()));
+        }
+        self.send_control(&Control::Speak(Speak {
+            turn_id: turn_id.to_owned(),
+            epoch,
+            seq,
+            text: text.to_owned(),
+        }))
+    }
+
+    /// 结束会话。
+    ///
+    /// # Errors
+    ///
+    /// 没有会话或传输失败。
+    pub fn end_session(&mut self, reason: &str) -> Result<(), BridgeError> {
+        let Some(session_id) = self.session_id.clone() else {
+            return Err(BridgeError::NoSession);
+        };
+        self.send_control(&Control::SessionEnd(SessionEnd {
+            session_id,
+            reason: reason.to_owned(),
+        }))?;
+        self.session_id = None;
+        self.state = BridgeState::Ready;
+        Ok(())
+    }
+
+    /// 等待一个事件；超时返回 `Ok(None)`。
+    ///
+    /// # Errors
+    ///
+    /// 传输失败。
+    pub fn poll(&mut self, timeout: Duration) -> Result<Option<VoiceEvent>, BridgeError> {
+        if self.state == BridgeState::Closed {
+            return Err(BridgeError::Closed);
+        }
+        match self.transport.recv(timeout) {
+            Ok(Frame::Control(Control::Closed)) => {
+                self.state = BridgeState::Closed;
+                Ok(Some(VoiceEvent::Closed))
+            }
+            Ok(frame) => Ok(map_frame(frame)),
+            Err(TransportError::Timeout) => Ok(None),
+            Err(error) => Err(BridgeError::Transport(error)),
+        }
+    }
+
+    /// 关闭并等待回执，必要时强杀回收。
+    pub fn shutdown(&mut self) {
+        self.transport.shutdown();
+        self.state = BridgeState::Closed;
+    }
+
+    /// 取出底层传输。
+    #[must_use]
+    pub fn into_inner(self) -> T {
+        self.transport
+    }
+
+    fn send_control(&mut self, control: &Control) -> Result<(), BridgeError> {
+        self.transport
+            .send_control(control)
+            .map_err(BridgeError::Transport)
+    }
+}
+
+fn map_frame(frame: Frame) -> Option<VoiceEvent> {
+    match frame {
+        Frame::Control(Control::Warm(warm)) => Some(VoiceEvent::Warm(warm)),
+        Frame::Control(Control::Partial(partial)) => Some(VoiceEvent::Partial(partial)),
+        Frame::Control(Control::Final(final_message)) => Some(VoiceEvent::Final(final_message)),
+        Frame::Control(Control::Heartbeat(beat)) => Some(VoiceEvent::Heartbeat(beat)),
+        Frame::Control(Control::Closed) => Some(VoiceEvent::Closed),
+        Frame::Control(Control::Error(error)) => Some(VoiceEvent::Error(error)),
+        Frame::Control(other) => Some(VoiceEvent::Ignored(other)),
+        Frame::AudioOut { epoch, seq, audio } => Some(VoiceEvent::Audio { epoch, seq, audio }),
+        Frame::CueAudio { cue_id, seq, audio } => Some(VoiceEvent::CueAudio { cue_id, seq, audio }),
+        Frame::AudioIn(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests;

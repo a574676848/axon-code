@@ -1,0 +1,79 @@
+{
+  "stage": 1,
+  "stage_name": "调度器与所有权",
+  "contract": "PWC-1",
+  "contract_version": "1.4",
+  "limits_sha256": "50b032bb0bab940da18bcaf785f125634115422b8fa55153ccf83e609bb3649a",
+  "commit": "3916aee03",
+  "stage_files_committed": true,
+  "worktree_clean": false,
+  "external_dirty_files": [
+    "crates/axon-desktop/ui/src/components/conversation/Transcript.tsx"
+  ],
+  "worktree_note": "阶段 1 全部文件已提交为 3916aee03；工作区唯一未提交项是他人分支的前端文件 Transcript.tsx，不属于本阶段，未触碰。",
+  "environment": {
+    "os": "windows",
+    "toolchain": "rustc 1.98.0",
+    "runner": "cargo test -p axon-cli --lib"
+  },
+  "gates": {
+    "A-01": {
+      "status": "pass",
+      "evidence": ["crates/axon-cli/src/run_commands/run_tool_write_coordination_tests.rs"],
+      "note": "15 条表驱动，覆盖 glob 通配、花括号、组件边界与未知工具 fail-closed。"
+    },
+    "A-02": {
+      "status": "pass",
+      "evidence": ["crates/axon-cli/src/run_commands/run_tool_write_coordination_tests.rs"],
+      "note": "20 次双向零重叠 + 目录写阻塞子路径读写。"
+    },
+    "A-03": {
+      "status": "pass",
+      "evidence": ["crates/axon-cli/src/run_commands/run_tool_pool.rs"],
+      "note": "32 调用 / 200ms 饱和夹具；池线程固定为 call_width。"
+    },
+    "A-04": {
+      "status": "pass",
+      "evidence": ["crates/axon-cli/src/run_commands/run_tool_loop_tests.rs"],
+      "note": "完成序 C/A/B → 提交序 A/B/C。"
+    },
+    "A-05": {
+      "status": "pass",
+      "evidence": ["crates/axon-cli/src/run_commands/run_tool_loop_tests.rs"],
+      "note": "取消路径 call/result 配对；端到端会话重放由阶段 4 复测。"
+    },
+    "A-10": {
+      "status": "pass",
+      "evidence": ["crates/axon-cli/tests/artifacts/stage1/a10-report.json"],
+      "bench": {
+        "units": 4,
+        "delay_ms": 150,
+        "rounds": 5,
+        "serial_ms": 601,
+        "parallel_ms": 150,
+        "wall_time_reduction": 0.75,
+        "token_overhead": 0.0,
+        "scheduler_assertion": "4 个只读调用切段为单段 [0..4]"
+      }
+    }
+  },
+  "commands": {
+    "fmt": "cargo fmt --all --check → 0",
+    "check": "cargo check --workspace → Finished (exit 0)",
+    "clippy": "cargo clippy -p axon-cli --all-targets -- -D warnings → 通过",
+    "test": "cargo test -p axon-cli --lib → 998 passed, 0 failed, 10 ignored",
+    "architecture": "pwsh -File tools/verify-architecture.ps1 → Architecture verification OK",
+    "diff_check": "git diff --check → clean"
+  },
+  "audits": {
+    "round1": { "p0": 2, "p1": 4, "p2": 8, "result": "fixed" },
+    "round2": { "p0": 0, "p1": 5, "p2": 4, "result": "fixed" },
+    "round3": { "p0": 0, "p1": 2, "p2": 3, "result": "fixed" },
+    "round4": { "p0": 0, "p1": 2, "p2": 3, "result": "fixed" },
+    "round5": { "p0": 0, "p1": 3, "p2": 5, "result": "2 fixed, 1 external" }
+  },
+  "open_items": [
+    "worktree_clean=false 由他人未提交文件 Transcript.tsx 造成，非本阶段范围。"
+  ],
+  "not_run": []
+}

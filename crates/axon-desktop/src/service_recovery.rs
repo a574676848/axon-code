@@ -1,0 +1,611 @@
+//! 网关可用性探测与修复引导。
+//!
+//! 应用启动即探测一次，探测失败进入未连接态并给出可执行的修复动作，
+//! 而不是让侧栏静默空白。
+//!
+//! 探测口径说明：daemon 网关**不提供**免鉴权的 `/v1/health`（那是
+//! `axon serve` 的路由），且它的全部路由都要求凭据。因此这里用两段式探测：
+//! 先做监听连通性判断，再用一次带鉴权的真实接口调用确认协议确实可用。
+//! 只有两段都通过才算已连接，避免把「端口有人监听但协议不通」误报成可用。
+
+use serde::{Deserialize, Serialize};
+use std::net::{TcpStream, ToSocketAddrs};
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::Duration;
+
+use crate::gateway;
+
+/// 运行态存储的单次等锁上限，与 `axon-session` 的 `BUSY_TIMEOUT_MS` 同值。
+///
+/// 网关 HTTP 面只有 4 个 worker：任何一个 handler 在等这把锁都会占着一个 worker，其它请求
+/// （包括探活）排在它后面。桌面端按架构契约不得依赖 `axon-session`，因此这里以镜像常量承载
+/// 该上限，并让探活预算直接由它派生：上限被调大时预算跟着走，不会重新短于上限。
+const RUNTIME_STORE_LOCK_CEILING_MS: u64 = 5_000;
+
+/// 单次连接探测超时。
+///
+/// 预算取运行态存储的等锁上限：短于它，「网关在等锁」就必然被读成「网关无响应」，
+/// 这是这条判定过去最容易冤枉服务的地方。抗瞬时抖动交给下面的连续失败迟滞，
+/// 预算只回答「一次探活有多长」。
+const PROBE_TIMEOUT: Duration = Duration::from_millis(RUNTIME_STORE_LOCK_CEILING_MS);
+/// 协议确认失败后的重试次数。
+const PROBE_RETRY_LIMIT: usize = 1;
+/// 重试前的退避时长。
+const PROBE_RETRY_BACKOFF: Duration = Duration::from_millis(250);
+
+/// 连续多少轮探活失败才判定为「未连接」。
+///
+/// 单轮超时可能只是本机被编译或测试占满：整机满载时客户端与服务端一起被抢占，一轮探活
+/// 超时并不说明服务坏了。连续两轮（每轮都有一次退避重试）才切换界面形态，单轮只记瞬时。
+const UNAVAILABLE_CONFIRM_ROUNDS: u32 = 2;
+
+/// 迟滞状态：按档案隔离。
+///
+/// 两个字段都必须跟着档案走：切到另一个后端之后，上一个档案的失败轮数与
+/// 「连通过一次」都不再成立，混用会让新档案第一轮就被判成未连接（或反过来
+/// 被旧记录撑成已连接）。
+#[derive(Default)]
+struct Hysteresis {
+    /// 这份计数属于哪个档案。
+    profile_id: Option<String>,
+    /// 累计的连续失败轮数；成功一轮即归零。
+    consecutive_failures: u32,
+    /// 该档案是否连通过一次。冷启动从未连通过时不做迟滞，立刻如实报未连接。
+    ever_connected: bool,
+}
+
+/// 迟滞状态的唯一存放处。
+static HYSTERESIS: Mutex<Option<Hysteresis>> = Mutex::new(None);
+
+/// 记录一轮探活结论，给出迟滞后的可用性与累计轮数。
+///
+/// - 成功：清零失败数、标记「连通过」、立即可用。
+/// - 失败：累计失败轮数。**从未连通过**时立刻判不可用（服务确实没起来，不该让界面空等一轮）；
+///   从已连接掉下来的情况要连续失败到 [`UNAVAILABLE_CONFIRM_ROUNDS`] 才切换，单轮只记瞬时。
+/// - 档案变了：计数清零，两个档案之间不互相继承。
+fn record_probe(connected: bool, profile_id: Option<&str>) -> (bool, u32) {
+    let mut guard = HYSTERESIS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let state = guard.get_or_insert_with(Hysteresis::default);
+    if state.profile_id.as_deref() != profile_id {
+        state.profile_id = profile_id.map(str::to_owned);
+        state.consecutive_failures = 0;
+        state.ever_connected = false;
+    }
+    if connected {
+        state.ever_connected = true;
+        state.consecutive_failures = 0;
+        return (true, 0);
+    }
+    state.consecutive_failures += 1;
+    let available = state.ever_connected && state.consecutive_failures < UNAVAILABLE_CONFIRM_ROUNDS;
+    (available, state.consecutive_failures)
+}
+
+/// 网关可用性。
+///
+/// 运行态**只由 HTTP 响应推断**，不起任何子进程：
+/// 客户端问「服务在不在」就应该直接问网关，而不是去唤醒一个 CLI 进程来转述。
+/// 能应答即视为服务在运行；连接被拒即为未运行；状态码再细分凭据与版本问题。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayHealthDto {
+    /// 协议是否可用：监听且鉴权调用成功。
+    pub connected: bool,
+    /// 界面是否应处在已连接形态：单轮失败按瞬时处理，连续多轮失败才切换成未连接。
+    pub available: bool,
+    /// 已连续失败多少轮；成功一轮即归零，界面据此说明「连续 N 轮」。
+    pub consecutive_failures: u32,
+    /// 监听地址是否有人接受连接。
+    pub listening: bool,
+    /// 网关是否有 HTTP 响应（即便状态码不是 2xx）。
+    pub responding: bool,
+    /// 网关监听地址。
+    pub target: String,
+    /// 一句话原因，直接展示给用户。
+    pub reason: String,
+    /// 修复建议，按推荐顺序排列。
+    pub actions: Vec<String>,
+}
+
+/// 判断监听地址是否有人接受连接。
+fn is_listening(target: &str) -> bool {
+    let Ok(mut addresses) = target.to_socket_addrs() else {
+        return false;
+    };
+    addresses.any(|address| TcpStream::connect_timeout(&address, PROBE_TIMEOUT).is_ok())
+}
+
+/// 已安装的 Axon CLI 或稳定 launcher 可执行文件路径。
+///
+/// 服务操作与后台健康快照共用这一处解析：桌面端调用的那个 `axon` 必须与安装树里的
+/// 稳定入口是同一份。安装根只有一处解析（[`crate::connection::relaunch::install_root`]：
+/// 认 `AXON_INSTALL_ROOT`，否则用户主目录下的 `.axon/bin`），`daemon start/install/health`
+/// 全部从这里取，不再各自拼 `LOCALAPPDATA` 与 `~/.cargo/bin` 的第二套候选。
+pub(crate) fn installed_cli() -> Option<PathBuf> {
+    cli_candidates(&crate::connection::relaunch::install_root())
+        .into_iter()
+        .find(|path| path.is_file())
+}
+
+/// 安装根下的候选顺序：稳定 launcher 优先，其次同目录的稳定命令行入口。
+///
+/// launcher 是发行事实里唯一被保证存在的入口；`axon.exe` / `axon.cmd` 是它的同目录
+/// 稳定入口，兼容没有 launcher 的旧安装树。**不再回退 `~/.cargo/bin`**：那条路径上的
+/// `axon` 是源码编译产物、与安装树版本无关，选中它会让 `daemon restart` 拉起另一个版本。
+fn cli_candidates(install_root: &Path) -> Vec<PathBuf> {
+    vec![
+        install_root.join(crate::connection::relaunch::launcher_relative_path()),
+        install_root.join(if cfg!(windows) { "axon.exe" } else { "axon" }),
+        install_root.join("axon.cmd"),
+    ]
+}
+
+/// Tauri IPC 命令：探测网关是否可用。
+///
+/// **全程只做 HTTP 请求，不起任何子进程**：客户端询问服务状态就该直接问网关。
+pub fn gateway_health_sync() -> GatewayHealthDto {
+    // 探活是界面心跳的一部分：这里报到一次，宿主据此判断界面是否还活着。
+    crate::ui_failure::note_ui_alive();
+    let bind = gateway::config_text(gateway::KEY_HTTP_BIND).unwrap_or_default();
+    let displayed = if bind.trim().is_empty() {
+        "未配置".to_string()
+    } else {
+        bind.clone()
+    };
+    let target = gateway::probe_target(&displayed);
+    let listening = !bind.trim().is_empty() && is_listening(&target);
+
+    // 监听通过后必须再验证协议：端口有人监听不代表就是我们期待的网关。
+    // 失败先重试一次：网关排队是瞬时的，一次重试就能把「偶发慢」与「真的不可用」分开。
+    let mut failure: Option<gateway::ProbeFailure> = None;
+    let mut probe = None;
+    if listening {
+        for attempt in 0..=PROBE_RETRY_LIMIT {
+            if attempt > 0 {
+                std::thread::sleep(PROBE_RETRY_BACKOFF);
+            }
+            match gateway::probe_raw_with_timeout("/workspaces", PROBE_TIMEOUT) {
+                Ok(response) => {
+                    probe = Some(response);
+                    break;
+                }
+                Err(error) => failure = Some(error),
+            }
+        }
+    }
+    let responding = probe.is_some();
+    let connected = matches!(&probe, Some((status, _)) if (200..300).contains(status));
+    let active_profile = crate::connection::runtime().active_profile_id();
+    let (available, consecutive_failures) = record_probe(connected, active_profile.as_deref());
+
+    let (reason, actions) = if connected {
+        ("网关已连接，运行态数据可用".to_string(), Vec::new())
+    } else if !listening {
+        (
+            "网关未监听，Axon 后台服务可能未启动".to_string(),
+            vec![
+                "启动服务".to_string(),
+                "打开配置文件".to_string(),
+                "打开日志目录".to_string(),
+                "重试".to_string(),
+            ],
+        )
+    } else if !responding {
+        (
+            probe_failure_reason(failure),
+            vec!["重试".to_string(), "打开配置文件".to_string()],
+        )
+    } else {
+        // 已监听但接口不通：按状态码区分，两类问题的修复动作完全不同。
+        match &probe {
+            Some((401 | 403, _)) => (
+                "网关已监听，但访问凭据缺失或不匹配".to_string(),
+                vec![
+                    "配置网关密钥".to_string(),
+                    "打开配置文件".to_string(),
+                    "重试".to_string(),
+                ],
+            ),
+            Some((404, _)) => (
+                "网关已监听，但当前运行的后台服务不含工作台接口，通常是服务版本过旧".to_string(),
+                vec![
+                    "升级后台服务".to_string(),
+                    "打开配置文件".to_string(),
+                    "重试".to_string(),
+                ],
+            ),
+            Some((status, _)) => (
+                format!("网关已监听，但接口返回状态码 {status}"),
+                vec!["重试".to_string(), "打开配置文件".to_string()],
+            ),
+            None => (
+                "网关已监听，但请求未能完成".to_string(),
+                vec!["重试".to_string(), "打开配置文件".to_string()],
+            ),
+        }
+    };
+
+    GatewayHealthDto {
+        connected,
+        available,
+        consecutive_failures,
+        listening,
+        responding,
+        target,
+        reason,
+        actions,
+    }
+}
+
+/// 探活失败的一句话原因；分类缺失时退回原口径。
+fn probe_failure_reason(failure: Option<gateway::ProbeFailure>) -> String {
+    match failure {
+        Some(gateway::ProbeFailure::Timeout) => format!(
+            "网关已监听，但请求未在 {} 秒预算内完成：本机资源被占满或后台服务正忙于其它请求，都会让应答排队",
+            PROBE_TIMEOUT.as_secs()
+        ),
+        Some(gateway::ProbeFailure::Unreachable) => "网关已监听，但请求未能送达".to_string(),
+        Some(gateway::ProbeFailure::BodyRead) => "网关已响应，但响应体未读取完整".to_string(),
+        None => "网关已监听，但请求未能完成".to_string(),
+    }
+}
+
+/// Tauri IPC 命令：在线程池中探测网关，避免阻塞窗口线程。
+#[tauri::command]
+pub async fn gateway_health() -> GatewayHealthDto {
+    tauri::async_runtime::spawn_blocking(gateway_health_sync)
+        .await
+        .unwrap_or_else(|_| GatewayHealthDto {
+            connected: false,
+            available: false,
+            consecutive_failures: 0,
+            listening: false,
+            responding: false,
+            target: String::new(),
+            reason: "后台探测线程未能完成".to_string(),
+            actions: vec!["重试".to_string()],
+        })
+}
+
+/// 服务操作结果。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceActionDto {
+    /// 操作是否成功。
+    pub success: bool,
+    /// 面向用户的结论。
+    pub message: String,
+    /// 原始命令输出，便于排查。
+    pub output: String,
+}
+
+/// 直接以当前用户身份执行 CLI 子命令。
+fn run_cli(args: &[&str]) -> Result<std::process::Output, String> {
+    let cli = installed_cli().ok_or_else(|| "未找到已安装的 axon 命令".to_string())?;
+    crate::process::run_output(std::process::Command::new(cli).args(args))
+        .map_err(|error| format!("执行 axon {} 失败：{error}", args.join(" ")))
+}
+
+/// 启动后台服务；服务尚未注册时先补齐用户服务定义。
+fn run_start_with_install_fallback() -> Result<std::process::Output, String> {
+    let started = run_cli(&["daemon", "start"]);
+    if started.as_ref().is_ok_and(|output| output.status.success()) {
+        return started;
+    }
+    let installed = run_cli(&["daemon", "install"])?;
+    if !installed.status.success() {
+        return Ok(installed);
+    }
+    run_cli(&["daemon", "start"])
+}
+
+/// 以提权方式执行 CLI 子命令。
+///
+/// 复用系统既有的 `-Verb RunAs` 自举方式：由 PowerShell 弹 UAC，
+/// 用户确认后在新进程中执行，本进程等待其结束。
+/// 用户取消提权时不会假装成功，而是如实返回失败。
+#[cfg(windows)]
+fn run_cli_elevated(args: &[&str]) -> Result<std::process::Output, String> {
+    let cli = installed_cli().ok_or_else(|| "未找到已安装的 axon 命令".to_string())?;
+    let argument_list = args
+        .iter()
+        .map(|item| format!("'{}'", item.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(",");
+    let command = format!(
+        "$p = Start-Process -FilePath '{}' -ArgumentList @({argument_list}) -Verb RunAs -WindowStyle Hidden -Wait -PassThru; exit $p.ExitCode",
+        cli.to_string_lossy().replace('\'', "''")
+    );
+    let encoded: String = {
+        use std::os::windows::ffi::OsStrExt;
+        let wide: Vec<u16> = std::ffi::OsStr::new(&command)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let mut bytes = Vec::with_capacity(wide.len() * 2);
+        for unit in &wide[..wide.len() - 1] {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        base64_encode(&bytes)
+    };
+    crate::process::run_output(std::process::Command::new("pwsh").args([
+        "-NoProfile",
+        "-EncodedCommand",
+        &encoded,
+    ]))
+    .map_err(|error| format!("提权执行失败：{error}"))
+}
+
+/// 非 Windows 平台没有 UAC 提权通道：显式失败，不伪装成功。
+#[cfg(not(windows))]
+fn run_cli_elevated(_args: &[&str]) -> Result<std::process::Output, String> {
+    Err("当前平台不支持 UAC 提权：请使用系统服务管理器安装守护进程".to_string())
+}
+
+/// 标准 base64 编码；避免为一次编码引入依赖。
+#[cfg(windows)]
+fn base64_encode(input: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[((triple >> 18) & 0x3F) as usize] as char);
+        out.push(TABLE[((triple >> 12) & 0x3F) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[((triple >> 6) & 0x3F) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[(triple & 0x3F) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// Tauri IPC 命令：启动、注册或重启 Axon 后台服务。
+///
+/// 先以当前用户身份尝试，失败再走提权路径；两条路径的结果都如实返回，
+/// 用户取消提权时不会谎报已恢复。
+pub fn gateway_start_service_sync(mode: String) -> ServiceActionDto {
+    let step: &[&str] = match mode.as_str() {
+        "install" => &["daemon", "install"],
+        "restart" => &["daemon", "restart"],
+        _ => &["daemon", "start"],
+    };
+
+    let direct = if mode == "start" {
+        run_start_with_install_fallback().map(|output| {
+            (
+                output.status.success(),
+                String::from_utf8_lossy(&output.stdout).to_string(),
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            )
+        })
+    } else {
+        run_cli(step).map(|output| {
+            (
+                output.status.success(),
+                String::from_utf8_lossy(&output.stdout).to_string(),
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            )
+        })
+    };
+
+    match direct {
+        Ok((true, stdout, _)) => ServiceActionDto {
+            success: true,
+            message: "服务操作已完成".to_string(),
+            output: stdout,
+        },
+        _ => {
+            // 非提权执行未成功：改用提权路径再试一次。
+            let elevated = if mode == "start" {
+                run_cli_elevated(&["daemon", "install"]).and_then(|installed| {
+                    if installed.status.success() {
+                        run_cli_elevated(&["daemon", "start"])
+                    } else {
+                        Ok(installed)
+                    }
+                })
+            } else {
+                run_cli_elevated(step)
+            };
+            match elevated {
+                Ok(output) if output.status.success() => ServiceActionDto {
+                    success: true,
+                    message: "已通过提权完成服务操作".to_string(),
+                    output: String::from_utf8_lossy(&output.stdout).to_string(),
+                },
+                Ok(output) => ServiceActionDto {
+                    success: false,
+                    message: "提权操作未成功；若在弹窗中点了取消，服务状态不会改变".to_string(),
+                    output: format!(
+                        "{}{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    ),
+                },
+                Err(error) => ServiceActionDto {
+                    success: false,
+                    message: error,
+                    output: String::new(),
+                },
+            }
+        }
+    }
+}
+
+/// Tauri IPC 命令：在线程池中执行服务启动、安装或重启。
+#[tauri::command]
+pub async fn gateway_start_service(mode: String) -> ServiceActionDto {
+    tauri::async_runtime::spawn_blocking(move || gateway_start_service_sync(mode))
+        .await
+        .unwrap_or_else(|_| ServiceActionDto {
+            success: false,
+            message: "后台服务操作线程未能完成".to_string(),
+            output: String::new(),
+        })
+}
+
+// 被测函数只在 Windows 编译（UAC 提权路径专用）：测试同样按平台收敛，
+// 否则 Linux/macOS 的 `--all-targets` 会因符号被 cfg 掉而报 E0432。
+#[cfg(all(test, windows))]
+mod tests {
+    use super::base64_encode;
+
+    #[test]
+    fn base64_matches_known_vectors_without_padding_regressions() {
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
+    }
+}
+
+/// 安装根解析：`daemon start/install/health` 与切档重启必须指向同一棵安装树。
+///
+/// 这条线一旦回退成「cargo 目录也能当候选」，桌面端就会去拉起一个与安装树版本无关的
+/// 二进制，表现为 `daemon restart` 之后 CLI 与 daemon 版本不一致。
+#[cfg(test)]
+mod install_root_tests {
+    use std::path::{Path, PathBuf};
+
+    use super::cli_candidates;
+
+    #[test]
+    fn candidates_live_under_the_resolved_install_root_only() {
+        let root = Path::new("install-root");
+        let candidates = cli_candidates(root);
+        assert!(!candidates.is_empty());
+        for candidate in &candidates {
+            assert!(
+                candidate.starts_with(root),
+                "候选必须落在安装根之内：{}",
+                candidate.display()
+            );
+        }
+    }
+
+    #[test]
+    fn the_stable_launcher_comes_first_and_no_cargo_directory_is_used() {
+        let candidates = cli_candidates(Path::new("install-root"));
+        let first = candidates.first().expect("至少有一个候选");
+        assert_eq!(
+            first,
+            &PathBuf::from("install-root")
+                .join(crate::connection::relaunch::launcher_relative_path()),
+            "launcher 是发行事实里唯一被保证存在的入口，必须排在最前"
+        );
+        assert!(
+            candidates
+                .iter()
+                .all(|candidate| !candidate.to_string_lossy().contains("cargo")),
+            "不得回退到 cargo 的 bin 目录：那里的 axon 与安装树版本无关"
+        );
+    }
+
+    #[test]
+    fn stable_command_line_entries_follow_the_launcher() {
+        let candidates = cli_candidates(Path::new("install-root"));
+        let names = candidates
+            .iter()
+            .filter_map(|candidate| candidate.file_name())
+            .map(|name| name.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        if cfg!(windows) {
+            assert!(names.iter().any(|name| name == "axon.exe"), "{names:?}");
+        } else {
+            assert!(names.iter().any(|name| name == "axon"), "{names:?}");
+        }
+        assert!(
+            names.iter().any(|name| name == "axon.cmd"),
+            "稳定入口的 .cmd 包装也要保留：Windows 上它是最常被调用的那一个"
+        );
+    }
+}
+
+/// 连续失败迟滞的口径。
+///
+/// 迟滞被人改成单轮，就会让步履正常的服务在满载机器上被报成未连接，因此钉一条断言。
+#[cfg(test)]
+mod probe_hysteresis_tests {
+    use super::{GatewayHealthDto, UNAVAILABLE_CONFIRM_ROUNDS, record_probe};
+
+    #[test]
+    fn single_failed_round_stays_available_but_cold_start_does_not() {
+        // 冷启动从未连通过：服务确实没起来，界面不该空等一轮。
+        let (available, failures) = record_probe(false, Some("local"));
+        assert!(!available, "冷启动首轮失败必须立刻判为不可用");
+        assert_eq!(failures, 1);
+
+        // 连上即清零，界面立刻回到可用。
+        assert_eq!(record_probe(true, Some("local")), (true, 0));
+
+        // 从已连接掉下来：单轮失败只是瞬时，界面保持原状。
+        let (available, failures) = record_probe(false, Some("local"));
+        assert!(available, "单轮失败不得切换成未连接态");
+        assert_eq!(failures, 1);
+
+        // 连续失败达到阈值才切换，且切换时轮数是真实累计值。
+        let mut last = (available, failures);
+        while last.1 < UNAVAILABLE_CONFIRM_ROUNDS {
+            last = record_probe(false, Some("local"));
+        }
+        assert!(!last.0, "连续失败达到阈值必须切换成未连接态");
+        assert_eq!(last.1, UNAVAILABLE_CONFIRM_ROUNDS);
+
+        // 恢复一轮就回到可用，计数归零，不留历史包袱。
+        assert_eq!(record_probe(true, Some("local")), (true, 0));
+    }
+
+    #[test]
+    fn switching_profile_resets_the_hysteresis() {
+        // 档案 A 连通后掉线一轮，界面仍显示可用。
+        assert_eq!(record_probe(true, Some("a")), (true, 0));
+        let (available, failures) = record_probe(false, Some("a"));
+        assert!(available);
+        assert_eq!(failures, 1);
+
+        // 切到档案 B：计数与「连通过」都不继承，B 的首轮失败立刻判不可用。
+        let (available, failures) = record_probe(false, Some("b"));
+        assert!(!available, "切档后不得继承上一个档案的连通过记录");
+        assert_eq!(failures, 1);
+
+        // 切回 A 同样重新开始，不沿用 B 的失败累计。
+        let (available, failures) = record_probe(false, Some("a"));
+        assert!(!available, "再次切档同样从冷启动算起");
+        assert_eq!(failures, 1);
+    }
+
+    /// 界面门控读的是 `available` 与 `consecutive_failures` 两个键：回执里的序列化名一旦变了，
+    /// 前端会静默拿到 undefined 并永远停在已连接形态，因此把这条线钉在回执形状上。
+    #[test]
+    fn health_dto_serializes_the_keys_the_workbench_gates_on() {
+        let dto = GatewayHealthDto {
+            connected: false,
+            available: true,
+            consecutive_failures: 1,
+            listening: true,
+            responding: false,
+            target: "127.0.0.1:3143".to_string(),
+            reason: String::new(),
+            actions: Vec::new(),
+        };
+        let value = serde_json::to_value(&dto).expect("健康回执必须可序列化");
+        assert_eq!(value["connected"], serde_json::json!(false), "{value}");
+        assert_eq!(value["available"], serde_json::json!(true), "{value}");
+        assert_eq!(
+            value["consecutive_failures"],
+            serde_json::json!(1),
+            "{value}"
+        );
+    }
+}

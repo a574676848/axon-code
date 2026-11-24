@@ -1,0 +1,12 @@
+# 行尾策略：只固化「会因行尾而功能失效」的类别，刻意保持最小化。
+#
+# 背景：本仓 `core.autocrlf=true`，而 shell 脚本的 blob 是 LF。Windows 上检出
+# 会得到 CRLF 副本，于是 `#!/usr/bin/env bash` 变成 `...bash\r`、
+# `set -euo pipefail` 变成 `pipefail: invalid option name`，脚本在 Git Bash
+# 与 WSL 下直接崩掉 —— 症状与「脚本本身有 bug」难以区分。
+#
+# ⚠️ 请勿扩展为 `* text=auto`：本仓 .rs 等源文件的行尾本就混杂（CRLF 与 LF 并存），
+# 一旦启用自动规范化，几乎每个文件都会被重写，产生无法评审的巨大 diff，
+# 并与并行工作流必然冲突。需要规范化时请单独开 WP，不要夹带在此处。
+
+*.sh text eol=lf

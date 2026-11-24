@@ -1,0 +1,485 @@
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+/// 当前通用 Cron 持久化模型版本。
+pub const CRON_SCHEMA_VERSION: u32 = 2;
+
+/// Cron 自身主 turn 车道的 destination 前缀。
+///
+/// Cron 任务在自己的车道里执行，该车道没有人类消费者；唤醒目标按会话标识直接指定，
+/// 不再从 destination 推断，这里只用于给任务自己的会话派生命名。
+pub const CRON_SESSION_DESTINATION_PREFIX: &str = "cron-";
+
+/// Cron 完成后要唤醒的目标。
+///
+/// 产品定义：定时任务只在创建时显式声明目标时才产生任何投递；没有目标就只落执行
+/// 事实。目标是主 turn 注入，会真实执行一轮，因此有 provider 成本。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CronWakeTarget {
+    /// 复合车道主 turn 注入：落到指定的既有会话。
+    Session {
+        /// 目标会话标识。
+        ///
+        /// 会话是唯一的一等身份：唤醒不再按「渠道 + 车道标识 + Workspace」三元组派生，
+        /// 那套派生在同一个车道标识出现在多个 Workspace 时会落进另一条会话。
+        session_id: String,
+    },
+}
+
+impl CronWakeTarget {
+    /// 目标会话标识。
+    #[must_use]
+    pub fn session_id(&self) -> &str {
+        match self {
+            Self::Session { session_id } => session_id,
+        }
+    }
+
+    /// 目标是否要求注入一轮主 turn。
+    #[must_use]
+    pub const fn wakes_turn(&self) -> bool {
+        matches!(self, Self::Session { .. })
+    }
+
+    /// 校验目标形态；返回中文原因便于直接呈现给调用方。
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::Session { session_id } => {
+                let session_id = session_id.trim();
+                if session_id.is_empty() {
+                    return Err("会话唤醒目标的会话标识不能为空".to_owned());
+                }
+                // 标识本身只要求非空：具体格式由生成端决定，会话是否存在由投递入口校验。
+                crate::DaemonSessionId::new(session_id.to_owned())
+                    .map_err(|error| format!("会话唤醒目标的会话标识无效：{error}"))?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// 桌面会话表面渠道标识。
+#[must_use]
+pub const fn desktop_session_channel() -> &'static str {
+    "desktop"
+}
+
+/// Cron 任务生命周期状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CronJobStatus {
+    /// 等待调度。
+    Active,
+    /// 已暂停。
+    Paused,
+    /// 已移除。
+    Removed,
+    /// 一次性任务已完成。
+    Completed,
+}
+
+impl CronJobStatus {
+    /// 返回稳定的持久化状态名。
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Paused => "paused",
+            Self::Removed => "removed",
+            Self::Completed => "completed",
+        }
+    }
+}
+
+/// 用户级 Cron 任务。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CronJob {
+    /// 持久化模型版本。
+    pub schema_version: u32,
+    /// 任务标识。
+    pub job_id: String,
+    /// 任务名称。
+    pub name: String,
+    /// 原始计划表达式。
+    pub schedule: String,
+    /// Agent prompt。
+    pub prompt: String,
+    /// 显式加载的 Skill 名称。
+    pub skills: Vec<String>,
+    /// 完成后的唤醒目标；`None` 表示执行完只落运行事实，不产生任何投递。
+    ///
+    /// 该字段没有 serde 默认值：历史版本 1 的载荷必须显式迁移，否则解析失败，
+    /// 避免把「显式声明过远端目标」的任务静默降级成不投递。
+    pub wake: Option<CronWakeTarget>,
+    /// 可选工作目录文本，由外层 adapter 解析。
+    pub workdir: Option<String>,
+    /// 是否跳过 Agent，仅运行脚本。
+    pub no_agent: bool,
+    /// 可选脚本正文。
+    pub script: Option<String>,
+    /// 生命周期状态。
+    pub status: CronJobStatus,
+    /// 乐观并发版本。
+    pub revision: u64,
+    /// 下次运行时间戳。
+    pub next_run_at_ms: Option<u64>,
+    /// 上次运行时间戳。
+    pub last_run_at_ms: Option<u64>,
+    /// 创建时间戳。
+    pub created_at_ms: u64,
+    /// 更新时间戳。
+    pub updated_at_ms: u64,
+}
+
+/// 创建 Cron 任务所需的领域输入。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CronJobInput {
+    /// 任务标识。
+    pub job_id: String,
+    /// 任务名称。
+    pub name: String,
+    /// 计划表达式。
+    pub schedule: String,
+    /// Agent prompt。
+    pub prompt: String,
+    /// 显式 Skill 名称。
+    pub skills: Vec<String>,
+    /// 完成后的唤醒目标。
+    pub wake: Option<CronWakeTarget>,
+    /// 可选工作目录文本。
+    pub workdir: Option<String>,
+    /// 是否只运行脚本。
+    pub no_agent: bool,
+    /// 可选脚本正文。
+    pub script: Option<String>,
+}
+
+/// 更新 Cron 任务所需的领域输入。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CronJobUpdate {
+    /// 新任务名称。
+    pub name: Option<String>,
+    /// 新计划表达式。
+    pub schedule: Option<String>,
+    /// 新 Agent prompt。
+    pub prompt: Option<String>,
+    /// 新 Skill 集合。
+    pub skills: Option<Vec<String>>,
+    /// 新唤醒目标；配合 `replace_wake` 生效。
+    pub wake: Option<CronWakeTarget>,
+    /// 是否替换唤醒目标。
+    pub replace_wake: bool,
+    /// 新工作目录文本。
+    pub workdir: Option<String>,
+    /// 是否替换工作目录。
+    pub replace_workdir: bool,
+    /// 是否只运行脚本。
+    pub no_agent: Option<bool>,
+    /// 新脚本正文。
+    pub script: Option<String>,
+    /// 是否替换脚本正文。
+    pub replace_script: bool,
+}
+
+/// 单次 Cron 执行记录。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CronRunRecord {
+    /// 持久化模型版本。
+    pub schema_version: u32,
+    /// 运行标识。
+    pub run_id: String,
+    /// 任务标识。
+    pub job_id: String,
+    /// 执行时任务版本。
+    pub job_revision: u64,
+    /// 开始时间戳。
+    pub started_at_ms: u64,
+    /// 完成时间戳。
+    pub finished_at_ms: u64,
+    /// 是否成功。
+    pub success: bool,
+    /// 是否执行了 Agent。
+    pub agent_executed: bool,
+    /// 是否已按 `wake` 目标产生一次外部动作（登记投递项或注入一轮主 turn）。
+    pub delivery_enqueued: bool,
+    /// 脚本标准输出是否为空。
+    pub stdout_empty: bool,
+    /// adapter 返回的投递标识。
+    pub dispatch_id: Option<String>,
+    /// 有界错误摘要。
+    pub error_summary: Option<String>,
+}
+
+/// Cron 领域输入违反不可变约束。
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum CronValidationError {
+    /// 任务标识为空。
+    #[error("cron 任务 ID 不能为空")]
+    EmptyJobId,
+    /// 任务名称为空。
+    #[error("cron 任务名称不能为空")]
+    EmptyName,
+    /// 计划表达式为空。
+    #[error("cron schedule 不能为空")]
+    EmptySchedule,
+    /// Agent 任务缺少 prompt。
+    #[error("Agent cron prompt 不能为空")]
+    EmptyPrompt,
+    /// 投递目标为空。
+    #[error("cron 唤醒目标无效：{0}")]
+    InvalidWakeTarget(String),
+    /// no-agent 任务缺少脚本。
+    #[error("no-agent cron 必须提供 script")]
+    MissingScript,
+}
+
+impl CronJob {
+    /// 创建满足领域约束的任务。
+    pub fn new(
+        input: CronJobInput,
+        now_ms: u64,
+        next_run_at_ms: Option<u64>,
+    ) -> Result<Self, CronValidationError> {
+        let job = Self {
+            schema_version: CRON_SCHEMA_VERSION,
+            job_id: input.job_id,
+            name: input.name,
+            schedule: input.schedule,
+            prompt: input.prompt,
+            skills: input.skills,
+            wake: input.wake,
+            workdir: input.workdir,
+            no_agent: input.no_agent,
+            script: input.script,
+            status: CronJobStatus::Active,
+            revision: 1,
+            next_run_at_ms,
+            last_run_at_ms: None,
+            created_at_ms: now_ms,
+            updated_at_ms: now_ms,
+        };
+        job.validate()?;
+        Ok(job)
+    }
+
+    /// 生成更新后的任务版本。
+    pub fn with_update(
+        &self,
+        update: CronJobUpdate,
+        now_ms: u64,
+        next_run_at_ms: Option<u64>,
+    ) -> Result<Self, CronValidationError> {
+        let mut next = self.clone();
+        if let Some(name) = update.name {
+            next.name = name;
+        }
+        if let Some(schedule) = update.schedule {
+            next.schedule = schedule;
+        }
+        if let Some(prompt) = update.prompt {
+            next.prompt = prompt;
+        }
+        if let Some(skills) = update.skills {
+            next.skills = skills;
+        }
+        if update.replace_wake {
+            next.wake = update.wake;
+        }
+        if update.replace_workdir {
+            next.workdir = update.workdir;
+        }
+        if let Some(no_agent) = update.no_agent {
+            next.no_agent = no_agent;
+        }
+        if update.replace_script {
+            next.script = update.script;
+        }
+        next.validate()?;
+        next.revision = next.revision.saturating_add(1);
+        next.updated_at_ms = now_ms;
+        next.next_run_at_ms = next_run_at_ms;
+        Ok(next)
+    }
+
+    /// 生成状态已更新的任务版本。
+    #[must_use]
+    pub fn with_status(&self, status: CronJobStatus, now_ms: u64) -> Self {
+        let mut next = self.clone();
+        next.revision = next.revision.saturating_add(1);
+        next.status = status;
+        next.updated_at_ms = now_ms;
+        next
+    }
+
+    /// 生成一次执行完成后的任务版本。
+    #[must_use]
+    pub fn after_run(&self, now_ms: u64, next_run_at_ms: Option<u64>, one_shot: bool) -> Self {
+        let mut next = self.clone();
+        next.revision = next.revision.saturating_add(1);
+        next.updated_at_ms = now_ms;
+        next.last_run_at_ms = Some(now_ms);
+        next.next_run_at_ms = next_run_at_ms;
+        if one_shot {
+            next.status = CronJobStatus::Completed;
+        }
+        next
+    }
+
+    /// 生成「本次触发点已经错过、没有执行」后的任务版本。
+    ///
+    /// 只推进计划：不写 `last_run_at_ms`，因为任务确实没有跑过；没有下一次触发点的
+    /// 一次性任务直接收口为完成，避免留下一个永远到期的任务。
+    #[must_use]
+    pub fn after_missed_run(&self, now_ms: u64, next_run_at_ms: Option<u64>) -> Self {
+        let mut next = self.clone();
+        next.revision = next.revision.saturating_add(1);
+        next.updated_at_ms = now_ms;
+        next.next_run_at_ms = next_run_at_ms;
+        if next_run_at_ms.is_none() {
+            next.status = CronJobStatus::Completed;
+        }
+        next
+    }
+
+    fn validate(&self) -> Result<(), CronValidationError> {
+        if self.job_id.trim().is_empty() {
+            return Err(CronValidationError::EmptyJobId);
+        }
+        if self.name.trim().is_empty() {
+            return Err(CronValidationError::EmptyName);
+        }
+        if self.schedule.trim().is_empty() {
+            return Err(CronValidationError::EmptySchedule);
+        }
+        if self.prompt.trim().is_empty() && !self.no_agent {
+            return Err(CronValidationError::EmptyPrompt);
+        }
+        if let Some(wake) = self.wake.as_ref() {
+            wake.validate()
+                .map_err(CronValidationError::InvalidWakeTarget)?;
+        }
+        if self.no_agent
+            && self
+                .script
+                .as_deref()
+                .is_none_or(|script| script.trim().is_empty())
+        {
+            return Err(CronValidationError::MissingScript);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cron_job_transition_replaces_wake_target() {
+        let job = CronJob::new(test_input(), 10, Some(20)).expect("合法任务应可创建");
+        assert_eq!(job.wake, Some(wake_target()));
+        let updated = job
+            .with_update(
+                CronJobUpdate {
+                    wake: Some(wake_target()),
+                    replace_wake: true,
+                    ..CronJobUpdate::default()
+                },
+                30,
+                Some(40),
+            )
+            .expect("合法更新应成功");
+        let completed = updated.after_run(40, None, true);
+        let cleared = updated
+            .with_update(
+                CronJobUpdate {
+                    wake: None,
+                    replace_wake: true,
+                    ..CronJobUpdate::default()
+                },
+                50,
+                Some(60),
+            )
+            .expect("清空唤醒目标应成功");
+
+        assert_eq!(updated.wake, Some(wake_target()));
+        assert_eq!(
+            updated.wake.as_ref().map(CronWakeTarget::session_id),
+            Some(TEST_SESSION_ID)
+        );
+        assert!(
+            updated
+                .wake
+                .as_ref()
+                .is_some_and(CronWakeTarget::wakes_turn)
+        );
+        assert_eq!(cleared.wake, None);
+        assert_eq!(completed.status, CronJobStatus::Completed);
+        assert_eq!(completed.last_run_at_ms, Some(40));
+    }
+
+    #[test]
+    fn wake_target_rejects_empty_session() {
+        let empty = CronWakeTarget::Session {
+            session_id: "   ".to_owned(),
+        };
+
+        assert!(empty.validate().is_err());
+        assert!(wake_target().validate().is_ok());
+    }
+
+    #[test]
+    fn missed_trigger_advances_plan_without_recording_a_run() {
+        let job = CronJob::new(test_input(), 10, Some(20)).expect("合法任务应可创建");
+
+        let rescheduled = job.after_missed_run(30, Some(40));
+        let expired = job.after_missed_run(30, None);
+
+        assert_eq!(
+            rescheduled.last_run_at_ms, None,
+            "没有执行就不能记上次执行时间"
+        );
+        assert_eq!(rescheduled.next_run_at_ms, Some(40));
+        assert_eq!(rescheduled.status, CronJobStatus::Active);
+        assert!(rescheduled.revision > job.revision);
+        assert_eq!(expired.next_run_at_ms, None);
+        assert_eq!(expired.status, CronJobStatus::Completed);
+    }
+
+    #[test]
+    fn no_agent_job_requires_script_at_domain_boundary() {
+        let mut input = test_input();
+        input.prompt.clear();
+        input.no_agent = true;
+
+        assert_eq!(
+            CronJob::new(input, 10, Some(20)),
+            Err(CronValidationError::MissingScript)
+        );
+    }
+
+    fn test_input() -> CronJobInput {
+        CronJobInput {
+            job_id: "cron-test".to_owned(),
+            name: "测试".to_owned(),
+            schedule: "interval:1h".to_owned(),
+            prompt: "执行测试".to_owned(),
+            skills: Vec::new(),
+            wake: Some(wake_target()),
+            workdir: None,
+            no_agent: false,
+            script: None,
+        }
+    }
+
+    const TEST_SESSION_ID: &str = "session-01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+    fn wake_target() -> CronWakeTarget {
+        CronWakeTarget::Session {
+            session_id: TEST_SESSION_ID.to_owned(),
+        }
+    }
+}

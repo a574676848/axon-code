@@ -1,0 +1,516 @@
+# Axon Windows PowerShell 源码安装脚本
+# 源码安装与发行版共用 $HOME\.axon\bin 版本树，稳定 PATH 入口就是该 bin 目录。
+#
+# 组件安装的唯一入口是 -Components，取值为 backend、desktop、all：
+#   backend  仅装服务端：编译 axon-cli，版本目录只写 axon.exe，初始化 config.toml，注册并启动 Daemon。
+#   desktop  仅装桌面端：编译 axon-desktop，版本目录只写 axon-desktop.exe，不写 config.toml，不注册也不启动 Daemon。
+#   all      两个都装。缺省即 all，不传 -Components 与传 all 等价，保持既有升级行为。
+# 多值可用逗号分隔（-Components backend,desktop），也可重复传参（-Components backend -Components desktop）。
+# 三种组合都会写入 launcher、current.json、axon.cmd 与用户 PATH，它们是桌面入口的硬前置。
+#
+# 随包 Skill 投放：装服务端组件时把仓库 docs\skills\operate-axon 覆盖到 $HOME\.axon\skills\operate-axon，
+# 与发行包安装脚本同一口径；覆盖时保留安装态 .revisions\（保留目录，不属于随包内容）。
+# 只装桌面端不投放 Skill：运行态读取的是服务端安装出来的那份。
+#
+# 迁移说明：-BinariesOnly 已移除，请改用 -Components backend。
+# 旧参数会跳过 UAC 与 daemon install 却仍执行 daemon start，语义自相矛盾；现在 UAC 与 Daemon 全部由组件集合决定。
+[CmdletBinding()]
+param(
+    # 原登录用户 SID。仅提权重入时由脚本自身回传，用于确认提权账号与登录账号一致。
+    [string]$ExpectedUserSid = "",
+    # 组件集合：backend、desktop、all。可逗号分隔多值，可重复传参；缺省等价 all。
+    # -BinariesOnly 已移除，请改用 -Components backend。
+    [string[]]$Components = @()
+)
+$ErrorActionPreference = "Stop"
+$utf8 = [Text.UTF8Encoding]::new($false)
+$OutputEncoding = $utf8
+[Console]::OutputEncoding = $utf8
+[Console]::InputEncoding = $utf8
+$PSStyle.OutputRendering = "PlainText"
+
+function Stop-Install([string]$reason) {
+    Write-Host "[axon] $reason" -ForegroundColor Red
+    exit 1
+}
+
+# 组件解析只有一份实现：安装脚本与自检脚本共用 scripts/install-components.psm1。
+try {
+    Import-Module (Join-Path $PSScriptRoot "install-components.psm1") -Force -ErrorAction Stop
+} catch {
+    Stop-Install "组件解析模块导入失败：$($_.Exception.Message)"
+}
+try {
+    $plan = Resolve-AxonComponents -Components $Components
+} catch {
+    Stop-Install "组件解析失败：$($_.Exception.Message)"
+}
+$componentText = if ($plan.InstallBackend -and $plan.InstallDesktop) { "服务端与桌面端" } elseif ($plan.InstallBackend) { "仅服务端" } else { "仅桌面端" }
+Write-Host "[axon] 本次安装组件：$componentText" -ForegroundColor Cyan
+
+$installRoot = if ($env:AXON_INSTALL_ROOT) { $env:AXON_INSTALL_ROOT } else { Join-Path $HOME ".axon\bin" }
+$installDir = if ($env:AXON_INSTALL_DIR) { $env:AXON_INSTALL_DIR } else { $installRoot }
+$launcherDir = Join-Path $installRoot "launcher"
+$versionsDir = Join-Path $installRoot "versions"
+$currentFile = Join-Path $installRoot "current.json"
+$launcherPath = Join-Path $launcherDir "axon-launcher.exe"
+$cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $HOME ".cargo" }
+$cargoAxon = Join-Path $cargoHome "bin\axon.exe"
+$cargoDesktop = Join-Path $cargoHome "bin\axon-desktop.exe"
+$stagingRoot = Join-Path ([IO.Path]::GetTempPath()) "axon-source-install-$PID"
+$daemonStopped = $false
+$taskDisabled = $false
+$previousLauncher = Test-Path $launcherPath
+# 网关监听端口由配置解析得出，停机段落里取样后供收尾验收复用。
+$gatewayPort = 0
+
+<#
+ * 版本目录按组件裁剪写入：未选中的组件不会进入版本目录。
+ * 若本机已装另一组件，仅装一侧会让 current.json 指向缺少该二进制的版本目录，
+ * launcher 转发时找不到目标，等于把可用安装改坏。因此这类组合直接拒绝，并提示改用 all。
+ * 判定放在提权之前：注定被拒绝的组合不该再弹一次 UAC。
+#>
+$installedVersionDir = $null
+if (Test-Path $currentFile -PathType Leaf) {
+    try {
+        $installedVersionId = (Get-Content -LiteralPath $currentFile -Raw | ConvertFrom-Json).versionId
+        if ($installedVersionId) { $installedVersionDir = Join-Path $versionsDir $installedVersionId }
+    } catch {
+        $installedVersionDir = $null
+    }
+}
+if ($installedVersionDir) {
+    if (-not $plan.InstallBackend -and (Test-Path (Join-Path $installedVersionDir "axon.exe") -PathType Leaf)) {
+        Stop-Install "本机已安装服务端组件（$installedVersionDir\axon.exe），仅装桌面端会让 current.json 指向缺少服务端二进制的版本目录。请改用 -Components all。"
+    }
+    if (-not $plan.InstallDesktop -and (Test-Path (Join-Path $installedVersionDir "axon-desktop.exe") -PathType Leaf)) {
+        Stop-Install "本机已安装桌面端组件（$installedVersionDir\axon-desktop.exe），仅装服务端会让 current.json 指向缺少桌面端二进制的版本目录。请改用 -Components all。"
+    }
+}
+
+<#
+ * 安装成功后把桌面端拉起来。
+ *
+ * 只在本次装了桌面端组件时执行；已有安装树内的桌面端进程时不重复拉起，避免开出两个窗口。
+ * 入口一律走稳定 launcher 的 desktop 转发：它会脱离控制台并丢弃标准输入输出，因此既不占用
+ * 安装会话的输出，也不会因为控制台被选中写满而把安装脚本卡住，后续升级换目录也不影响入口。
+ * 提权重入的实例不调用本函数，改由外层未提权进程拉起，界面因此不会继承管理员令牌。
+#>
+function Start-AxonDesktop {
+    if (-not $plan.InstallDesktop) { return }
+    <#
+     * 拉起失败只告警，绝不改写已经完成的安装：本函数在成功路径末尾被调用，
+     * 一旦异常逃逸到外层 catch，会把「装好了」判成「装失败了」。
+    #>
+    try {
+        $running = @(Get-Process axon-desktop -ErrorAction SilentlyContinue | Where-Object {
+                $_.Path -and $_.Path.StartsWith($installRoot + '\', [StringComparison]::OrdinalIgnoreCase)
+            })
+        if ($running.Count -gt 0) {
+            Write-Host "[axon] 桌面端已在运行（PID $($running[0].Id)），不重复启动。" -ForegroundColor Cyan
+            return
+        }
+        Start-Process -FilePath $launcherPath -ArgumentList "desktop" -WorkingDirectory $installRoot | Out-Null
+        $launchDeadline = [DateTime]::UtcNow.AddSeconds(10)
+        while ($true) {
+            Start-Sleep -Milliseconds 200
+            $started = @(Get-Process axon-desktop -ErrorAction SilentlyContinue | Where-Object {
+                    $_.Path -and $_.Path.StartsWith($installRoot + '\', [StringComparison]::OrdinalIgnoreCase)
+                })
+            if ($started.Count -gt 0) {
+                Write-Host "[axon] 桌面端已启动（PID $($started[0].Id)）。" -ForegroundColor Cyan
+                return
+            }
+            if ([DateTime]::UtcNow -gt $launchDeadline) {
+                Write-Host "[axon] 桌面端未能在 10 秒内启动，请手动运行 axon desktop 排查原因。" -ForegroundColor Yellow
+                return
+            }
+        }
+    } catch {
+        Write-Host "[axon] 拉起桌面端失败：$($_.Exception.Message)。请手动运行 axon desktop。" -ForegroundColor Yellow
+    }
+}
+
+<#
+ * 投放随包 Skill：仓库里的 docs\skills\operate-axon 就是安装态 $HOME\.axon\skills\operate-axon 的内容。
+ *
+ * 只改仓库副本运行时读不到：运行态读的是安装态那一份，因此源码安装必须自己投放。
+ * 覆盖走「暂存目录 + 目录替换」而不是直接往目标里拷：半拷贝崩溃会留下缺文件的 Skill。
+ * 安装态 `.revisions\` 是保留目录（加载与删除路径都禁止把它当成技能名），可能来自历史版本
+ * 或未来扩展；它不属于随包内容，替换前先移出、替换后原样放回，既不删除也不回填。
+#>
+function Install-BundledSkill([string]$RepoRoot) {
+    $skillName = "operate-axon"
+    $source = Join-Path $RepoRoot "docs\skills\$skillName"
+    if (-not (Test-Path (Join-Path $source "SKILL.md") -PathType Leaf)) {
+        Write-Host "[axon] 仓库缺少 docs\skills\$skillName，跳过随包 Skill 投放。" -ForegroundColor Yellow
+        return
+    }
+    $skillsDir = Join-Path $HOME ".axon\skills"
+    $target = Join-Path $skillsDir $skillName
+    $revisions = Join-Path $target ".revisions"
+    $savedRevisions = $null
+    New-Item -ItemType Directory -Force $skillsDir | Out-Null
+    if (Test-Path -LiteralPath $revisions -PathType Container) {
+        $savedRevisions = Join-Path $skillsDir ".$skillName.revisions.$PID"
+        Remove-Item -LiteralPath $savedRevisions -Recurse -Force -ErrorAction SilentlyContinue
+        Move-Item -LiteralPath $revisions -Destination $savedRevisions -Force
+    }
+    $staging = Join-Path $skillsDir ".$skillName.tmp.$PID"
+    Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+    Copy-Item -LiteralPath $source -Destination $staging -Recurse -Force
+    Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
+    Move-Item -LiteralPath $staging -Destination $target -Force
+    if ($savedRevisions) { Move-Item -LiteralPath $savedRevisions -Destination $revisions -Force }
+    Write-Host "[axon] 随包 Skill 已投放到 $target" -ForegroundColor Green
+}
+
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+if ($ExpectedUserSid -and $identity.User.Value -ne $ExpectedUserSid) { throw "提权账号与原登录用户不同，已停止安装。" }
+$principal = [Security.Principal.WindowsPrincipal]::new($identity)
+# UAC 提权只服务服务端安装：Daemon 注册要写计划任务；仅装桌面端不碰系统服务，直接以当前用户身份继续。
+if ($plan.InstallBackend -and -not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    $logPath = Join-Path ([IO.Path]::GetTempPath()) "axon-source-install-$PID.log"
+    $scriptPath = $PSCommandPath.Replace("'", "''")
+    $componentArgs = [System.Collections.Generic.List[string]]::new()
+    if ($plan.InstallBackend) { $componentArgs.Add("'backend'") }
+    if ($plan.InstallDesktop) { $componentArgs.Add("'desktop'") }
+    $componentsArg = $componentArgs -join ','
+    $bootstrap = "Start-Transcript -LiteralPath '$($logPath.Replace("'", "''"))' -Force; try { & '$scriptPath' -ExpectedUserSid '$($identity.User.Value)' -Components $componentsArg; if (-not `$?) { exit 1 } } catch { Write-Output `$_; exit 1 } finally { Stop-Transcript }"
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($bootstrap))
+    Write-Host "[axon] 需要 UAC 授权，安装日志：$logPath" -ForegroundColor Cyan
+    $process = Start-Process -FilePath (Join-Path $PSHOME "pwsh.exe") -ArgumentList @("-NoProfile", "-EncodedCommand", $encoded) -Verb RunAs -WindowStyle Hidden -Wait -PassThru
+    if (Test-Path $logPath) { Get-Content $logPath }
+    if ($process.ExitCode -ne 0) { throw "源码安装失败，退出码：$($process.ExitCode)" }
+    # 提权只服务服务端安装：桌面端由本进程（原登录用户、未提权）拉起，界面不继承管理员令牌。
+    Start-AxonDesktop
+    return
+}
+$root = Split-Path -Parent $PSScriptRoot
+$cargo = Get-Command cargo -CommandType Application -ErrorAction SilentlyContinue
+if ($null -eq $cargo) {
+    $cargoPath = Join-Path $HOME ".cargo\bin\cargo.exe"
+    if (Test-Path $cargoPath) { $cargo = [pscustomobject]@{ Source = $cargoPath } }
+}
+if ($null -eq $cargo) { throw "未找到 cargo，请先安装 Rust 工具链。" }
+
+# Daemon 运行态根目录约定与 config.toml 同源，同样落在 $HOME\.axon 下。
+$axonHome = Join-Path $HOME ".axon"
+$daemonPidPath = Join-Path $axonHome "data\daemon.pid"
+
+<#
+ * 从 config.toml 的 [remote.gateway] http_bind 解析网关监听端口。
+ *
+ * 网关可用性是「服务是否真的能服务」的唯一硬事实：daemon status 反映的是进程存活，
+ * 进程在收尾期仍会存活，因此不能拿它当停止或就绪的判据。端口声明在配置里，不硬编码。
+#>
+function Get-GatewayListenPort([string]$configPath) {
+    if (-not (Test-Path $configPath -PathType Leaf)) { return 0 }
+    $inGatewaySection = $false
+    foreach ($line in [IO.File]::ReadLines($configPath)) {
+        $trimmed = $line.Trim()
+        if ($trimmed -match '^\[(.+?)\]$') {
+            $inGatewaySection = ($Matches[1].Trim() -eq 'remote.gateway')
+            continue
+        }
+        if (-not $inGatewaySection) { continue }
+        if ($trimmed -match '^http_bind\s*=\s*"([^"]+)"') {
+            $bind = $Matches[1].Trim()
+            $separator = $bind.LastIndexOf(':')
+            if ($separator -ge 0) {
+                $port = 0
+                if ([int]::TryParse($bind.Substring($separator + 1), [ref]$port) -and $port -gt 0 -and $port -lt 65536) { return $port }
+            }
+        }
+    }
+    return 0
+}
+
+function Get-DaemonProcessId([string]$pidPath) {
+    if (-not (Test-Path $pidPath -PathType Leaf)) { return 0 }
+    $value = 0
+    $raw = (Get-Content -LiteralPath $pidPath -Raw -ErrorAction SilentlyContinue)
+    if ($raw -and [int]::TryParse($raw.Trim(), [ref]$value)) { return $value }
+    return 0
+}
+
+# PID 可能被回收给无关进程，因此存活判定必须同时核对映像名。
+function Test-AxonProcess([int]$processId) {
+    if ($processId -le 0) { return $false }
+    $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
+    return $null -ne $process -and $process.ProcessName -ieq 'axon'
+}
+
+function Test-GatewayListening([int]$port) {
+    if ($port -le 0) { return $false }
+    return $null -ne (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+}
+
+<#
+ * 停止判据是「Daemon 进程真正退出」且「网关端口不再监听」。
+ *
+ * 只看 daemon status 会误判：daemon.pid 可能在进程退出前就被清理，status 因此报
+ * running=false，而旧进程仍占着计划任务实例。此时紧接着的 daemon start 会被
+ * AxonDaemon 的 IgnoreNew 策略静默丢弃，形成「安装成功但服务没运行」的空窗。
+#>
+function Wait-DaemonStopped([int]$daemonPid, [int]$gatewayPort) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(60)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if (-not (Test-AxonProcess $daemonPid) -and -not (Test-GatewayListening $gatewayPort)) { return $true }
+        Start-Sleep -Milliseconds 200
+    }
+    return $false
+}
+
+# 启动判据是「网关端口真的在监听」，而不是 daemon status 的进程存活字段。
+function Wait-GatewayListening([int]$port, [int]$timeoutSeconds) {
+    if ($port -le 0) { return $true }
+    $deadline = [DateTime]::UtcNow.AddSeconds($timeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if (Test-GatewayListening $port) { return $true }
+        Start-Sleep -Milliseconds 250
+    }
+    return $false
+}
+
+function Set-AxonPath([string]$directory) {
+    $directory = $directory.TrimEnd('\')
+    $launcher = (Join-Path $installRoot "launcher").TrimEnd('\')
+    $entries = [System.Collections.Generic.List[string]]::new()
+    foreach ($entry in (([Environment]::GetEnvironmentVariable("PATH", "User") ?? "") -split ";")) {
+        $item = $entry.TrimEnd('\')
+        if ($item -and $item -ine $launcher -and -not ($entries | Where-Object { $_ -ieq $item })) { $entries.Add($item) }
+    }
+    $null = $entries.RemoveAll([Predicate[string]]{ param($item) $item -ieq $directory })
+    $entries.Insert(0, $directory)
+    [Environment]::SetEnvironmentVariable("PATH", ($entries -join ";"), "User")
+    $env:Path = "$directory;$(($env:Path -split ';' | Where-Object { $_ -and $_.TrimEnd('\') -ine $launcher -and $_.TrimEnd('\') -ine $directory } | Select-Object -Unique) -join ';')"
+}
+
+try {
+    Remove-Item $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force $stagingRoot | Out-Null
+    <#
+     * 准备阶段一律不动运行态。
+     *
+     * 编译要好几分钟，期间停掉 Daemon 等于把后台任务、定时调度与网关连接一起掐断；
+     * 真正需要停机的只有「替换版本目录」那几步。凡是编译、自检、暂存目录拷贝这类
+     * 工作，全部排在停机之前完成。
+    #>
+    $releaseBin = Join-Path $root "target\release"
+    # 唯一必须提前停的是本仓库调试进程：cargo 要重写 target\release 里的同一批映像，按组件裁剪到本次要编的二进制。
+    $rebuildNames = [System.Collections.Generic.List[string]]::new()
+    if ($plan.InstallBackend) { $rebuildNames.Add("axon") }
+    if ($plan.InstallDesktop) { $rebuildNames.Add("axon-desktop") }
+    $rebuildNames.Add("axon-launcher")
+    Get-Process -Name $rebuildNames -ErrorAction SilentlyContinue | Where-Object {
+        $_.Path -and ([IO.Path]::GetDirectoryName($_.Path) -ieq $releaseBin)
+    } | Stop-Process -Force
+    if ($plan.InstallDesktop) {
+        # 前置环境变量用于「前端产物已就绪、只需重装二进制」的运维场景：
+        # 提权子进程里重复执行 npm ci 会清空 node_modules 再重装，失败即中断整次安装。
+        if ($env:AXON_SKIP_WEB_BUILD -eq "1") {
+            if (-not (Test-Path (Join-Path $root "crates\axon-desktop\ui\dist\index.html"))) {
+                throw "AXON_SKIP_WEB_BUILD=1 但 ui\dist 不存在，无法沿用它"
+            }
+            Write-Host "[axon] 跳过前端构建（AXON_SKIP_WEB_BUILD=1），沿用现有 ui\dist。" -ForegroundColor Yellow
+        }
+        else {
+            Push-Location (Join-Path $root "crates\axon-desktop\ui")
+            try {
+                & npm ci
+                if ($LASTEXITCODE -ne 0) { throw "前端依赖安装失败" }
+                & npm run build
+                if ($LASTEXITCODE -ne 0) { throw "前端构建失败" }
+            } finally { Pop-Location }
+        }
+    }
+    $packages = [System.Collections.Generic.List[string]]::new()
+    if ($plan.InstallBackend) { $packages.Add("axon-cli") }
+    if ($plan.InstallDesktop) { $packages.Add("axon-desktop") }
+    $packages.Add("axon-launcher")
+    $buildArgs = [System.Collections.Generic.List[string]]::new()
+    foreach ($argument in @("build", "--release", "--locked")) { $buildArgs.Add($argument) }
+    foreach ($package in $packages) { $buildArgs.Add("-p"); $buildArgs.Add($package) }
+    Write-Host "[axon] 正在编译 $($packages -join '、')。" -ForegroundColor Cyan
+    Push-Location $root
+    try {
+        & $cargo.Source @buildArgs
+        if ($LASTEXITCODE -ne 0) { throw "cargo build 失败，退出码：$LASTEXITCODE" }
+    } finally { Pop-Location }
+    $cli = Join-Path $releaseBin "axon.exe"
+    $desktop = Join-Path $releaseBin "axon-desktop.exe"
+    $builtLauncher = Join-Path $releaseBin "axon-launcher.exe"
+    $builtBinaries = [System.Collections.Generic.List[string]]::new()
+    $builtBinaries.Add($builtLauncher)
+    if ($plan.InstallBackend) { $builtBinaries.Add($cli) }
+    if ($plan.InstallDesktop) { $builtBinaries.Add($desktop) }
+    foreach ($path in $builtBinaries) { if (-not (Test-Path $path)) { throw "编译完成但缺少二进制：$path" } }
+    if ($plan.InstallBackend) {
+        & $cli --version *> $null
+        if ($LASTEXITCODE -ne 0) { throw "CLI 自检失败" }
+        $version = (& $cli --version).ToString().Trim().Split()[-1]
+    } else {
+        <#
+         * 仅装桌面端时不编译 CLI，版本号取同一份 Cargo 清单里 axon-cli 的版本，
+         * 与 axon --version 的输出同源，避免版本目录命名与 CLI 版本分叉。
+        #>
+        $metadataJson = (& $cargo.Source metadata --no-deps --format-version 1 | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0) { throw "cargo metadata 失败，退出码：$LASTEXITCODE" }
+        $cliPackage = ($metadataJson | ConvertFrom-Json).packages | Where-Object { $_.name -eq "axon-cli" } | Select-Object -First 1
+        if (-not $cliPackage) { throw "cargo metadata 中缺少 axon-cli 包，无法确定版本号" }
+        $version = [string]$cliPackage.version
+    }
+    if ($plan.InstallDesktop) {
+        <#
+         * 桌面端是 GUI 子系统二进制：PowerShell 用 & 调用不会等待进程结束，
+         * $LASTEXITCODE 保留的是上一条命令的值，自检会空转、永远判不出失败。
+         * 这里必须 Start-Process -Wait 读 ExitCode，并把单行 JSON 留在暂存目录里备查。
+        #>
+        $selfCheckOut = Join-Path $stagingRoot "desktop-self-check.json"
+        $selfCheckErr = Join-Path $stagingRoot "desktop-self-check.err"
+        $selfCheckArgs = @{
+            FilePath               = $desktop
+            ArgumentList           = "--self-check"
+            Wait                   = $true
+            PassThru               = $true
+            NoNewWindow            = $true
+            RedirectStandardOutput = $selfCheckOut
+            RedirectStandardError  = $selfCheckErr
+        }
+        $selfCheck = Start-Process @selfCheckArgs
+        if ($selfCheck.ExitCode -ne 0) {
+            $detail = Get-Content -LiteralPath $selfCheckOut -Raw -ErrorAction SilentlyContinue
+            if (-not $detail) { $detail = Get-Content -LiteralPath $selfCheckErr -Raw -ErrorAction SilentlyContinue }
+            $detail = ("$detail" -replace '\s+', ' ').Trim()
+            throw "桌面端自检失败（退出码 $($selfCheck.ExitCode)）：$detail"
+        }
+    }
+    $releaseId = $version
+    $releaseDir = Join-Path $versionsDir $releaseId
+    $stagedRelease = Join-Path $versionsDir ".staging.$PID"
+    # 上一次中断留下的暂存目录先清掉；它不在任何版本的生效路径上，删它不影响运行态。
+    Get-ChildItem -LiteralPath $versionsDir -Directory -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name.StartsWith('.staging.') } |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force $stagedRelease, $launcherDir, $installDir | Out-Null
+    # 暂存目录只放本次选中的组件，未选中的组件不会进入版本目录。
+    if ($plan.InstallBackend) { Copy-Item $cli (Join-Path $stagedRelease "axon.exe") }
+    if ($plan.InstallDesktop) { Copy-Item $desktop (Join-Path $stagedRelease "axon-desktop.exe") }
+
+    <#
+     * 停机窗口从这里开始，到版本目录替换完成为止。
+     *
+     * 顺序固定：先停 Daemon（它可能正在领取任务与写运行态），再停桌面端（它持有
+     * versions 目录内的映像文件锁）。两者都停了，下面的删除与替换才不会被占用卡住。
+     * 仅装桌面端时 Daemon 不参与本次替换，既不停止也不重启。
+    #>
+    if ($plan.InstallBackend -and $previousLauncher) {
+        & schtasks.exe /change /tn AxonDaemon /disable 2>$null | Out-Null
+        $taskDisabled = $true
+        # PID 与端口都要在 stop 之前取样：daemon.pid 会在进程退出前被清理，网关端口也会先关，
+        # 事后再读只能读到「看起来已经停了」的假象。
+        $gatewayPort = Get-GatewayListenPort (Join-Path $axonHome "config.toml")
+        $stoppingPid = Get-DaemonProcessId $daemonPidPath
+        & $launcherPath daemon stop 2>$null | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "Daemon 停止失败，退出码：$LASTEXITCODE" }
+        if (-not (Wait-DaemonStopped $stoppingPid $gatewayPort)) { throw "Daemon 未能在 60 秒内停止" }
+        $daemonStopped = $true
+    }
+    Get-Process axon-desktop -ErrorAction SilentlyContinue | Where-Object {
+        $_.Path -and $_.Path.StartsWith($installRoot + '\', [StringComparison]::OrdinalIgnoreCase)
+    } | Stop-Process -Force
+
+    $swapDeadline = [DateTime]::UtcNow.AddSeconds(30)
+    while ($true) {
+        $swapBlocked = $false
+        try {
+            if (Test-Path $releaseDir) { Remove-Item $releaseDir -Recurse -Force -ErrorAction Stop }
+        } catch {
+            $swapBlocked = $true
+            Write-Host "[axon] 旧版本目录仍被占用，正在停止占用进程后重试：$($_.Exception.Message)" -ForegroundColor Yellow
+        }
+        if (-not $swapBlocked) { break }
+        if ([DateTime]::UtcNow -gt $swapDeadline) { throw "旧版本目录 30 秒内仍被占用，无法完成替换：$releaseDir" }
+        Get-Process axon-desktop -ErrorAction SilentlyContinue | Where-Object {
+            $_.Path -and $_.Path.StartsWith($installRoot + '\', [StringComparison]::OrdinalIgnoreCase)
+        } | Stop-Process -Force
+        Start-Sleep -Milliseconds 500
+    }
+    Move-Item $stagedRelease $releaseDir
+    <#
+     * 旧版本目录属于残留，不参与本次生效路径：新版已经落位，删不掉只是多占一份磁盘。
+     * Windows 在 Stop-Process 之后仍可能短暂持有映像句柄，这里按名再停一次并有限重试，
+     * 仍失败只告警不中止，避免一次顺手的清理把已经装好的版本判成安装失败。
+    #>
+    Get-ChildItem -LiteralPath $versionsDir -Directory -ErrorAction SilentlyContinue |
+        Where-Object { -not $_.Name.StartsWith('.') -and $_.Name -ne $releaseId } |
+        ForEach-Object {
+            $stale = $_
+            $removed = $false
+            for ($attempt = 0; $attempt -lt 5 -and -not $removed; $attempt++) {
+                try {
+                    Remove-Item $stale.FullName -Recurse -Force -ErrorAction Stop
+                    $removed = $true
+                } catch {
+                    Get-Process axon-desktop -ErrorAction SilentlyContinue | Stop-Process -Force
+                    Start-Sleep -Milliseconds 400
+                }
+            }
+            if (-not $removed) {
+                Write-Host "[axon] 旧版本目录仍被占用，已跳过清理：$($stale.Name)" -ForegroundColor Yellow
+            }
+        }
+    Copy-Item $builtLauncher "$launcherPath.tmp.$PID" -Force
+    Move-Item "$launcherPath.tmp.$PID" $launcherPath -Force
+    $currentTmp = Join-Path $installRoot ".current.$PID.json"
+    [IO.File]::WriteAllText($currentTmp, (@{ versionId = $releaseId } | ConvertTo-Json -Compress) + "`n", $utf8)
+    Move-Item $currentTmp $currentFile -Force
+    # 只清理本次安装组件在 cargo bin 目录里的同名残留，避免 PATH 遮蔽；未选中的组件不动。
+    if ($plan.InstallBackend) { Remove-Item $cargoAxon -Force -ErrorAction SilentlyContinue }
+    if ($plan.InstallDesktop) { Remove-Item $cargoDesktop -Force -ErrorAction SilentlyContinue }
+    Set-AxonPath $installDir
+    [IO.File]::WriteAllText((Join-Path $installDir "axon.cmd"), "@echo off`r`n`"$launcherPath`" %*`r`n", [Text.UTF8Encoding]::new($false))
+
+    <#
+     * 停机窗口到此结束：新版本已经就位，马上把后台服务带回来。
+     * 配置初始化、Daemon 注册与启动都属于服务端组件的职责，仅装桌面端时整段跳过：
+     * 不写 config.toml、不注册计划任务、不启动 Daemon。
+    #>
+    if ($plan.InstallBackend) {
+        # 先投放 Skill 再拉起 Daemon：运行态第一次读技能清单时就能看到随包手册。
+        Install-BundledSkill $root
+        $configPath = Join-Path $HOME ".axon\config.toml"
+        if (-not (Test-Path $configPath -PathType Leaf) -or (Get-Item $configPath).Length -eq 0) {
+            & $launcherPath setup --provider-name openai --model gpt-4o --non-interactive --no-validate | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Axon 默认配置初始化失败，退出码：$LASTEXITCODE" }
+        }
+        & $launcherPath daemon install | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "Daemon 安装失败，退出码：$LASTEXITCODE" }
+        & $launcherPath daemon start | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "Daemon 启动失败，退出码：$LASTEXITCODE" }
+        $status = & $launcherPath daemon status | Out-String | ConvertFrom-Json
+        if (-not $status.running) { throw "Daemon 未正常运行，请检查已注册服务和 data/logs 日志。" }
+        <#
+         * 进程存活不等于服务可用：daemon start 走计划任务，任务实例尚未结束时会被
+         * IgnoreNew 策略静默丢弃，而 status 仍可能因残留 PID 报 running=true。
+         * 只有网关端口真正在监听，桌面端才连得上，所以它才是安装成功的最终判据。
+        #>
+        if ($gatewayPort -le 0) { $gatewayPort = Get-GatewayListenPort $configPath }
+        if (-not (Wait-GatewayListening $gatewayPort 30)) {
+            throw "Daemon 进程已启动，但网关端口 $gatewayPort 未在 30 秒内监听，桌面端会连不上。请检查 data\logs 日志后执行 axon daemon restart。"
+        }
+    } else {
+        Write-Host "[axon] 仅安装桌面端：未写入 config.toml，未注册也未启动 Daemon。" -ForegroundColor Cyan
+    }
+    if (-not $plan.InstallDesktop) {
+        Write-Host "[axon] 仅安装服务端：未铺放桌面端二进制（本脚本不创建桌面快捷方式）。" -ForegroundColor Cyan
+    }
+    Write-Host "[axon] 源码安装完成（$componentText）：$releaseDir" -ForegroundColor Green
+    # 提权重入的实例到此为止：桌面端由外层未提权进程拉起，避免界面继承管理员令牌。
+    if (-not $ExpectedUserSid) { Start-AxonDesktop }
+} catch {
+    if ($taskDisabled) { & schtasks.exe /change /tn AxonDaemon /enable 2>$null | Out-Null }
+    if ($daemonStopped -and (Test-Path $launcherPath)) { & $launcherPath daemon start 2>$null | Out-Host }
+    throw
+} finally { Remove-Item $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue }

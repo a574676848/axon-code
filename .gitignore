@@ -1,0 +1,21 @@
+/target/
+dist/
+**/*.rs.bk
+.env
+.env.*
+!.env.example
+.gitnexus/
+origin/
+data/runtime/
+.axon/
+.claude/
+CLAUDE.md
+.zed/
+__pycache__/
+
+# 运行态日志（调试与诊断）不得入库
+*.log
+
+# 本地临时排查脚本与提取产物（不随仓库分发）
+.tmp-*
+

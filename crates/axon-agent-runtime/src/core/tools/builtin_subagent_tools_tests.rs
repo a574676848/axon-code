@@ -1,0 +1,561 @@
+use super::*;
+use crate::TOOL_INTENT_FIELD;
+use crate::builtin_subagent_tool_spec::{
+    SUBAGENT_TOOL_RUN_IN_BACKGROUND_FIELD, delegate_to_fast_tool_definition,
+};
+use crate::builtin_subagent_tools::SUBAGENT_TOOL_REASON_CHILD_SPAWN_BLOCKED;
+use crate::builtin_subagent_tools::SUBAGENT_TOOL_REASON_SELF_TARGET_REJECTED;
+use crate::builtin_subagent_tools::SUBAGENT_TOOL_TARGET_FIELD;
+use crate::builtin_subagent_tools::SUBAGENT_TOOL_TASK_FIELD;
+use crate::builtin_subagent_tools::SubagentToolExecutionStatus;
+use axon_domain::AxonError;
+
+fn call(name: &str, arguments: serde_json::Value) -> ProviderToolCall {
+    ProviderToolCall::new("call-1", name, serde_json::to_string(&arguments).unwrap())
+}
+
+fn input(name: &str, arguments: serde_json::Value) -> SubagentToolExecutionInput {
+    SubagentToolExecutionInput {
+        tool_call: call(name, arguments),
+        current_path: AgentPath::root(),
+        remote_requested: false,
+        completed_at_ms: 1,
+    }
+}
+
+#[test]
+fn runtime_spawns_and_lists_agent() {
+    let mut control = AgentControlRuntime::default();
+    let runtime = SubagentToolRuntime;
+    let spawn = runtime
+        .execute(
+            &mut control,
+            input(
+                SPAWN_AGENT_TOOL_NAME,
+                serde_json::json!({
+                    SUBAGENT_TOOL_TASK_NAME_FIELD: "review",
+                    SUBAGENT_TOOL_TASK_FIELD: "检查安全边界",
+                    SUBAGENT_TOOL_FORK_TURNS_FIELD: "all",
+                }),
+            ),
+        )
+        .unwrap();
+
+    assert_eq!(spawn.status, SubagentToolExecutionStatus::Completed);
+    assert_eq!(spawn.payload["taskName"], "/root/review");
+    let task_path = AgentPath::parse(spawn.payload["taskName"].as_str().unwrap()).unwrap();
+    control.lease_execution(&task_path).unwrap();
+
+    let listed = runtime
+        .execute(
+            &mut control,
+            input(LIST_AGENTS_TOOL_NAME, serde_json::json!({})),
+        )
+        .unwrap();
+    assert_eq!(listed.payload["agents"].as_array().unwrap().len(), 2);
+    // 目标态工具面是固定的四个协作工具；被移除的三个工具不得再注册。
+    // 名称按片段拼接：本轮裁剪扫描要求 crates/ 对这三者零命中，
+    // 而反例断言又必须覆盖它们的确切名字。
+    let removed = [
+        concat!("wait", "_agent"),
+        concat!("interrupt", "_agent"),
+        concat!("close", "_agent"),
+    ];
+    let registered = subagent_tool_definitions()
+        .into_iter()
+        .map(|tool| tool.name)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        registered,
+        [
+            "spawn_agent",
+            "send_message",
+            "list_agents",
+            "delegate_to_fast"
+        ],
+        "子代理工具面必须收敛到四个协作工具"
+    );
+    assert!(
+        removed
+            .iter()
+            .all(|name| !registered.iter().any(|tool| tool == name)),
+        "被移除的工具不得再出现在执行注册表"
+    );
+}
+
+#[test]
+fn spawn_agent_accepts_kebab_task_name_and_fast_delegate_uses_same_spawn_payload() {
+    let mut control = AgentControlRuntime::default();
+    let runtime = SubagentToolRuntime;
+
+    let spawn = runtime
+        .execute(
+            &mut control,
+            input(
+                SPAWN_AGENT_TOOL_NAME,
+                serde_json::json!({
+                    SUBAGENT_TOOL_TASK_NAME_FIELD: "review-auth",
+                    SUBAGENT_TOOL_TASK_FIELD: "检查 auth 边界",
+                }),
+            ),
+        )
+        .unwrap();
+
+    assert_eq!(spawn.payload["taskName"], "/root/review-auth");
+    assert_eq!(spawn.payload["forkTurns"], "none");
+    assert_eq!(spawn.payload["role"], serde_json::Value::Null);
+
+    let delegated = runtime
+        .execute(
+            &mut control,
+            input(
+                DELEGATE_TO_FAST_TOOL_NAME,
+                serde_json::json!({ SUBAGENT_TOOL_TASK_FIELD: "快速扫描 crates 目录" }),
+            ),
+        )
+        .unwrap();
+
+    assert_eq!(delegated.payload["taskName"], "/root/delegate_fast_1");
+    assert_eq!(delegated.payload["forkTurns"], "none");
+    assert_eq!(delegated.payload["role"], "fast");
+    assert_eq!(delegated.payload["delegateKind"], "fast");
+    assert_eq!(delegated.payload["modelPolicy"], "fast_model");
+    assert_eq!(delegated.model_intent, SubagentModelIntent::Fast);
+}
+
+/// 委托默认后台：省略 `run_in_background` 时回执必须如实带 `runInBackground: true`。
+#[test]
+fn delegate_defaults_to_background_and_reports_the_wait_mode() {
+    let mut control = AgentControlRuntime::default();
+    let runtime = SubagentToolRuntime;
+
+    let background = runtime
+        .execute(
+            &mut control,
+            input(
+                DELEGATE_TO_FAST_TOOL_NAME,
+                serde_json::json!({ SUBAGENT_TOOL_TASK_FIELD: "后台委托" }),
+            ),
+        )
+        .unwrap();
+    assert_eq!(
+        background.payload["runInBackground"],
+        serde_json::json!(true)
+    );
+
+    let synchronous = runtime
+        .execute(
+            &mut control,
+            input(
+                DELEGATE_TO_FAST_TOOL_NAME,
+                serde_json::json!({
+                    SUBAGENT_TOOL_TASK_FIELD: "同步委托",
+                    SUBAGENT_TOOL_RUN_IN_BACKGROUND_FIELD: false,
+                }),
+            ),
+        )
+        .unwrap();
+    assert_eq!(
+        synchronous.payload["runInBackground"],
+        serde_json::json!(false)
+    );
+}
+
+/// `run_in_background` 只接受布尔值；非布尔值与未知字段都稳定拒绝。
+#[test]
+fn delegate_rejects_non_boolean_wait_mode_and_unknown_fields() {
+    let mut control = AgentControlRuntime::default();
+    let runtime = SubagentToolRuntime;
+
+    for arguments in [
+        serde_json::json!({
+            SUBAGENT_TOOL_TASK_FIELD: "委托",
+            SUBAGENT_TOOL_RUN_IN_BACKGROUND_FIELD: "false",
+        }),
+        serde_json::json!({
+            SUBAGENT_TOOL_TASK_FIELD: "委托",
+            "wait": true,
+        }),
+    ] {
+        assert!(
+            runtime
+                .execute(&mut control, input(DELEGATE_TO_FAST_TOOL_NAME, arguments))
+                .is_err(),
+            "非法等待模式参数必须被拒绝"
+        );
+    }
+}
+
+/// 工具 schema 必须声明可选的 `run_in_background` 与必填的 `intent`，description 必须写清自包含与后台默认。
+#[test]
+fn delegate_schema_declares_optional_run_in_background() {
+    let definition = delegate_to_fast_tool_definition();
+    let properties = &definition.schema.input_schema["properties"];
+
+    assert_eq!(
+        properties[SUBAGENT_TOOL_RUN_IN_BACKGROUND_FIELD]["type"],
+        "boolean"
+    );
+    assert_eq!(
+        properties[TOOL_INTENT_FIELD]["type"], "string",
+        "intent 是折叠态唯一展示字段，schema 必须声明它"
+    );
+    assert_eq!(
+        definition.schema.input_schema["required"],
+        serde_json::json!([SUBAGENT_TOOL_TASK_FIELD, TOOL_INTENT_FIELD]),
+        "等待模式必须可省略（默认后台），intent 与 task 必填"
+    );
+    for expected in [
+        "自包含",
+        "子代理看不到本次对话",
+        "默认后台执行",
+        "run_in_background: false",
+        "intent 是每次委派必填的一句话目的",
+        "漏填 intent 会让整条调用被判为参数非法",
+    ] {
+        assert!(
+            definition.description.contains(expected),
+            "委托说明必须写清 `{expected}`：{}",
+            definition.description
+        );
+    }
+    // 模型实际漏填的是必填的 intent：示例里必须让 intent 与 task 同批出现。
+    let examples = definition.schema.input_schema["examples"]
+        .as_array()
+        .expect("delegate_to_fast 必须带一条完整调用示例");
+    assert_eq!(examples.len(), 1);
+    assert_eq!(examples[0][TOOL_INTENT_FIELD], "审计文档展示契约");
+    assert!(examples[0][SUBAGENT_TOOL_TASK_FIELD].is_string());
+    // 示例即最强的行为暗示：写成 false 模型就会照抄同步等待，主线被委派阻塞。
+    assert_eq!(examples[0][SUBAGENT_TOOL_RUN_IN_BACKGROUND_FIELD], true);
+}
+
+#[test]
+fn spawn_agent_rejects_task_names_outside_schema_pattern() {
+    let mut control = AgentControlRuntime::default();
+    let runtime = SubagentToolRuntime;
+
+    for task_name in ["Review", "review task", "review.task", " review"] {
+        let result = runtime.execute(
+            &mut control,
+            input(
+                SPAWN_AGENT_TOOL_NAME,
+                serde_json::json!({
+                    SUBAGENT_TOOL_TASK_NAME_FIELD: task_name,
+                    SUBAGENT_TOOL_TASK_FIELD: "检查任务名校验",
+                }),
+            ),
+        );
+        assert!(result.is_err(), "task_name 应被拒绝: {task_name}");
+    }
+}
+
+#[test]
+fn runtime_rejects_root_unknown_and_empty_message() {
+    let mut control = AgentControlRuntime::default();
+    let runtime = SubagentToolRuntime;
+
+    assert!(matches!(
+        runtime.execute(
+            &mut control,
+            input(
+                SEND_MESSAGE_TOOL_NAME,
+                serde_json::json!({
+                    SUBAGENT_TOOL_TARGET_FIELD: "/root",
+                    SUBAGENT_TOOL_MESSAGE_FIELD: "hello",
+                }),
+            ),
+        ),
+        Err(AxonError::Tool(axon_domain::ToolError::InvalidArguments(reason)))
+            if reason == SUBAGENT_TOOL_REASON_ROOT_TARGET_REJECTED
+    ));
+    assert!(matches!(
+        runtime.execute(
+            &mut control,
+            input(
+                LIST_AGENTS_TOOL_NAME,
+                serde_json::json!({ SUBAGENT_TOOL_PATH_PREFIX_FIELD: "/root" }),
+            ),
+        ),
+        Err(AxonError::Tool(axon_domain::ToolError::InvalidArguments(reason)))
+            if reason == SUBAGENT_TOOL_REASON_ROOT_TARGET_REJECTED
+    ));
+    assert!(matches!(
+        runtime.execute(
+            &mut control,
+            input(
+                SEND_MESSAGE_TOOL_NAME,
+                serde_json::json!({
+                    SUBAGENT_TOOL_TARGET_FIELD: "missing",
+                    SUBAGENT_TOOL_MESSAGE_FIELD: "hello",
+                }),
+            ),
+        ),
+        Err(AxonError::Tool(axon_domain::ToolError::InvalidArguments(reason)))
+            if reason == AGENT_CONTROL_REASON_NOT_FOUND
+    ));
+    assert!(matches!(
+        runtime.execute(
+            &mut control,
+            input(
+                SPAWN_AGENT_TOOL_NAME,
+                serde_json::json!({
+                    SUBAGENT_TOOL_TASK_NAME_FIELD: "review",
+                    SUBAGENT_TOOL_TASK_FIELD: "",
+                }),
+            ),
+        ),
+        Err(AxonError::Tool(axon_domain::ToolError::InvalidArguments(_)))
+    ));
+}
+
+#[test]
+fn collaboration_tools_reject_root_and_self_targets_with_one_reason_each() {
+    let mut control = AgentControlRuntime::default();
+    let runtime = SubagentToolRuntime;
+    runtime
+        .execute(
+            &mut control,
+            input(
+                SPAWN_AGENT_TOOL_NAME,
+                serde_json::json!({
+                    SUBAGENT_TOOL_TASK_NAME_FIELD: "review",
+                    SUBAGENT_TOOL_TASK_FIELD: "初始任务",
+                }),
+            ),
+        )
+        .unwrap();
+    let current_path = AgentPath::parse("/root/review").unwrap();
+
+    // root 与 self 在 send_message 与 list_agents 上必须得到**同构**错误。
+    let cases = [
+        (
+            SEND_MESSAGE_TOOL_NAME,
+            serde_json::json!({
+                SUBAGENT_TOOL_TARGET_FIELD: "/root",
+                SUBAGENT_TOOL_MESSAGE_FIELD: "向父代理汇报",
+            }),
+            SUBAGENT_TOOL_REASON_ROOT_TARGET_REJECTED,
+        ),
+        (
+            LIST_AGENTS_TOOL_NAME,
+            serde_json::json!({ SUBAGENT_TOOL_PATH_PREFIX_FIELD: "/root" }),
+            SUBAGENT_TOOL_REASON_ROOT_TARGET_REJECTED,
+        ),
+        (
+            SEND_MESSAGE_TOOL_NAME,
+            serde_json::json!({
+                SUBAGENT_TOOL_TARGET_FIELD: current_path.as_str(),
+                SUBAGENT_TOOL_MESSAGE_FIELD: "给自己发消息",
+            }),
+            SUBAGENT_TOOL_REASON_SELF_TARGET_REJECTED,
+        ),
+        (
+            LIST_AGENTS_TOOL_NAME,
+            serde_json::json!({ SUBAGENT_TOOL_PATH_PREFIX_FIELD: current_path.as_str() }),
+            SUBAGENT_TOOL_REASON_SELF_TARGET_REJECTED,
+        ),
+    ];
+
+    for (tool, arguments, expected) in cases {
+        let error = runtime
+            .execute(
+                &mut control,
+                SubagentToolExecutionInput {
+                    current_path: current_path.clone(),
+                    ..input(tool, arguments)
+                },
+            )
+            .expect_err("root 与 self 都必须被拒绝");
+        assert!(
+            format!("{error:?}").contains(expected),
+            "{tool} 的拒绝理由必须是唯一常量 {expected}：{error:?}"
+        );
+        assert!(
+            matches!(
+                error,
+                AxonError::Tool(axon_domain::ToolError::InvalidArguments(_))
+            ),
+            "{tool} 必须以 invalid_arguments 稳定拒绝：{error:?}"
+        );
+    }
+}
+
+#[test]
+fn fast_child_cannot_spawn_or_delegate_to_another_agent() {
+    let mut control = AgentControlRuntime::default();
+    let runtime = SubagentToolRuntime;
+    let fast = runtime
+        .execute(
+            &mut control,
+            input(
+                DELEGATE_TO_FAST_TOOL_NAME,
+                serde_json::json!({ SUBAGENT_TOOL_TASK_FIELD: "快速检查" }),
+            ),
+        )
+        .unwrap();
+    let child_path = AgentPath::parse(fast.payload["taskName"].as_str().unwrap()).unwrap();
+
+    for (tool_name, arguments) in [
+        (
+            SPAWN_AGENT_TOOL_NAME,
+            serde_json::json!({
+                SUBAGENT_TOOL_TASK_NAME_FIELD: "nested",
+                SUBAGENT_TOOL_TASK_FIELD: "不应执行",
+            }),
+        ),
+        (
+            DELEGATE_TO_FAST_TOOL_NAME,
+            serde_json::json!({ SUBAGENT_TOOL_TASK_FIELD: "不应执行" }),
+        ),
+    ] {
+        let receipt = runtime
+            .execute(
+                &mut control,
+                SubagentToolExecutionInput {
+                    tool_call: call(tool_name, arguments),
+                    current_path: child_path.clone(),
+                    remote_requested: false,
+                    completed_at_ms: 1,
+                },
+            )
+            .unwrap();
+        assert_eq!(receipt.status, SubagentToolExecutionStatus::Blocked);
+        assert_eq!(
+            receipt.reasons,
+            vec![SUBAGENT_TOOL_REASON_CHILD_SPAWN_BLOCKED.to_owned()]
+        );
+        assert_eq!(receipt.payload["blocked"], true);
+    }
+
+    assert_eq!(
+        control.status(&child_path.join("nested").unwrap()),
+        AgentStatus::NotFound
+    );
+}
+
+#[test]
+fn normal_child_can_delegate_fast_child() {
+    let mut control = AgentControlRuntime::default();
+    let runtime = SubagentToolRuntime;
+    let normal = runtime
+        .execute(
+            &mut control,
+            input(
+                SPAWN_AGENT_TOOL_NAME,
+                serde_json::json!({
+                    SUBAGENT_TOOL_TASK_NAME_FIELD: "analysis",
+                    SUBAGENT_TOOL_TASK_FIELD: "分析复杂问题",
+                }),
+            ),
+        )
+        .unwrap();
+    let normal_path = AgentPath::parse(normal.payload["taskName"].as_str().unwrap()).unwrap();
+    let fast = runtime
+        .execute(
+            &mut control,
+            SubagentToolExecutionInput {
+                tool_call: call(
+                    DELEGATE_TO_FAST_TOOL_NAME,
+                    serde_json::json!({ SUBAGENT_TOOL_TASK_FIELD: "快速验证" }),
+                ),
+                current_path: normal_path,
+                remote_requested: false,
+                completed_at_ms: 1,
+            },
+        )
+        .unwrap();
+
+    assert_eq!(fast.status, SubagentToolExecutionStatus::Completed);
+    assert_eq!(fast.payload["taskName"], "/root/analysis/delegate_fast_1");
+    assert_eq!(fast.payload["delegateKind"], "fast");
+}
+
+/// 显式模型与档位必须逐字进回执：父代理只能靠它判断这次委派实际去了哪个模型。
+#[test]
+fn spawn_reports_explicit_model_and_reasoning_effort() {
+    let mut control = AgentControlRuntime::default();
+    let receipt = SubagentToolRuntime
+        .execute(
+            &mut control,
+            input(
+                SPAWN_AGENT_TOOL_NAME,
+                serde_json::json!({
+                    SUBAGENT_TOOL_TASK_NAME_FIELD: "cross_review",
+                    SUBAGENT_TOOL_TASK_FIELD: "换模型交叉复核",
+                    SUBAGENT_TOOL_MODEL_FIELD: "claude-opus-5-5",
+                    SUBAGENT_TOOL_REASONING_EFFORT_FIELD: "high",
+                }),
+            ),
+        )
+        .unwrap();
+
+    assert_eq!(receipt.status, SubagentToolExecutionStatus::Completed);
+    assert_eq!(receipt.payload[SUBAGENT_PAYLOAD_MODEL], "claude-opus-5-5");
+    assert_eq!(receipt.payload[SUBAGENT_PAYLOAD_REASONING_EFFORT], "high");
+    assert_eq!(
+        receipt.payload[SUBAGENT_PAYLOAD_MODEL_POLICY],
+        SUBAGENT_MODEL_POLICY_EXPLICIT
+    );
+    // 选型覆盖不改变模型意图：它仍然是一条继承语义的委派。
+    assert_eq!(receipt.model_intent, SubagentModelIntent::Inherit);
+}
+
+/// 省略选型参数时如实回报继承语义，不伪造模型名与档位。
+#[test]
+fn spawn_defaults_to_inherited_model_without_fabricating_a_name() {
+    let mut control = AgentControlRuntime::default();
+    let receipt = SubagentToolRuntime
+        .execute(
+            &mut control,
+            input(
+                SPAWN_AGENT_TOOL_NAME,
+                serde_json::json!({
+                    SUBAGENT_TOOL_TASK_NAME_FIELD: "review",
+                    SUBAGENT_TOOL_TASK_FIELD: "检查当前改动",
+                }),
+            ),
+        )
+        .unwrap();
+
+    assert_eq!(
+        receipt.payload[SUBAGENT_PAYLOAD_MODEL_POLICY],
+        SUBAGENT_MODEL_POLICY_INHERIT
+    );
+    assert!(receipt.payload.get(SUBAGENT_PAYLOAD_MODEL).is_none());
+    assert!(
+        receipt
+            .payload
+            .get(SUBAGENT_PAYLOAD_REASONING_EFFORT)
+            .is_none()
+    );
+}
+
+/// 档位拼写错误必须在参数层拒绝：静默透传会让模型收到一个它无法理解的失败。
+#[test]
+fn spawn_rejects_unknown_reasoning_effort_at_argument_layer() {
+    let mut control = AgentControlRuntime::default();
+    let error = SubagentToolRuntime
+        .execute(
+            &mut control,
+            input(
+                SPAWN_AGENT_TOOL_NAME,
+                serde_json::json!({
+                    SUBAGENT_TOOL_TASK_NAME_FIELD: "review",
+                    SUBAGENT_TOOL_TASK_FIELD: "检查当前改动",
+                    SUBAGENT_TOOL_REASONING_EFFORT_FIELD: "ultrathink",
+                }),
+            ),
+        )
+        .unwrap_err();
+
+    assert!(
+        format!("{error:?}").contains("reasoning_effort"),
+        "错误正文必须点名字段：{error:?}"
+    );
+    // 参数错误发生在创建之前：不得留下一个没有执行的子代理。
+    assert_eq!(
+        control.list_agents(&AgentPath::root(), None).unwrap().len(),
+        1
+    );
+}

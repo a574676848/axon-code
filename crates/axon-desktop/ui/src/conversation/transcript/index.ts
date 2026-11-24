@@ -1,0 +1,81 @@
+/*
+ * 对话投影模块的对外入口。
+ *
+ * 投影按职责拆成高内聚的子模块，调用方只认这一份入口：状态模型、轮次与单元的原语、
+ * 文件改动的归并与派生、子代理投影、帧路由与派生读取。拆分的边界即依赖方向，
+ * 因此不存在互相 import 的环。
+ */
+
+export {
+  EMPTY_USAGE,
+  INITIAL_CONVERSATION,
+  LOCAL_STEER_PREFIX,
+  cacheHitRateBasisPoints,
+  completeInputTokens,
+  compositionTokens,
+  currentContextTokens,
+  totalTokens,
+  type AttachmentRef,
+  type ConnectionState,
+  type ConversationAction,
+  type ConversationState,
+  type JobRow,
+  type PlanProjection,
+  type SubagentEvent,
+  type SubagentRow,
+  type TokenUsage,
+  type TranscriptCell,
+  type TurnState,
+} from './state';
+
+export {
+  CHANGE_KIND_LABEL,
+  changeTotals,
+  changedFilesOf,
+  countDiffLines,
+  countLines,
+  lineCountsOf,
+  toolChangeSummary,
+  type ChangedFile,
+  type FileChangeKind,
+  type FileChangePart,
+  type TurnChanges,
+} from './changes';
+
+export { conversationReducer } from './reducer';
+
+/*
+ * 逐帧归约对外可见：翻页时更早的一条 Interaction 要先在独立投影里回放完，
+ * 再把算好的轮次整段前置，因此调用方需要能对一份临时状态跑同一套帧归约。
+ */
+export { applyFrames } from './frames';
+
+/*
+ * 折叠判据对外可见：控制器据此决定哪一轮折起来。折叠本身只在归约里发生，
+ * 历史与实时共用同一条单元构造，因此这里不再提供「按索引立起一轮」的旁路。
+ */
+export {
+  FOLD_SILENCE_MS,
+  conclusionMarkerOf,
+  outlineControl,
+  shouldFold,
+  summaryFromIndexFacts,
+  summaryFromToolNames,
+  type TurnConclusionMarker,
+} from './fold';
+
+export {
+  attachmentsFromPaths,
+  compactDuration,
+  deriveJobs,
+  mergeCarriedPrompts,
+  pendingSteerCount,
+  previewCommand,
+  requeueableSteers,
+  steerSequence,
+  workingStatusPrimary,
+  workingLineOf,
+  type CarriedPrompt,
+} from './derive';
+
+export { PLAN_LABEL, planHeading, planProjectionOf } from './cells';

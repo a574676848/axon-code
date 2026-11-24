@@ -1,0 +1,287 @@
+import React from 'react';
+import { changedFilesOf, conclusionMarkerOf } from '../../conversation/transcript';
+import type { TranscriptCell, TurnState } from '../../conversation/transcript/state';
+import { orderTurnCells } from '../../conversation/transcript/order';
+import { retryPromptOf } from '../../conversation/transcript/retryPrompt';
+import { ChangedFilesCard } from './ChangedFilesCard';
+import { DisclosureRow } from './DisclosureRow';
+import { foldJobReads } from './jobFolding';
+import { NoticeBlock, TranscriptCellView } from './Transcript';
+import { LATEST_PROCESS_ROW_LIMIT, hiddenProcessRows } from './turnWindow';
+
+/*
+ * 一轮的正文块。
+ *
+ * 这里是正文渲染的成本分水岭：**以轮次为 memo 边界**，一次增量帧只让真正变化的那一轮
+ * 重建元素，其余轮次连元素都不重建、引用回调也不重挂载。没有这道边界时，每一帧都要为
+ * 全部单元重建元素并重挂每一行的 ref，正文越长，单个增量帧的代价越大（实测能到每秒
+ * 上百 MB 的分配）。既有工作台产品的会话正文同样是节点级边界，这里对齐的就是这一点。
+ *
+ * 过程行（思考 / 工具 / 改动 / 历史）连续出现时按一组排：组内 0 间距、组与组之间 10px。
+ * 同一段工作因此读起来是一段连续的过程日志，而不是一堆等距的卡片。
+ *
+ * 轮内顺序交给 `transcript/order`：运行中追加的用户消息只在还没被模型接住时挪到轮末。
+ */
+
+/**
+ * 属于「过程」的单元：同一组内相邻时不再加间距。
+ *
+ * 与整轮折叠（`transcript/fold.ts` 的 `PROCESS_ROLES`）刻意不同：那边连计划一起撤下，
+ * 这里的窗口只管会持续变长的过程行。两处同名会让新增 role 时漏改一处，因此名字区分开。
+ */
+const WINDOW_PROCESS_ROLES = new Set(['reasoning', 'tool', 'fileChange', 'history']);
+
+/*
+ * 渲染行：一个单元，或一组并掉的同类作业读取。
+ *
+ * 身份取折叠组**第一条**单元：后续并进来的读取只是给这一行换最新内容，
+ * 换 key 会连展开态一起扔掉，正读着输出时来一条新读取就被重新收起。
+ */
+interface CellRow {
+  key: string;
+  cell: TranscriptCell;
+  /** 含自己在内的读取条数；1 表示没有并。 */
+  repeats: number;
+  /** 这些读取的耗时合计；一条都取不到耗时时为空。 */
+  repeatsMs: number | null;
+  /** 是否属于「过程」：思考、执行、工具、改动、历史轮。 */
+  process: boolean;
+  /** 这一行是「更早的 N 行过程已收起」的替身时给出 N。 */
+  collapsedProcess?: number;
+}
+
+/** 排序定稿后按相邻同作业读取折行，并为每行补上稳定身份。 */
+function foldRows(cells: TranscriptCell[]): CellRow[] {
+  const rows: CellRow[] = [];
+  let cursor = 0;
+  for (const item of foldJobReads(cells)) {
+    rows.push({
+      key: cells[cursor]?.id ?? item.cell.id,
+      cell: item.cell,
+      repeats: item.repeats,
+      repeatsMs: item.repeatsMs,
+      process: WINDOW_PROCESS_ROLES.has(item.cell.role),
+    });
+    cursor += item.repeats;
+  }
+  return rows;
+}
+
+/**
+ * 把最新一轮里被收起的过程行换成一根替身行。
+ *
+ * 替身落在**第一根被收起的过程行**的位置上：那一行原本就在这里，读者看到的先后顺序
+ * 因此不变；其余被收起的行整行不渲染，展开时回到原位。
+ */
+function withCollapsedProcess(rows: CellRow[], hidden: readonly number[]): CellRow[] {
+  if (hidden.length === 0) return rows;
+  const hiddenSet = new Set(hidden);
+  const anchor = hidden[0];
+  const display: CellRow[] = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    if (index === anchor) {
+      display.push({ ...rows[index], collapsedProcess: hidden.length });
+      continue;
+    }
+    if (hiddenSet.has(index)) continue;
+    display.push(rows[index]);
+  }
+  return display;
+}
+
+interface CellGroup {
+  key: string;
+  process: boolean;
+  rows: CellRow[];
+}
+
+/** 把渲染行按「是否过程行」切成连续的组；非过程单元各自成组，保持原有的轮内间距。 */
+function groupCells(rows: CellRow[]): CellGroup[] {
+  const groups: CellGroup[] = [];
+  for (const row of rows) {
+    const last = groups[groups.length - 1];
+    if (row.process && last !== undefined && last.process) {
+      last.rows.push(row);
+      continue;
+    }
+    groups.push({ key: `group:${row.key}`, process: row.process, rows: [row] });
+  }
+  return groups;
+}
+
+export interface TurnBlockProps {
+  turn: TurnState;
+  /** 轮次序号，从 1 开始；只用于改动卡片的分组标题。 */
+  turnNumber: number;
+  /** 这一轮被窗口折掉的前导单元数。 */
+  hiddenCells: number;
+  /** 登记轮次锚点；正文导航条据此定位与高亮。 */
+  onAnchor: (turnId: string, node: HTMLElement | null) => void;
+  /** 这一轮的改动对比入口。 */
+  onOpenChange: (turnId: string, turnNumber: number, index: number) => void;
+  /**
+   * 这一轮是否轮次链的末轮。
+   *
+   * 只有末轮的失败才给重试入口：更早的失败已经被后续轮次接管，再点一次只会把旧请求
+   * 当成新的用户意图注入，或另开一条与当前进度无关的轮次。
+   */
+  retryEnabled?: boolean;
+  /**
+   * 这一轮是否最新一轮（正在跑或刚跑完）。
+   *
+   * 只有它会把过程行收成一个窗口：最新一轮是全站唯一会持续长高的正文，几十行工具
+   * 调用之后最近几行会被推到视野之外。更早的轮次要么已经整轮折叠，要么是用户主动
+   * 展开的，两处都不该再替他收起。
+   */
+  live?: boolean;
+  /**
+   * 是否按历史段落做原生虚拟化。
+   *
+   * 只对滚动窗口之外的历史轮次成立：`content-visibility: auto` 让浏览器跳过
+   * 视口外内容的绘制与布局，百轮会话因此仍然满帧；正在流式输出的尾部永远不参与。
+   */
+  memoized?: boolean;
+}
+
+export const TurnBlock = React.memo<TurnBlockProps>(
+  ({
+    turn,
+    turnNumber,
+    hiddenCells,
+    onAnchor,
+    onOpenChange,
+    retryEnabled = false,
+    live = false,
+    memoized = false,
+  }) => {
+    const files = changedFilesOf(turn.changes);
+    const cells = orderTurnCells(hiddenCells > 0 ? turn.cells.slice(hiddenCells) : turn.cells);
+    /*
+     * 折行在排序之后：相邻说的是**显示上**相邻。排序会把待接手的用户消息挪到轮末，
+     * 若先折再看顺序，两次中间隔着别的东西的观察动作会被错并成一次。
+     */
+    const rows = foldRows(cells);
+    /*
+     * 重试要的是这一轮**发起时**的请求：取整轮（含被折叠窗口裁掉的前导单元），
+     * 窗口只影响正文可见性，不该让失败卡突然失去重试入口。
+     */
+    const retryPrompt = retryEnabled ? retryPromptOf(turn.cells) : null;
+    /*
+     * 最新一轮的过程行窗口：超过上限只留最近这些行，更早的收成一根替身行。
+     *
+     * 展开只改这一处的本地状态：行本身一直在内存里，点开即原位恢复，不触发回放，
+     * 也不向网关再要一次正文。
+     */
+    const [allProcessVisible, setAllProcessVisible] = React.useState(false);
+    const displayRows = React.useMemo(() => {
+      if (!live || allProcessVisible) return rows;
+      return withCollapsedProcess(rows, hiddenProcessRows(rows, LATEST_PROCESS_ROW_LIMIT));
+    }, [allProcessVisible, live, rows]);
+    const tail = cells[cells.length - 1];
+    const endsWithSummary = tail !== undefined && tail.role === 'summary';
+    /*
+     * 改动卡片插在收尾分割线之前：改动属于这一轮真的做过的工作，分割线负责收口这一轮，
+     * 因此卡片不会被读成下一轮的开场白；没有收尾时卡片落在轮末。
+     */
+    const card =
+      files.length === 0 ? null : (
+        <ChangedFilesCard
+          files={files}
+          onOpen={(index) => onOpenChange(turn.id, turnNumber, index)}
+        />
+      );
+    const groups = groupCells(displayRows);
+    /*
+     * 异常结论轮次的视觉标记：中断、失败与被拒绝的轮次保持展开，末尾给一条结论标记。
+     * 正文里已经有结论单元时它是 null（一轮只留一条结论），因此这里不会重复。
+     *
+     * 最新一轮的失败与拒绝已经由流底部横幅说明（见 `ConversationStream`），这里让位；
+     * 中断没有横幅，因此最新一轮的中断仍由标记承担。
+     */
+    const bannerExplained =
+      live && (turn.status === 'failed' || turn.status === 'rejected');
+    const marker = turn.folded || bannerExplained ? null : conclusionMarkerOf(turn);
+    const nodeRef = React.useRef<HTMLDivElement>(null);
+
+    /*
+     * 把真实高度写进 `--block-h`。
+     *
+     * `contain-intrinsic-size: auto var(--block-h)` 里的 `auto` 会记住上一次渲染的尺寸，
+     * 但首次进入虚拟化时还没有任何记忆，必须有一个可信的占位高度，否则滚动条滑块
+     * 会先按默认值算比例再跳一次。这里在轮次转为历史时量一次，之后不再读。
+     */
+    React.useLayoutEffect(() => {
+      if (!memoized) return;
+      const node = nodeRef.current;
+      if (node === null) return;
+      const height = Math.round(node.getBoundingClientRect().height);
+      if (height > 0) node.style.setProperty('--block-h', `${height}px`);
+    }, [memoized]);
+
+    return (
+      <div
+        data-turn-id={turn.id}
+        ref={(node) => {
+          nodeRef.current = node;
+          onAnchor(turn.id, node);
+        }}
+        className={`flex flex-col gap-2.5 ${memoized ? 'message-block-memoized' : ''}`}
+      >
+        {groups.map((group, position) => (
+          <React.Fragment key={group.key}>
+            {card !== null &&
+              endsWithSummary &&
+              position === groups.length - 1 &&
+              group.process === false &&
+              card}
+            <div
+              className={
+                group.process
+                  ? `flex flex-col ${group.rows.length > 1 ? 'pl-2 hairline-l border-border' : ''}`
+                  : 'flex flex-col gap-2.5'
+              }
+            >
+              {group.rows.map((row) => (
+                row.collapsedProcess === undefined ? (
+                  <TranscriptCellView
+                    key={row.key}
+                    cell={row.cell}
+                    repeats={row.repeats}
+                    repeatsMs={row.repeatsMs}
+                    retryPrompt={row.cell.role === 'failure' ? retryPrompt : undefined}
+                  />
+                ) : (
+                  /*
+                   * 「更早的 N 行过程已收起」：与思考、执行同款的可展开行（28px、不铺
+                   * 底色、悬浮只提行首图形），点开即把被收起的行放回原位，不回放。
+                   */
+                  <DisclosureRow
+                    key={row.key}
+                    open={false}
+                    onToggle={() => setAllProcessVisible(true)}
+                    title={`更早的 ${row.collapsedProcess} 行过程已收起`}
+                    titleText={`展开这 ${row.collapsedProcess} 行已收起的过程`}
+                  />
+                )
+              ))}
+            </div>
+          </React.Fragment>
+        ))}
+        {card !== null && !endsWithSummary ? card : null}
+        {marker !== null && (
+          <NoticeBlock
+            cell={{
+              id: `turn-marker:${turn.id}`,
+              role: 'notice',
+              title: marker.title,
+              summary: marker.summary,
+              tone: marker.tone,
+            }}
+          />
+        )}
+      </div>
+    );
+  },
+);
+
+TurnBlock.displayName = 'TurnBlock';

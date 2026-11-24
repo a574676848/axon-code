@@ -1,0 +1,1192 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import builtinLabels from '../../../axon-display/src/builtin_tool_labels.json' with { type: 'json' };
+import { filePathsIn } from '../src/components/conversation/filePaths.ts';
+import { toolLabel, toolFailed, extractFilePath, formatToolContent, shellCommand } from '../src/components/conversation/toolPresentation.ts';
+import { backendError, isBackendUnavailable } from '../src/errors.ts';
+import * as ipc from '../src/ipc.ts';
+import { conversationReducer } from '../src/conversation/transcript/reducer.ts';
+import { applyUserMessage } from '../src/conversation/transcript/cells.ts';
+import { INITIAL_CONVERSATION } from '../src/conversation/transcript/state.ts';
+import { mergeCarriedPrompts, pendingSteerCount, requeueableSteers } from '../src/conversation/transcript/derive.ts';
+import { orderTurnCells } from '../src/conversation/transcript/order.ts';
+import { emptyTurn, refreshLiveElapsed, settleTurn } from '../src/conversation/transcript/turns.ts';
+import { expandStreamPayload } from '../src/conversation/wire.ts';
+import { turnSummaryText } from '../src/conversation/turnSummary.ts';
+
+test('只把明确的文件路径变为预览入口', () => {
+    const text = 'p50/p95 I/O docs/guide.md `src/main.rs` E:\\zbg\\axon-code\\Cargo.toml';
+    assert.deepEqual(filePathsIn(text).map(({ path }) => path),
+        ['docs/guide.md', 'src/main.rs', 'E:\\zbg\\axon-code\\Cargo.toml']);
+    assert.deepEqual(filePathsIn('https://example.com/src/main.rs www.example.com/a.md'), []);
+    assert.deepEqual(filePathsIn('查看 src/main.rs。以及 Cargo.toml.'),
+        [{ path: 'src/main.rs', index: 3 }, { path: 'Cargo.toml', index: 18 }]);
+});
+
+test('扩展名本身就是正文用词时不能当成文件', () => {
+    // 「方案 C」「用 Go 写」这类词与扩展名同名，不能渲染成文件芯片。
+    assert.deepEqual(filePathsIn('方案 C 与方案 A 的区别'), []);
+    assert.deepEqual(filePathsIn('用 Go 重写，顺便看看 ts 与 rs'), []);
+    assert.deepEqual(filePathsIn('回「A」「B」或「C」即可开跑'), []);
+    assert.deepEqual(filePathsIn('I/O 与 p50/p95 都不是路径'), []);
+    // 但真正的路径照旧识别：显式形状、多级路径、裸文件名带后缀。
+    assert.deepEqual(
+        filePathsIn('改 ~/.axon/config.toml 与 AGENTS.md，另看 ./dist/app.js 与 .env'),
+        [
+            { path: '~/.axon/config.toml', index: 2 },
+            { path: 'AGENTS.md', index: 24 },
+            { path: './dist/app.js', index: 37 },
+            { path: '.env', index: 53 },
+        ],
+    );
+});
+
+test('文件、便签、记忆与 MCP 的前缀独立分类', () => {
+    for (const [kind, name, label] of [
+        ['write_file', 'builtin.memory_write', '记忆写入'],
+        ['read_file', 'builtin.notes_read_file', '读取便签'],
+        ['write_file', 'notes_write_file', '写入便签'],
+        ['shell', 'builtin.shell_command', '执行'],
+        ['read_file', 'builtin.read_file', '读取'],
+        ['mcp', 'read_file', 'MCP'],
+        ['write_file', 'mcp__memory__write', 'MCP'],
+    ]) assert.equal(toolLabel(kind, name), label);
+    assert.equal(extractFilePath('{"file_path":"Cargo.toml","offset":1}'), 'Cargo.toml');
+    assert.equal(extractFilePath('Cargo.toml'), 'Cargo.toml');
+});
+
+test('异常退出与取消标记失败，成功执行保持正常', () => {
+    for (const status of ['failed', 'interrupted', 'cancelled', 'rejected'])
+        assert.equal(toolFailed(status, null), true);
+    assert.equal(toolFailed('completed', 2), true);
+    assert.equal(toolFailed('completed', 0), false);
+});
+
+test('全部内置工具执行中和回执均使用共享中文名称', () => {
+    // 共享名称表的完整性由 Rust 的真实工具注册清单覆盖测试验证。
+    for (const [name, label] of Object.entries(builtinLabels)) {
+        assert.equal(toolLabel('unsupported', name), label, name);
+        assert.equal(toolLabel('unsupported', `builtin.${name}`), label, name);
+        assert.equal(toolLabel('read_file', `builtin.${name}`), label, name);
+        assert.equal(toolLabel('mcp', name), 'MCP', name);
+        assert.equal(toolLabel('unsupported', `mcp__server__${name}`), 'MCP', name);
+        assert.equal(toolLabel('unsupported', `plugin.${name}`), `plugin.${name}`, name);
+    }
+    for (const [name, label] of [
+        ['update_plan', '更新计划'], ['goal_create', '创建任务'],
+        ['goal_list', '列出任务'], ['goal_get', '读取任务'],
+        ['goal_update', '更新任务'], ['goal_cancel', '取消任务'],
+        ['delegate_to_fast', '委托快速代理'],
+        ['get_context_remaining', '查看剩余上下文'], ['new_context', '新建上下文'],
+    ]) assert.equal(toolLabel('unsupported', `builtin.${name}`), label);
+    assert.equal(toolLabel('notes', 'builtin.notes_future'), 'builtin.notes_future');
+    assert.equal(toolLabel('read_file', 'builtin.future'), 'builtin.future');
+    // 任务工具的类别码随「统一内置工具中文展示」定为 task_tool；Goal 只是领域侧命名。
+    assert.equal(toolLabel('task_tool', ''), '任务');
+});
+
+test('格式化 JSON 不改变数据，Shell 不改变换行和转义', () => {
+    const json = '{"command":"printf \\\"a\\\\nb\\\"","cwd":"."}';
+    const formatted = formatToolContent(json);
+    assert.equal(formatted.language, 'json');
+    assert.deepEqual(JSON.parse(formatted.code), JSON.parse(json));
+    assert.equal(shellCommand(json), JSON.parse(json).command);
+    const shell = 'echo "$HOME"\ncat ./file.txt\n';
+    assert.equal(formatToolContent(shell).code, shell);
+    assert.equal(formatToolContent('{"incomplete":').code, '{"incomplete":');
+});
+
+test('裸换行 JSON 仍可格式化，shell 回执只留输出正文', () => {
+    const multiline = '{"intent":"整理","path":"checkpoint.md","text":"# 路线\n\n- 第一条\n- 第二条"}';
+    const formattedJson = formatToolContent(multiline);
+    assert.equal(formattedJson.language, 'json');
+    assert.equal(JSON.parse(formattedJson.code).text, '# 路线\n\n- 第一条\n- 第二条');
+    assert.match(formattedJson.code, /"text": "# 路线\\n\\n- 第一条/);
+
+    const receipt = 'shell command=git status exit_code=0 timed_out=false output_tokens=12/34 stdout=## main\n M file.txt stderr=';
+    const formattedShell = formatToolContent(receipt);
+    assert.equal(formattedShell.language, 'shell');
+    // 命令与执行细节都不进输出区：命令由「命令」区块承担，细节只压版面。
+    assert.equal(formattedShell.code, '## main\n M file.txt');
+    assert.equal(formattedShell.code.includes('exit_code'), false);
+});
+
+test('多行元数据回执只留输出，截断与归档缺失仍要说出来', () => {
+    const receipt = [
+        'output_handler=head_tail',
+        'output_tokens=116/116',
+        'stdout_truncated=true',
+        'stdout_chars=463/12000',
+        'stderr_truncated=false',
+        'full_output_available=false',
+        'full_output_failed=false',
+        'stdout=731e5f54f 发布 0.1.5：记忆反思重构',
+        'acca2537e feat(persona)：场域与疲劳度成为一等状态',
+        'stderr=',
+    ].join('\n');
+    const formatted = formatToolContent(receipt);
+    assert.equal(formatted.language, 'shell');
+    assert.equal(
+        formatted.code,
+        '731e5f54f 发布 0.1.5：记忆反思重构\nacca2537e feat(persona)：场域与疲劳度成为一等状态\n\n（stdout 已截断，原文 12000 字符）\n（完整输出归档不可用）',
+    );
+    assert.equal(formatted.code.includes('output_handler'), false);
+    assert.equal(formatted.code.includes('stdout_chars'), false);
+});
+
+test('stderr 有内容时单独成段，没有输出时给一句无输出', () => {
+    const failed = formatToolContent('shell command=x exit_code=1 stdout=ok stderr=boom');
+    assert.equal(failed.code, 'ok\n\n--- stderr ---\nboom');
+    const empty = formatToolContent('output_handler=compact\nstdout=\nstderr=');
+    assert.equal(empty.code, '（无输出）');
+});
+
+test('作业回执同样只留正文，作业标识与归档路径不铺版面', () => {
+    const receipt =
+        'job output job_id=8 status=completed elapsed_ms=211609 exit_code=0 stdout_truncated=false stdout_chars=70/70 stderr_truncated=false stderr_chars=0/0 full_output_available=true artifact_path=C:/Users/tester/.axon/data/logs/tee/job-8.shell.log stdout=TAG_CI_EXIT=1\n{"ci_tag_conclusion":"","ci_tag_status":"in_progress"}\n stderr=';
+    const formatted = formatToolContent(receipt);
+    assert.equal(formatted.language, 'shell');
+    assert.equal(
+        formatted.code,
+        'TAG_CI_EXIT=1\n{"ci_tag_conclusion":"","ci_tag_status":"in_progress"}',
+    );
+    assert.equal(formatted.code.includes('artifact_path'), false);
+    assert.equal(formatted.code.includes('job_id'), false);
+});
+
+test('后端字符串和结构化错误保留具体原因', () => {
+    assert.equal(backendError('原子写配置失败: 权限不足').message, '原子写配置失败: 权限不足');
+    assert.equal(backendError({ message: '配置值非法' }).message, '配置值非法');
+});
+
+const attachment = { path: 'docs/guide.md', name: 'guide.md', image: false };
+function openHistory() {
+    return conversationReducer(INITIAL_CONVERSATION, { type: 'open-turn', turnId: 'history', nowMs: 0 });
+}
+function attachFacts(state) {
+    return conversationReducer(state, {
+        type: 'attach-history', interactionId: 'history', attachments: [attachment], channel: 'desktop',
+    });
+}
+
+test('历史帧落地后再贴索引里的附件与来源，气泡只呈现一次', () => {
+    // 正文由 durable 帧给出（用户气泡不再手搓），索引补的是帧里没有的附件与来源。
+    const replayed = applyUserMessage(openHistory(), 0, 'user-event', '查看文件', 100);
+    const state = attachFacts(replayed);
+    assert.equal(state.turns[0].cells.length, 1);
+    assert.equal(state.turns[0].index['user-event'], 0);
+    assert.equal(state.turns[0].cells[0].channel, 'desktop');
+    assert.deepEqual(state.turns[0].cells[0].attachments, [attachment]);
+});
+
+test('附件先于用户消息到达时暂存，用户消息落地即认领', () => {
+    const state = applyUserMessage(attachFacts(openHistory()), 0, 'user-event', '查看文件', 100);
+    assert.equal(state.turns[0].cells.length, 1);
+    assert.deepEqual(state.turns[0].cells[0].attachments, [attachment]);
+    assert.equal(state.turns[0].pendingAttachments.length, 0);
+});
+
+test('本地消息确认建立正确索引，不同事件的相同文本仍各自保留', () => {
+    let state = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'submit', turnId: 'local', text: '继续', nowMs: 1, attachments: [attachment],
+    });
+    state = applyUserMessage(state, 0, 'first', '继续', 2);
+    state = applyUserMessage(state, 0, 'second', '继续', 3);
+    assert.deepEqual(state.turns[0].cells.map(({ id }) => id), ['first', 'second']);
+    assert.equal(state.turns[0].index.second, 1);
+    assert.deepEqual(state.turns[0].cells[0].attachments, [attachment]);
+});
+
+test('带 @ 引用的消息按可见正文认领，不产生重复气泡', () => {
+    const typed = '改一下 @src/model.rs';
+    const submitted = `${typed}\n\n[结构化输入]\n已引用文件：src/model.rs`;
+    let state = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'submit', turnId: 'local', text: typed, nowMs: 1, attachments: [],
+    });
+    state = applyUserMessage(state, 0, 'user-event', submitted, 2);
+
+    assert.equal(state.turns[0].cells.length, 1, '服务端事件必须认领本地那一格');
+    assert.equal(state.turns[0].cells[0].text, typed, '气泡只显示用户敲的那一段');
+    assert.equal(state.turns[0].index['user-event'], 0);
+});
+
+test('只带图片的消息按附加块认领，气泡里仍是那一张图', () => {
+    const image = { path: 'C:\\tmp\\shot.png', name: 'shot.png', image: true };
+    const submitted = '[结构化输入]\n已附加文件：C:\\tmp\\shot.png';
+    let state = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'submit', turnId: 'local', text: '', nowMs: 1, attachments: [image],
+    });
+    state = applyUserMessage(state, 0, 'user-event', submitted, 2);
+
+    assert.equal(state.turns[0].cells.length, 1, '服务端事件必须认领本地那一格');
+    assert.equal(state.turns[0].cells[0].text, '', '气泡里没有正文，只有附件卡');
+    assert.deepEqual(state.turns[0].cells[0].attachments, [image]);
+    assert.equal(state.turns[0].index['user-event'], 0);
+});
+
+test('运行中继续发送进入排队，durable 事件到达才算落地', () => {
+    let state = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'open-turn', turnId: 'interaction-1', nowMs: 0,
+    });
+    state = conversationReducer(state, {
+        type: 'steer', text: '顺便看一下日志', nowMs: 5, attachments: [],
+    });
+    assert.equal(pendingSteerCount(state.turns), 1, '未确认的消息必须计入排队');
+
+    // 服务端在安全边界插入后按正文认领这一格：排队计数随之归零，且不出现重复气泡。
+    state = applyUserMessage(state, 0, 'user-part-1', '顺便看一下日志', 6);
+    assert.equal(pendingSteerCount(state.turns), 0);
+    assert.deepEqual(state.turns[0].cells.map(({ id }) => id), ['user-part-1']);
+});
+
+test('运行中追加的消息被接住之后留在原位，回答排在气泡下面', () => {
+    // 一轮已经产出过程，用户在此期间追加了一条只有图片的消息，服务端随后认领并作答。
+    const shot = { path: 'C:\\tmp\\shot.png', name: 'shot.png', image: true, bytes: 1024 };
+    const opened = { id: 'user:1', role: 'user', text: '先看这一段', atMs: 1, attachments: [] };
+    const worked = { id: 'reasoning:1', role: 'reasoning', text: '先读代码', done: true, durationMs: 900, startedAtMs: 2 };
+    const picked = { id: 'user:2', role: 'user', text: '', atMs: 3, attachments: [shot], steer: true, steerSeq: 1 };
+    const answered = { id: 'answer:1', role: 'assistant', text: '这张图是深色主题', streaming: false, atMs: 4 };
+
+    assert.deepEqual(
+        orderTurnCells([opened, worked, picked, answered]).map(({ id }) => id),
+        ['user:1', 'reasoning:1', 'user:2', 'answer:1'],
+        '认领之后到达顺序就是真实顺序：回答必须在气泡下方',
+    );
+});
+
+test('还没被接住的追加消息仍然排在轮末，与中断结论一起读', () => {
+    const opened = { id: 'user:1', role: 'user', text: '先看这一段', atMs: 1, attachments: [] };
+    const worked = { id: 'tool:1', role: 'reasoning', text: '跑一下用例', done: true, durationMs: 900, startedAtMs: 2 };
+    const interrupted = { id: 'turn-interrupted:t', role: 'notice', title: '已中断', summary: '本轮已由用户中断。', tone: 'info' };
+    const summary = { id: 'turn-summary:t', role: 'summary', durationMs: 900, usage: null, firstTokenAvgMs: null, generationTpsX10: null };
+    // 仍在排队（本地标识还在）与已被认领但没有回答是两种情形，读法相同。
+    const queued = { id: 'local-steer:2-5', role: 'user', text: '再看看日志', atMs: 5, attachments: [], steer: true, steerSeq: 1 };
+    const claimed = { id: 'user:9', role: 'user', text: '这条没赶上', atMs: 6, attachments: [], steer: true, steerSeq: 2 };
+
+    assert.deepEqual(
+        orderTurnCells([opened, worked, queued, interrupted, summary]).map(({ id }) => id),
+        ['user:1', 'tool:1', 'turn-interrupted:t', 'turn-summary:t', 'local-steer:2-5'],
+    );
+    assert.deepEqual(
+        orderTurnCells([opened, worked, claimed, interrupted, summary]).map(({ id }) => id),
+        ['user:1', 'tool:1', 'turn-interrupted:t', 'turn-summary:t', 'user:9'],
+        '认领之后本轮没有继续产出，说明它还没被答复',
+    );
+});
+
+test('同一轮里多条待接手的追加消息按敲击先后排列', () => {
+    const opened = { id: 'user:1', role: 'user', text: '', atMs: 1, attachments: [] };
+    const later = { id: 'user:3', role: 'user', text: '第二句', atMs: 3, attachments: [], steer: true, steerSeq: 2 };
+    const earlier = { id: 'user:2', role: 'user', text: '第一句', atMs: 2, attachments: [], steer: true, steerSeq: 1 };
+
+    assert.deepEqual(
+        orderTurnCells([opened, later, earlier]).map(({ id }) => id),
+        ['user:1', 'user:2', 'user:3'],
+    );
+});
+
+test('没有追加消息的轮次原样返回同一个数组', () => {
+    const cells = [
+        { id: 'user:1', role: 'user', text: '看下这个', atMs: 1, attachments: [] },
+        { id: 'answer:1', role: 'assistant', text: '好的', streaming: false, atMs: 2 },
+    ];
+    assert.equal(orderTurnCells(cells), cells, '纯历史轮次不换引用，轮次的 memo 边界才成立');
+});
+
+test('轮次收口把未认领的排队消息标为未送达，而不是让它消失', () => {
+    let state = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'open-turn', turnId: 'interaction-1', nowMs: 0,
+    });
+    state = conversationReducer(state, {
+        type: 'steer', text: '这条没赶上当前轮', nowMs: 5, attachments: [], structuredInput: '',
+    });
+
+    // 随本轮一起被取消的消息内容是找不回来的：必须留在正文里标成未送达，
+    // 用户才看得见、也点得到「重新发送」，而不是静默消失。
+    const settled = settleTurn(state.turns[0], 'completed', 120);
+    assert.deepEqual(settled.cells.map(({ id }) => id), ['local-steer:0-5']);
+    assert.equal(settled.cells[0].undelivered, true);
+    assert.equal(pendingSteerCount([settled]), 0, '收口后不再计入排队');
+    assert.equal(settled.status, 'completed');
+    assert.equal(settled.elapsedMs, 120);
+});
+
+test('中断时把运行中追加的消息交给下一轮，引用块与附件原样带走', () => {
+    const reference = '[结构化输入]\n已引用文件：src/main.rs';
+    let state = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'open-turn', turnId: 'interaction-1', nowMs: 0,
+    });
+    state = conversationReducer(state, {
+        type: 'steer', text: '顺便看看 @src/main.rs', nowMs: 5, attachments: [], structuredInput: reference,
+    });
+
+    // 交接之前：这一条还在等安全边界插入，正文与结构化块都完整。
+    const carrying = requeueableSteers(state.turns);
+    assert.equal(carrying.length, 1);
+    assert.equal(carrying[0].text, '顺便看看 @src/main.rs');
+    assert.equal(carrying[0].structuredInput, reference, '重发要带上引用行，正文被裁过之后就再也算不回来');
+
+    // 标成转投中：气泡原地留着，但不再算等待注入，也不会被收口标成未送达。
+    state = conversationReducer(state, {
+        type: 'mark-steers-requeued', cellIds: carrying.map(({ cellId }) => cellId),
+    });
+    assert.equal(pendingSteerCount(state.turns), 0, '已经交给下一轮的不再算等待注入');
+    assert.deepEqual(requeueableSteers(state.turns), [], '同一格不会被交接两次');
+    const settled = settleTurn(state.turns[0], 'interrupted', 80);
+    assert.equal(settled.cells[0].undelivered, undefined, '转投中的消息不能标成未送达');
+    assert.equal(settled.cells[0].requeued, true);
+
+    // 交接那一帧才从旧轮次摘走：不留重复气泡。
+    state = conversationReducer(state, {
+        type: 'detach-steers', cellIds: carrying.map(({ cellId }) => cellId),
+    });
+    assert.deepEqual(state.turns[0].cells, []);
+    assert.deepEqual(state.turns[0].index, {}, '索引必须跟着一起清掉');
+});
+
+test('只有附件没有正文的追加消息同样能转投：正文为空，附件与附加块都在', () => {
+    const image = { path: 'C:\\tmp\\shot.png', name: 'shot.png', image: true, bytes: 1024 };
+    const attachmentBlock = '[结构化输入]\n已附加文件：C:\\tmp\\shot.png';
+    let state = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'open-turn', turnId: 'interaction-1', nowMs: 0,
+    });
+    state = conversationReducer(state, {
+        type: 'steer', text: '', nowMs: 5, attachments: [image], structuredInput: attachmentBlock,
+    });
+    // 附件气泡认得出来：正文为空、附件在，结构化块承担正文，否则后端会以「正文为空」拒收。
+    const carrying = requeueableSteers(state.turns);
+    assert.equal(carrying.length, 1);
+    assert.equal(carrying[0].text, '');
+    assert.deepEqual(carrying[0].attachments, [image]);
+    assert.equal(carrying[0].structuredInput, attachmentBlock);
+
+    // 服务端认领这种消息时用可见正文（空串）比对：认领之后仍然留在同一个格子上。
+    state = applyUserMessage(state, 0, 'user-part-1', attachmentBlock, 6);
+    assert.deepEqual(state.turns[0].cells.map(({ id }) => id), ['user-part-1']);
+    assert.deepEqual(state.turns[0].cells[0].attachments, [image]);
+});
+
+test('已注入本轮的追加消息同样可转投：那一轮被中断后要接着跑，且只按标识摘除', () => {
+    let state = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'open-turn', turnId: 'interaction-1', nowMs: 0,
+    });
+    state = conversationReducer(state, {
+        type: 'steer', text: '要接着跑的消息', nowMs: 5, attachments: [], structuredInput: '',
+    });
+    const [carried] = requeueableSteers(state.turns);
+    // 服务端边界到了，这一条被注入并认领：标识换成服务端标识，等待注入归零。
+    state = applyUserMessage(state, 0, 'user-part-1', '要接着跑的消息', 6);
+    assert.equal(pendingSteerCount(state.turns), 0, '已注入的不再算等待注入');
+    const afterClaim = requeueableSteers(state.turns);
+    assert.equal(afterClaim.length, 1, '被中断后它要接着跑，不能只转投还没被注入的那几条');
+    assert.equal(afterClaim[0].cellId, 'user-part-1', '交接按认领后的标识摘除');
+
+    state = conversationReducer(state, { type: 'detach-steers', cellIds: [carried.cellId] });
+    assert.equal(state.turns[0].cells.length, 1, '认领之后旧标识已经作废，按它摘不掉这一格');
+
+    state = conversationReducer(state, { type: 'detach-steers', cellIds: [afterClaim[0].cellId] });
+    assert.deepEqual(state.turns[0].cells, [], '交接用交接那一刻的标识摘除');
+});
+
+
+test('提交失败撤销乐观轮次：不再显示生成中，消息标为未送达', () => {
+    let state = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'submit', turnId: 'pending-1', text: '网关挂了', nowMs: 1, attachments: [],
+    });
+    assert.equal(state.turns[0].status, 'pending');
+
+    state = conversationReducer(state, {
+        type: 'submit-failed',
+        turnId: 'pending-1',
+        text: '网关挂了',
+        message: '网关不可达：io: Connection refused',
+        nowMs: 2,
+    });
+
+    assert.equal(state.turns[0].status, 'undelivered');
+    assert.equal(state.turns[0].elapsedMs, null);
+    assert.equal(state.turns[0].cells.find(({ role }) => role === 'user').undelivered, true);
+    assert.ok(
+        state.turns[0].cells.some(({ role, summary }) => role === 'notice' && summary.includes('网关不可达')),
+        '失败原因必须原样可见',
+    );
+    // 关键：这一轮从未到达后端，工作状态行不能再显示它在跑。
+    assert.equal(
+        state.turns.some(({ status }) => status === 'pending' || status === 'streaming'),
+        false,
+    );
+});
+
+test('运行中排队失败只回滚那一格，不新开轮次', () => {
+    let state = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'open-turn', turnId: 'interaction-1', nowMs: 0,
+    });
+    state = conversationReducer(state, {
+        type: 'steer', text: '排队失败的消息', nowMs: 5, attachments: [],
+    });
+    state = conversationReducer(state, {
+        type: 'submit-failed', turnId: null, text: '排队失败的消息', message: '网关不可达', nowMs: 6,
+    });
+
+    assert.equal(state.turns.length, 1, '排队不新开轮次，失败也不该新开');
+    assert.equal(state.turns[0].status, 'streaming', '正在跑的那一轮不受影响');
+    assert.equal(state.turns[0].cells[0].undelivered, true);
+    assert.equal(pendingSteerCount(state.turns), 0);
+});
+
+test('提交后等待首个流式帧期间耗时照常走字', () => {
+    const pending = { ...emptyTurn('turn-1', 1_000), status: 'pending' };
+    assert.equal(refreshLiveElapsed(pending, 4_000).elapsedMs, 3_000);
+    // 收口后的轮次不再被节拍改写：耗时以终态帧给出的结论为准。
+    const completed = { ...pending, status: 'completed', elapsedMs: 200 };
+    assert.equal(refreshLiveElapsed(completed, 4_000).elapsedMs, 200);
+});
+
+test('接管一条已在运行的轮次时，已耗时从服务端第一条事件起算', () => {
+    const attachedAtMs = 1_000;
+    const actuallyStartedAtMs = attachedAtMs - 1_200_000; // 这条轮次其实已经跑了 20 分钟
+    let state = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'open-turn', turnId: 'interaction-live', nowMs: attachedAtMs,
+    });
+    state = conversationReducer(state, {
+        type: 'frames',
+        nowMs: attachedAtMs,
+        frames: [{
+            kind: 'frame',
+            subscribeId: 'interaction:interaction-live',
+            eventType: 'wire_event',
+            payloadJson: JSON.stringify({
+                schemaVersion: '1',
+                eventId: 'event-1',
+                correlationId: 'user',
+                session: { sessionId: 'session-1' },
+                sequence: 1,
+                recordedAtMs: actuallyStartedAtMs,
+                kind: { type: 'userMessage', payload: { partId: 'user-1', content: '很早就发出的消息' } },
+            }),
+            cursor: null,
+            replay: true,
+        }],
+    });
+
+    assert.equal(state.turns[0].startedAtMs, actuallyStartedAtMs, '起点必须让位给服务端时间');
+    const ticked = refreshLiveElapsed(state.turns[0], attachedAtMs + 5_000);
+    assert.equal(ticked.elapsedMs, 1_205_000, '已耗时必须包含接管之前的那段时间');
+});
+
+test('收口时停在运行中的单元一并落地，不留光标与转圈', () => {
+    const turn = {
+        ...emptyTurn('turn-1', 1_000),
+        cells: [
+            { id: 'a', role: 'assistant', text: '', streaming: true },
+            { id: 'r', role: 'reasoning', text: '在想', done: false, durationMs: null, startedAtMs: 1 },
+            {
+                id: 't', role: 'tool', toolName: 'builtin.shell_command', toolKind: 'shell',
+                command: 'ls', arguments: '{}', status: 'running', summary: '', output: '',
+                durationMs: null, startedAtMs: 1, exitCode: null, jobId: null,
+                fullOutputAvailable: false, filesystemWritePerformed: false, editPath: null,
+                added: 0, removed: 0, diff: null,
+            },
+        ],
+        index: { a: 0, r: 1, t: 2 },
+    };
+
+    const interrupted = settleTurn(turn, 'interrupted', 3_000);
+    assert.deepEqual(interrupted.cells.map(({ id }) => id), ['a', 'r', 't'], '单元本身不该被删掉');
+    assert.equal(interrupted.cells[0].streaming, false, '中断后不该再留流式光标');
+    assert.equal(interrupted.cells[1].done, true, '思考要停掉转圈');
+    assert.equal(interrupted.cells[2].status, 'interrupted', '没落定结果的工具行不能永远在跑');
+
+    // 正常收口不动工具行的状态：它的结果由服务端回执给出。
+    const completed = settleTurn(turn, 'completed', 3_000);
+    assert.equal(completed.cells[0].streaming, false);
+    assert.equal(completed.cells[1].done, true);
+    assert.equal(completed.cells[2].status, 'running');
+});
+
+test('一轮里只留一根流式光标：切到工具或思考阶段就关掉', () => {
+    const assistantFrame = (partId, content, delta) => ({
+        kind: 'frame',
+        subscribeId: 'interaction:interaction-1',
+        eventType: 'wire_event',
+        payloadJson: JSON.stringify({
+            schemaVersion: '1',
+            eventId: `assistant-${partId}-${content.length}`,
+            correlationId: 'assistant',
+            session: { sessionId: 'session-1' },
+            sequence: 1,
+            recordedAtMs: 1_000,
+            kind: { type: 'assistantMessage', payload: { partId, messageId: partId, content, delta } },
+        }),
+        cursor: null,
+        replay: false,
+    });
+    const toolFrame = (partId) => ({
+        kind: 'frame',
+        subscribeId: 'interaction:interaction-1',
+        eventType: 'wire_event',
+        payloadJson: JSON.stringify({
+            schemaVersion: '1',
+            eventId: `tool-${partId}`,
+            correlationId: 'tool',
+            session: { sessionId: 'session-1' },
+            sequence: 2,
+            recordedAtMs: 2_000,
+            kind: {
+                type: 'toolCall',
+                payload: { partId, toolName: 'builtin.shell_command', toolKind: 'shell', summary: 'ls', argumentsSummary: '{}' },
+            },
+        }),
+        cursor: null,
+        replay: false,
+    });
+    const feed = (state, frames) => conversationReducer(state, { type: 'frames', nowMs: 3_000, frames });
+    const streamingIds = (state) =>
+        state.turns[0].cells.filter((cell) => cell.role === 'assistant' && cell.streaming).map(({ id }) => id);
+
+    let state = conversationReducer(INITIAL_CONVERSATION, { type: 'open-turn', turnId: 'interaction-1', nowMs: 0 });
+    state = feed(state, [assistantFrame('a', '第一段', true)]);
+    assert.deepEqual(streamingIds(state), ['a'], '正在写的那一段有光标');
+
+    state = feed(state, [toolFrame('t1')]);
+    assert.deepEqual(streamingIds(state), [], '工具开始执行后上一段正文不该再挂光标');
+
+    state = feed(state, [assistantFrame('b', '第二段', true)]);
+    assert.deepEqual(streamingIds(state), ['b'], '新一轮正文只保留自己的光标');
+
+    // 收尾消息（delta=false）自己就不带光标。
+    state = feed(state, [assistantFrame('b', '第二段完', false)]);
+    assert.deepEqual(streamingIds(state), []);
+});
+
+test('重放收尾负载里的生成指标：首字与速率不再依赖实时观测帧', () => {
+    // 观测帧只走广播、不进持久日志，因此重放时首字与速率只能来自收尾负载。
+    const openTurnState = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'open-turn', turnId: 'interaction-1', nowMs: 0,
+    });
+    // 用量事件是 durable 的：重放时它照常存在，速率的分子就来自它。
+    const usage = conversationReducer(openTurnState, {
+        type: 'frames',
+        nowMs: 9_000,
+        frames: [{
+            kind: 'frame',
+            subscribeId: 'interaction:interaction-1',
+            eventType: 'wire_event',
+            payloadJson: JSON.stringify({
+                schemaVersion: '1',
+                eventId: 'usage-1',
+                correlationId: 'usage',
+                session: { sessionId: 'session-1' },
+                sequence: 1,
+                recordedAtMs: 9_000,
+                kind: { type: 'usageUpdate', payload: { outputTokens: 4_600, inputTokens: 1_000 } },
+            }),
+            cursor: null,
+            replay: true,
+        }],
+    });
+    const completed = conversationReducer(usage, {
+        type: 'frames',
+        nowMs: 10_000,
+        frames: [{
+            kind: 'frame',
+            subscribeId: 'interaction:interaction-1',
+            eventType: 'turn_completed',
+            payloadJson: JSON.stringify({
+                response: '做完了。',
+                status: 'completed',
+                generation: { ttftMs: 8_460, decodeMs: 10_000 },
+            }),
+            cursor: null,
+            replay: true,
+        }],
+    });
+    const turn = completed.turns[0];
+    assert.equal(turn.firstTokenAvgMs, 8_460, '首字来自收尾负载');
+    // 出字 4600 ÷ 解码 10s = 460.0 tok/s，以十分之一为单位存储。
+    assert.equal(turn.generationTpsX10, 4_600, '速率按解码窗口与出字 token 数换算');
+    const summary = turn.cells.find((cell) => cell.role === 'summary');
+    assert.equal(summary.firstTokenAvgMs, 8_460, '指标要回填到分割线那一行');
+    assert.equal(summary.generationTpsX10, 4_600);
+    // 没有观测帧时这两个数照样成立：它们不该依赖实时帧。
+    assert.equal(completed.turns[0].firstTokenAvgMs !== null, true);
+});
+
+test('重放收尾负载里的用量快照：分割线与指标条重新有 token 读数', () => {
+    // 用量帧是 LiveOnly，重放历史时收不到；收尾负载另存了一份同形快照。
+    const openTurnState = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'open-turn', turnId: 'interaction-1', nowMs: 0,
+    });
+    const completed = conversationReducer(openTurnState, {
+        type: 'frames',
+        nowMs: 10_000,
+        frames: [{
+            kind: 'frame',
+            subscribeId: 'interaction:interaction-1',
+            eventType: 'turn_completed',
+            payloadJson: JSON.stringify({
+                response: '做完了。',
+                status: 'completed',
+                generation: { ttftMs: 8_460, decodeMs: 10_000 },
+                usage: {
+                    inputTokens: 24_000,
+                    cachedInputTokens: 96_000,
+                    cacheWriteInputTokens: 0,
+                    outputTokens: 4_600,
+                    reasoningOutputTokens: 0,
+                    currentContextTokens: 782_531,
+                },
+            }),
+            cursor: null,
+            replay: true,
+        }],
+    });
+    const turn = completed.turns[0];
+    assert.equal(turn.usage.currentContextTokens, 782_531, '上下文读数来自收尾负载');
+    const summary = turn.cells.find((cell) => cell.role === 'summary');
+    assert.notEqual(summary.usage, null, '分割线必须拿到本轮用量');
+    const text = turnSummaryText(summary);
+    for (const label of ['Token', '入', '缓存命中', '出', '推理', '命中率']) {
+        assert.ok(text.includes(label), `分割线缺 ${label} 一项：${text}`);
+    }
+});
+
+test('实时观测过的轮次收到收尾负载：用量只计一次', () => {
+    // 收尾负载的用量与最后一条流同源。这条流已经随 StreamingCompleted 并入累计，
+    // 收尾时再并一份，输入、输出与缓存命中全部翻倍，分割线的读数就是假的。
+    const openTurnState = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'open-turn', turnId: 'interaction-1', nowMs: 0,
+    });
+    const usagePayload = {
+        inputTokens: 24_000,
+        cachedInputTokens: 96_000,
+        outputTokens: 4_600,
+        currentContextTokens: 782_531,
+    };
+    const streamFolded = conversationReducer(openTurnState, {
+        type: 'frames',
+        nowMs: 9_000,
+        frames: [
+            {
+                kind: 'frame',
+                subscribeId: 'interaction:interaction-1',
+                eventType: 'wire_event',
+                payloadJson: JSON.stringify({
+                    schemaVersion: '1',
+                    eventId: 'usage-1',
+                    correlationId: 'usage',
+                    session: { sessionId: 'session-1' },
+                    sequence: 1,
+                    recordedAtMs: 9_000,
+                    kind: { type: 'usageUpdate', payload: usagePayload },
+                }),
+                cursor: null,
+                replay: false,
+            },
+            {
+                kind: 'frame',
+                subscribeId: 'interaction:interaction-1',
+                eventType: 'wire_event',
+                payloadJson: JSON.stringify({
+                    schemaVersion: '1',
+                    eventId: 'stream-completed-1',
+                    correlationId: 'generation',
+                    session: { sessionId: 'session-1' },
+                    sequence: 2,
+                    recordedAtMs: 9_500,
+                    kind: {
+                        type: 'turnLifecycle',
+                        payload: {
+                            partId: 'generation:stream:1',
+                            turnId: 'provider-stream',
+                            phase: 'regularTurn',
+                            status: 'completed',
+                            uiPhase: 'generation',
+                            kind: 'StreamingCompleted',
+                            title: '生成',
+                        },
+                    },
+                }),
+                cursor: null,
+                replay: false,
+            },
+        ],
+    });
+    const completed = conversationReducer(streamFolded, {
+        type: 'frames',
+        nowMs: 10_000,
+        frames: [{
+            kind: 'frame',
+            subscribeId: 'interaction:interaction-1',
+            eventType: 'turn_completed',
+            payloadJson: JSON.stringify({
+                response: '做完了。',
+                status: 'completed',
+                usage: { ...usagePayload, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 },
+            }),
+            cursor: null,
+            replay: false,
+        }],
+    });
+    const turn = completed.turns[0];
+    assert.equal(turn.usage.inputTokens, 24_000, '输入不得重复计入');
+    assert.equal(turn.usage.outputTokens, 4_600, '输出不得重复计入');
+    assert.equal(turn.usage.cacheReadInputTokens, 96_000, '缓存命中不得重复计入');
+});
+
+test('中断轮次也保留收尾负载里的首字与速率', () => {
+    const opened = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'open-turn', turnId: 'interaction-1', nowMs: 0,
+    });
+    // 中断轮次要留下分割线：先有一格助手正文，appendTurnSummary 才会认为这一轮真的干过活。
+    const working = conversationReducer(opened, {
+        type: 'frames',
+        nowMs: 1_000,
+        frames: [{
+            kind: 'frame',
+            subscribeId: 'interaction:interaction-1',
+            eventType: 'wire_event',
+            payloadJson: JSON.stringify({
+                schemaVersion: '1',
+                eventId: 'assistant-1',
+                correlationId: 'assistant',
+                session: { sessionId: 'session-1' },
+                sequence: 1,
+                recordedAtMs: 1_000,
+                kind: {
+                    type: 'assistantMessage',
+                    payload: { partId: 'assistant-1', messageId: 'assistant-1', content: '处理中', delta: false },
+                },
+            }),
+            cursor: null,
+            replay: true,
+        }],
+    });
+    const used = conversationReducer(working, {
+        type: 'frames',
+        nowMs: 9_000,
+        frames: [{
+            kind: 'frame',
+            subscribeId: 'interaction:interaction-1',
+            eventType: 'wire_event',
+            payloadJson: JSON.stringify({
+                schemaVersion: '1',
+                eventId: 'usage-1',
+                correlationId: 'usage',
+                session: { sessionId: 'session-1' },
+                sequence: 1,
+                recordedAtMs: 9_000,
+                kind: { type: 'usageUpdate', payload: { outputTokens: 4_600, inputTokens: 1_000 } },
+            }),
+            cursor: null,
+            replay: true,
+        }],
+    });
+    const interrupted = conversationReducer(used, {
+        type: 'frames',
+        nowMs: 10_000,
+        frames: [{
+            kind: 'frame',
+            subscribeId: 'interaction:interaction-1',
+            eventType: 'turn_completed',
+            payloadJson: JSON.stringify({
+                response: '本轮已由用户中断。',
+                status: 'interrupted',
+                generation: { ttftMs: 8_460, decodeMs: 10_000 },
+            }),
+            cursor: null,
+            replay: true,
+        }],
+    });
+    const turn = interrupted.turns[0];
+    assert.equal(turn.status, 'interrupted');
+    assert.equal(turn.firstTokenAvgMs, 8_460, '中断轮次也要留下已测到的首字');
+    assert.equal(turn.generationTpsX10, 4_600, '中断轮次也要按解码窗口算速率');
+    const summary = turn.cells.find((cell) => cell.role === 'summary');
+    assert.equal(summary.firstTokenAvgMs, 8_460, '指标要回填到中断轮次的分割线');
+    assert.equal(summary.generationTpsX10, 4_600);
+});
+
+/** 造一帧 wire 事件；订阅标识与轮次标识对齐，归属规则照生产路径走。 */
+function wireFrame(envelope) {
+    return {
+        kind: 'frame',
+        subscribeId: 'interaction:interaction-live',
+        eventType: 'wire_event',
+        payloadJson: JSON.stringify({
+            schemaVersion: '1',
+            eventId: `event-${envelope.sequence ?? 1}`,
+            correlationId: 'correlation-1',
+            session: { sessionId: 'session-1' },
+            sequence: envelope.sequence ?? 1,
+            recordedAtMs: envelope.recordedAtMs ?? 1_000,
+            kind: envelope.kind,
+        }),
+        cursor: null,
+        replay: false,
+    };
+}
+
+function openLiveTurn() {
+    return conversationReducer(INITIAL_CONVERSATION, {
+        type: 'open-turn', turnId: 'interaction-live', nowMs: 0,
+    });
+}
+
+test('轮次内部的阶段事件不结束整轮，窗口轮转失败只落一行历史', () => {
+    // 一次 run 里 StreamingStarted / StreamingCompleted / ProviderRetry / Compaction* 会反复出现，
+    // 拿它们收口会把还在执行的整轮提前判死：工作状态行消失、失败横幅常驻。
+    const state = conversationReducer(openLiveTurn(), {
+        type: 'frames',
+        nowMs: 1_000,
+        frames: [
+            wireFrame({
+                kind: { type: 'userMessage', payload: { partId: 'user-1', content: '整理文档' } },
+            }),
+            wireFrame({
+                sequence: 2,
+                kind: {
+                    type: 'turnLifecycle',
+                    payload: {
+                        partId: 'lifecycle:compaction:inline:session-1',
+                        turnId: 'CompactionFailed',
+                        phase: 'regularTurn',
+                        status: 'failed',
+                        uiPhase: 'history',
+                        kind: 'CompactionFailed',
+                        title: '窗口轮转',
+                        summary: '内联窗口轮转未完成：窗口轮转未通过门禁；当前任务历史保持不变',
+                    },
+                },
+            }),
+            wireFrame({
+                sequence: 3,
+                kind: {
+                    type: 'turnLifecycle',
+                    payload: {
+                        partId: 'generation:stream:1',
+                        turnId: 'provider-stream',
+                        phase: 'regularTurn',
+                        status: 'completed',
+                        uiPhase: 'generation',
+                        kind: 'StreamingCompleted',
+                        title: '生成',
+                    },
+                },
+            }),
+        ],
+    });
+
+    const turn = state.turns[0];
+    assert.equal(turn.status, 'streaming', '阶段事件不得把整轮收口');
+    assert.equal(turn.cells.some(({ role }) => role === 'failure'), false, '不该长出失败卡');
+    const history = turn.cells.find(({ role }) => role === 'history');
+    assert.equal(history.title, '窗口轮转');
+    assert.equal(history.status, '失败');
+});
+
+test('RunLifecycle 才是整轮终态，收口之后计划投影仍留在计划坞', () => {
+    let state = conversationReducer(openLiveTurn(), {
+        type: 'frames',
+        nowMs: 1_000,
+        frames: [
+            wireFrame({
+                kind: { type: 'userMessage', payload: { partId: 'user-1', content: '整理文档' } },
+            }),
+            wireFrame({
+                sequence: 2,
+                kind: {
+                    type: 'planUpdate',
+                    payload: {
+                        partId: 'plan:1',
+                        title: '整理文档',
+                        steps: [
+                            { step: '审计现状', status: 'completed' },
+                            { step: '改写章节', status: 'in_progress' },
+                        ],
+                    },
+                },
+            }),
+        ],
+    });
+    assert.equal(state.turns[0].status, 'streaming');
+    assert.equal(state.plan.total, 2, '运行中的计划投影照常给出');
+
+    state = conversationReducer(state, {
+        type: 'frames',
+        nowMs: 2_000,
+        frames: [wireFrame({
+            sequence: 3,
+            kind: {
+                type: 'turnLifecycle',
+                payload: {
+                    partId: 'run:1',
+                    turnId: 'run',
+                    phase: 'regularTurn',
+                    status: 'completed',
+                    kind: 'RunLifecycle',
+                    title: 'Run completed',
+                },
+            },
+        })],
+    });
+
+    assert.equal(state.turns[0].status, 'completed', 'RunLifecycle 收口整轮');
+    assert.equal(state.plan.total, 2, '计划坞是会话事实：收口后进度照常可见，不整块消失');
+    assert.equal(
+        state.turns[0].cells.some(({ role }) => role === 'plan'),
+        true,
+        '时间线里的计划单元是每次更新的原子记录，不随投影撤下',
+    );
+});
+
+test('中断结论已经在正文里时不再补同义的收尾提示', () => {
+    const openTurnState = () => conversationReducer(INITIAL_CONVERSATION, {
+        type: 'open-turn', turnId: 'interaction-1', nowMs: 0,
+    });
+    const interruptedFrame = (payload) => ({
+        type: 'frames',
+        nowMs: 2_000,
+        frames: [{
+            kind: 'frame',
+            subscribeId: 'interaction:interaction-1',
+            eventType: 'turn_completed',
+            payloadJson: JSON.stringify(payload),
+            cursor: null,
+            replay: false,
+        }],
+    });
+
+    // 服务端已经把结论写进助手正文：正文里只应出现一次这句话。
+    let stated = conversationReducer(openTurnState(), {
+        type: 'frames',
+        nowMs: 1_000,
+        frames: [{
+            kind: 'frame',
+            subscribeId: 'interaction:interaction-1',
+            eventType: 'wire_event',
+            payloadJson: JSON.stringify({
+                schemaVersion: '1',
+                eventId: 'assistant-final',
+                correlationId: 'assistant',
+                session: { sessionId: 'session-1' },
+                sequence: 2,
+                recordedAtMs: 1_000,
+                kind: {
+                    type: 'assistantMessage',
+                    payload: { partId: 'assistant:daemon-primary', messageId: 'm', content: '本轮已由用户中断。', delta: false },
+                },
+            }),
+            cursor: null,
+            replay: false,
+        }],
+    });
+    stated = conversationReducer(stated, interruptedFrame({ response: '本轮已由用户中断。', status: 'interrupted' }));
+    assert.equal(
+        stated.turns[0].cells.filter(({ role }) => role === 'notice').length,
+        0,
+        '正文已经说过的结论不该再补一条提示',
+    );
+    assert.equal(
+        stated.turns[0].cells.filter((cell) => (cell.text ?? '') === '本轮已由用户中断。').length,
+        1,
+    );
+
+    // 没有那条正文时（中断由状态帧给出）仍然要补结论。
+    const bare = conversationReducer(openTurnState(), interruptedFrame({ status: 'interrupted' }));
+    assert.equal(bare.turns[0].cells.filter(({ role }) => role === 'notice').length, 1);
+    assert.equal(bare.turns[0].status, 'interrupted');
+});
+
+test('只有传输层断连才判定为后端服务未启用', () => {
+    assert.equal(isBackendUnavailable('网关不可达：Connection refused (os error 10061)'), true);
+    assert.equal(
+        isBackendUnavailable(new Error('未连接到桌面宿主，也没有检测到本地调试桥（127.0.0.1:14222）。')),
+        true,
+    );
+    // 业务拒绝必须原样归类，否则每一个参数错误都会弹出「服务未启用」。
+    assert.equal(isBackendUnavailable('网关拒绝访问：凭据缺失或不匹配'), false);
+    assert.equal(isBackendUnavailable('网关不含该接口，后台服务版本可能过旧'), false);
+    assert.equal(isBackendUnavailable('消息内容不能为空'), false);
+});
+
+/** 造一个调试桥响应；`rpc` 与健康探测走同一套 JSON 外壳。 */
+function bridgeResponse(payload) {
+    return { ok: true, status: 200, json: async () => payload };
+}
+
+/** 只在本次用例内替换调试桥，返回恢复函数。 */
+function stubBridge(handler) {
+    const original = globalThis.fetch;
+    globalThis.fetch = async (_url, init) => {
+        const request = JSON.parse(init.body);
+        return bridgeResponse(handler(request.cmd, request.args));
+    };
+    return () => {
+        globalThis.fetch = original;
+    };
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test('拦截器：业务拒绝不弹窗，服务真不可用才弹窗', async () => {
+    const details = [];
+    const unsubscribe = ipc.onBackendUnavailable((detail) => details.push(detail));
+
+    // 1) 业务拒绝 + 健康探测回答「已连接」：不得弹统一弹窗。
+    let restore = stubBridge((cmd) =>
+        cmd === 'gateway_health'
+            ? { ok: true, data: { connected: true } }
+            : { ok: false, error: '车道标题不能为空' });
+    try {
+        await assert.rejects(ipc.renameSession('session-1', ''), /车道标题不能为空/);
+        await sleep(80); // 事实核验在后台完成，等它落地再断言
+        assert.deepEqual(details, [], '有服务在跑时，参数错误不能弹「服务未启用」');
+    } finally {
+        restore();
+    }
+
+    // 2) 业务措辞 + 健康探测回答「未连接」：事实核验命中，通知一次。
+    await sleep(1300); // 越过探测节流窗口，让这一次核验真的发生
+    restore = stubBridge((cmd) =>
+        cmd === 'gateway_health'
+            ? { ok: true, data: { connected: false } }
+            : { ok: false, error: '车道不存在' });
+    try {
+        await assert.rejects(ipc.renameSession('session-1', '新标题'), /车道不存在/);
+        await sleep(80);
+        assert.equal(details.length, 1, '判据来自探测事实，不依赖错误措辞');
+        // 弹窗要说明「哪一次调用失败」，而不是只给探测结论。
+        assert.match(details[0], /车道不存在/);
+    } finally {
+        restore();
+        unsubscribe();
+    }
+});
+
+test('攒批载荷按序展开，单帧载荷原样返回', () => {
+    const frame = (seq) => ({
+        kind: 'frame', subscribeId: 'interaction:a', eventType: 'wire_event',
+        payloadJson: String(seq), cursor: null,
+    });
+    const single = frame(1);
+    assert.deepEqual(expandStreamPayload(single), [single], '调试桥的单帧不能被包一层');
+
+    const batch = [frame(1), frame(2), frame(3)];
+    assert.deepEqual(expandStreamPayload({ batch }), batch, '批内顺序必须原样保留');
+    assert.deepEqual(expandStreamPayload({ batch: [] }), []);
+});
+
+test('整队转投并成一次提交：正文按用户先后拼接，附件去重，结构化块只留一个标题', () => {
+    const image = { path: 'C:\\tmp\\shot.png', name: 'shot.png', image: true, bytes: 1 };
+    const doc = { path: 'C:\\tmp\\spec.md', name: 'spec.md', image: false, bytes: 2 };
+    const merged = mergeCarriedPrompts([
+        { cellId: 'a', text: '第一条', attachments: [], structuredInput: '' },
+        { cellId: 'b', text: '第二条', attachments: [image], structuredInput: '[结构化输入]\n已附加文件：C:\\tmp\\shot.png' },
+        { cellId: 'c', text: '', attachments: [image, doc], structuredInput: '[结构化输入]\n已附加文件：C:\\tmp\\shot.png\n已附加文件：C:\\tmp\\spec.md' },
+    ]);
+    assert.equal(merged.text, '第一条\n\n第二条', '只有正文的排在一起，附件那条的空正文不产生空行');
+    assert.deepEqual(merged.attachments.map(({ path }) => path), ['C:\\tmp\\shot.png', 'C:\\tmp\\spec.md'], '同一附件只带一次');
+    assert.equal(
+        merged.structuredInput,
+        '\n\n[结构化输入]\n已附加文件：C:\\tmp\\shot.png\n已附加文件：C:\\tmp\\spec.md',
+        '标题只留一个，引用与附件行按原顺序去重合并',
+    );
+});
+
+test('全部只有附件没有正文时，合并结果仍是一段可提交的结构化输入', () => {
+    const first = { path: 'C:\\tmp\\a.png', name: 'a.png', image: true, bytes: 1 };
+    const second = { path: 'C:\\tmp\\b.png', name: 'b.png', image: true, bytes: 2 };
+    const merged = mergeCarriedPrompts([
+        { cellId: 'a', text: '', attachments: [first], structuredInput: '[结构化输入]\n已附加文件：C:\\tmp\\a.png' },
+        { cellId: 'b', text: '', attachments: [second], structuredInput: '[结构化输入]\n已附加文件：C:\\tmp\\b.png' },
+    ]);
+    assert.equal(merged.text, '', '没有正文');
+    assert.deepEqual(merged.attachments.map(({ path }) => path), ['C:\\tmp\\a.png', 'C:\\tmp\\b.png']);
+    // 正文为空时标题必须落在第 0 位：提交链路会裁掉前置空白，回放也只认这个形态。
+    assert.equal(merged.structuredInput, '[结构化输入]\n已附加文件：C:\\tmp\\a.png\n已附加文件：C:\\tmp\\b.png');
+    assert.equal(mergeCarriedPrompts([]), null, '空队列不产生提交');
+});
+
+/** 独立会话的一条用户消息帧：目标执行与 cron 的逐字稿就是这个形状。 */
+function sessionUserFrame(sessionId, partId, content, recordedAtMs) {
+    return {
+        kind: 'frame',
+        subscribeId: `session:${sessionId}`,
+        eventType: 'wire_event',
+        payloadJson: JSON.stringify({
+            schemaVersion: '1',
+            eventId: `event-${partId}`,
+            correlationId: 'turn',
+            session: { sessionId },
+            sequence: 1,
+            recordedAtMs,
+            kind: { type: 'userMessage', payload: { partId, content } },
+        }),
+        cursor: null,
+        replay: true,
+    };
+}
+
+test('独立会话里上一条收口后，新的用户消息开新轮', () => {
+    const sessionId = 'goal-session-g1';
+    // 第一轮：用户消息开场，随后收口。
+    const opened = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'frames',
+        nowMs: 1_000,
+        frames: [sessionUserFrame(sessionId, 'user:1', '第一阶段', 1_000)],
+    });
+    assert.equal(opened.turns.length, 1, '零轮次会话由用户消息开场');
+    const closed = conversationReducer(opened, {
+        type: 'frames',
+        nowMs: 2_000,
+        frames: [{
+            kind: 'frame',
+            subscribeId: `session:${sessionId}`,
+            eventType: 'turn_completed',
+            payloadJson: JSON.stringify({ response: '第一阶段完成', status: 'completed' }),
+            cursor: null,
+            replay: true,
+        }],
+    });
+    assert.equal(closed.turns[0].status, 'completed');
+
+    // 第二轮：同一个会话里再来一条用户消息，必须自成一轮，不能挤进上一轮。
+    const second = conversationReducer(closed, {
+        type: 'frames',
+        nowMs: 3_000,
+        frames: [sessionUserFrame(sessionId, 'user:2', '第二阶段', 3_000)],
+    });
+    assert.equal(second.turns.length, 2, '收口后的用户消息开新轮');
+    const round = second.turns[1];
+    assert.equal(round.status, 'streaming');
+    assert.deepEqual(round.cells.map((cell) => cell.text), ['第二阶段']);
+});
+
+test('结果不确定帧收口开放轮次，已收口的轮次不再被改写', () => {
+    const sessionId = 'goal-session-g2';
+    const opened = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'frames',
+        nowMs: 1_000,
+        frames: [sessionUserFrame(sessionId, 'user:1', '执行一次', 1_000)],
+    });
+    const uncertain = {
+        kind: 'frame',
+        subscribeId: `session:${sessionId}`,
+        eventType: 'turn_uncertain',
+        payloadJson: JSON.stringify({ classification: 'external_outcome_unknown', reason: 'process_interrupted' }),
+        cursor: null,
+        replay: true,
+    };
+    const closed = conversationReducer(opened, { type: 'frames', nowMs: 2_000, frames: [uncertain] });
+    const turn = closed.turns[0];
+    assert.equal(turn.status, 'failed', '不确定也是收口，不能一直停在运行态');
+    const notice = turn.cells.find((cell) => cell.role === 'notice');
+    assert.equal(notice.title, '结果不确定');
+    assert.match(notice.summary, /进程中断/);
+
+    // 迟到或重复的终态帧不得二次收口。
+    const repeated = conversationReducer(closed, { type: 'frames', nowMs: 3_000, frames: [uncertain] });
+    assert.equal(repeated.turns.length, 1);
+    assert.equal(repeated.turns[0].cells.filter((cell) => cell.role === 'notice').length, 1);
+});

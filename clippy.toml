@@ -1,0 +1,5 @@
+# Axon 内部协调器与 provider 运行时入口包含稳定的领域参数集合。
+# 阈值作为仓库级质量基线，避免通过函数级 allow 绕过 Clippy。
+too-many-arguments-threshold = 11
+large-error-threshold = 700
+enum-variant-size-threshold = 700

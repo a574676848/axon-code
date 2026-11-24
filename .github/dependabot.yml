@@ -1,0 +1,55 @@
+version: 2
+
+# 升级节奏与闸门：只走稳定版、每个生态只留一个待处理 PR。
+#
+# 分组粒度直接决定「分支与 CI 运行条数」：分成 patch / minor 两组，每个生态每轮就会多开
+# 一条 PR 分支，而每条 PR 分支都要跑一次三平台矩阵。这里统一收敛成单组 + 上限 1：
+# 一个生态任何时刻最多一条依赖分支，合入后由仓库设置自动删除。
+# 大版本不自动提（见 ignore），需维护者显式发起，避免把已绿的 master 顶红。
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 1
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      cargo-weekly:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+          - minor
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+
+  - package-ecosystem: npm
+    directory: "/crates/axon-desktop/ui"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 1
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      npm-monthly:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+          - minor
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 1
+    commit-message:
+      prefix: "chore(ci)"

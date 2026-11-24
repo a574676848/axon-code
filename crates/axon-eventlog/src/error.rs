@@ -1,0 +1,44 @@
+//! 事件日志错误。
+
+/// 事件日志的失败原因。
+#[derive(Debug, thiserror::Error)]
+pub enum EventLogError {
+    /// 文件系统操作失败。
+    #[error("事件日志 IO 失败：{0}")]
+    Io(#[from] std::io::Error),
+    /// 编解码失败（zstd 或 JSON）。
+    #[error("事件日志编解码失败：{0}")]
+    Codec(String),
+    /// 追加批次的首个序号与期望不一致，或批次内部不连续。
+    #[error("事件序号不连续：期望 {expected}，实际 {actual}")]
+    SequenceGap {
+        /// 期望的序号。
+        expected: u64,
+        /// 实际读到的序号。
+        actual: u64,
+    },
+    /// 调用方声明的下一个序号与文件尾不一致。
+    ///
+    /// 序号是「位置」而不是「标签」：只有正好接在已落盘的最后一条之后才允许写入。
+    /// 控制面水位是缓存，文件尾是位置权威，两者冲突时必须让写入失败，由上层回滚水位
+    /// 后重试，绝不能静默落盘造成读者看到的序号逆序。
+    #[error("事件序号与文件尾不一致：声明下一个序号 {expected}，文件尾 {actual}")]
+    SequenceTailMismatch {
+        /// 调用方声明要写入的下一个序号。
+        expected: u64,
+        /// 已落盘的最后一条记录序号；空日志为 0。
+        actual: u64,
+    },
+    /// 格式版本不被本构建支持。
+    #[error("事件日志格式版本不支持：{0}")]
+    UnsupportedVersion(u32),
+    /// 已提交内容损坏，不能安全解释。
+    #[error("事件日志已损坏：{0}")]
+    Corrupt(String),
+    /// 另一个写句柄已持有该日志。
+    #[error("事件日志已被其他写入者占用")]
+    Locked,
+    /// 追加空批次。
+    #[error("事件批次不能为空")]
+    EmptyBatch,
+}

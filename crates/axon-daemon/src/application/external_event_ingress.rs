@@ -1,0 +1,419 @@
+//! 外部 Watch/Event 适配器的统一 durable ingress。
+
+use super::EXTERNAL_EVENT_SOURCE_PREFIX;
+use super::interaction_ingress::{
+    ActiveTurnSteerSink, InteractionIngressReceipt, PrimaryTurnIngress,
+};
+use axon_crypto::sha256_hex;
+use axon_domain::{
+    AudienceContext, AudienceKind, DaemonSessionId, DisclosurePolicy, InteractionRecord,
+    InteractionSource, ReplyRoute, ScopeRef,
+};
+use axon_session::{InteractionStore, InteractionStoreError};
+use thiserror::Error;
+
+/// 默认允许的外部事件观测时钟偏差。
+pub const DEFAULT_EXTERNAL_EVENT_MAX_CLOCK_SKEW_MS: u64 = 5 * 60 * 1_000;
+/// 外部事件标识的最大字符数。
+pub const MAX_EXTERNAL_EVENT_ID_LENGTH: usize = 256;
+/// 单条外部事件允许携带的附件数量上限。
+pub const MAX_EXTERNAL_EVENT_ATTACHMENTS: usize = 8;
+/// 外部事件简报标题的最大字符数。
+pub const MAX_EXTERNAL_EVENT_TITLE_LENGTH: usize = 512;
+/// 外部事件业务关联键的最大字符数。
+pub const MAX_EXTERNAL_EVENT_CORRELATION_KEY_LENGTH: usize = 256;
+/// 外部事件显式模型引用的最大字符数。
+pub const MAX_EXTERNAL_EVENT_MODEL_LENGTH: usize = 256;
+/// 本轮推理强度的长度上限：档位是固定枚举，留出余量即可拒绝明显异常输入。
+const MAX_EXTERNAL_EVENT_REASONING_EFFORT_LENGTH: usize = 32;
+
+/// 外部 Watch/Event 适配器输入。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalEventEnvelope {
+    /// 外部来源渠道，例如 webhook provider 名称。
+    pub source_channel: String,
+    /// 发起这一轮的客户端（desktop / cli / tui / cron）；缺省表示没有客户端事实。
+    pub client: Option<String>,
+    /// 外部系统提供的稳定事件标识。
+    pub event_id: String,
+    /// 目标会话标识。
+    ///
+    /// 必须由调用方显式给出并在控制面已存在：服务端不按投递目标派生会话，也不隐式建会话。
+    /// `None` 只用于表达「来源没有提供会话」，这类事件会在校验阶段被拒。
+    pub session_id: Option<DaemonSessionId>,
+    /// 事件所属 Workspace。
+    pub workspace_id: String,
+    /// 适配器观测事件的时间。
+    pub observed_at_ms: u64,
+    /// 事件失效时间。
+    pub expires_at_ms: u64,
+    /// 交给主 turn 的有界文本内容。
+    pub content: String,
+    /// 事件简报标题；`None` 表示正文保持原始内容。
+    pub title: Option<String>,
+    /// 业务关联键；`Some` 时该事件参与 Gateway 滑动窗口防抖。
+    pub correlation_key: Option<String>,
+    /// 回复渠道，必须与来源渠道一致。
+    pub reply_channel: String,
+    /// 回复目标。
+    pub reply_destination: String,
+    /// 渠道入站阶段落地的本地附件绝对路径。
+    ///
+    /// 图片成为 vision 输入，文件成为可读附件；空表示纯文本事件。
+    pub attachments: Vec<String>,
+    /// 发起方为本轮显式指定的模型（已配置模型的 `name` 或 `id`）。
+    ///
+    /// 只有自带模型选择界面的客户端（例如桌面工作台）才会填写：它表达「这一轮就用
+    /// 这个模型」，优先于会话记录的模型与 `agent.default_model`。`None` 表示没有显式
+    /// 选择，模型完全由会话历史与配置决定。
+    pub model: Option<String>,
+    /// 本轮显式指定的推理强度（`agent.reasoning_effort` 的取值域）。
+    ///
+    /// 与 `model` 同源同生命周期：只跟随本轮 turn，不写进 `config.toml`。`None` 表示
+    /// 没有显式选择，强度完全由 `agent.reasoning_effort` 决定。
+    pub reasoning_effort: Option<String>,
+}
+
+/// 外部事件 ingress 错误。
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ExternalEventIngressError {
+    /// 输入字段为空或格式无效。
+    #[error("外部事件字段无效：{0}")]
+    InvalidInput(String),
+    /// 事件作用域与适配器绑定的 Workspace 不一致。
+    #[error("外部事件 Workspace scope 不匹配")]
+    WorkspaceMismatch,
+    /// 入站没有携带会话标识，或该会话在控制面不存在。
+    #[error("外部事件会话无效：{0}")]
+    SessionUnavailable(String),
+    /// 观测时间超出允许的时钟偏差。
+    #[error("外部事件观测时间超出允许时钟偏差")]
+    ClockSkew,
+    /// 事件已经过期。
+    #[error("外部事件已过期")]
+    Expired,
+    /// Interaction durable store 失败。
+    #[error(transparent)]
+    Store(#[from] InteractionStoreError),
+}
+
+/// 外部事件统一 durable ingress。
+#[derive(Debug, Clone)]
+pub struct ExternalEventIngress<S, K> {
+    adapter_id: String,
+    workspace_id: Option<String>,
+    max_clock_skew_ms: u64,
+    now_ms: u64,
+    ingress: PrimaryTurnIngress<S, K>,
+}
+
+impl<S, K> ExternalEventIngress<S, K>
+where
+    S: InteractionStore,
+    K: ActiveTurnSteerSink,
+{
+    /// 创建绑定单一 Workspace 的外部事件适配器。
+    pub fn new(
+        store: S,
+        steer_sink: K,
+        adapter_id: impl Into<String>,
+        workspace_id: impl Into<String>,
+        now_ms: u64,
+        lease_duration_ms: u64,
+    ) -> Result<Self, ExternalEventIngressError> {
+        Self::new_with_clock_skew(
+            store,
+            steer_sink,
+            adapter_id,
+            workspace_id,
+            now_ms,
+            lease_duration_ms,
+            DEFAULT_EXTERNAL_EVENT_MAX_CLOCK_SKEW_MS,
+        )
+    }
+
+    /// 创建可配置时钟偏差的外部事件适配器，便于不同 provider 的时钟策略。
+    pub fn new_with_clock_skew(
+        store: S,
+        steer_sink: K,
+        adapter_id: impl Into<String>,
+        workspace_id: impl Into<String>,
+        now_ms: u64,
+        lease_duration_ms: u64,
+        max_clock_skew_ms: u64,
+    ) -> Result<Self, ExternalEventIngressError> {
+        let workspace_id = non_empty(workspace_id.into(), "workspace_id")?;
+        Self::build(
+            store,
+            steer_sink,
+            adapter_id,
+            Some(workspace_id),
+            now_ms,
+            lease_duration_ms,
+            max_clock_skew_ms,
+        )
+    }
+
+    /// 创建不绑定 Workspace 的外部事件适配器。
+    ///
+    /// 适用于运行在 Home policy 上的 watcher：每个事件的 Workspace 由策略
+    /// 根据当前工作地点解析后写入 envelope，适配器本身不缓存项目 Workspace。
+    pub fn new_unbound(
+        store: S,
+        steer_sink: K,
+        adapter_id: impl Into<String>,
+        now_ms: u64,
+        lease_duration_ms: u64,
+    ) -> Result<Self, ExternalEventIngressError> {
+        Self::new_unbound_with_clock_skew(
+            store,
+            steer_sink,
+            adapter_id,
+            now_ms,
+            lease_duration_ms,
+            DEFAULT_EXTERNAL_EVENT_MAX_CLOCK_SKEW_MS,
+        )
+    }
+
+    /// 创建可配置时钟偏差且不绑定 Workspace 的适配器。
+    pub fn new_unbound_with_clock_skew(
+        store: S,
+        steer_sink: K,
+        adapter_id: impl Into<String>,
+        now_ms: u64,
+        lease_duration_ms: u64,
+        max_clock_skew_ms: u64,
+    ) -> Result<Self, ExternalEventIngressError> {
+        Self::build(
+            store,
+            steer_sink,
+            adapter_id,
+            None,
+            now_ms,
+            lease_duration_ms,
+            max_clock_skew_ms,
+        )
+    }
+
+    fn build(
+        store: S,
+        steer_sink: K,
+        adapter_id: impl Into<String>,
+        workspace_id: Option<String>,
+        now_ms: u64,
+        lease_duration_ms: u64,
+        max_clock_skew_ms: u64,
+    ) -> Result<Self, ExternalEventIngressError> {
+        let adapter_id = non_empty(adapter_id.into(), "adapter_id")?;
+        if now_ms == 0 {
+            return Err(ExternalEventIngressError::InvalidInput(
+                "now_ms 必须大于 0".to_owned(),
+            ));
+        }
+        if lease_duration_ms == 0 {
+            return Err(ExternalEventIngressError::InvalidInput(
+                "lease_duration_ms 必须大于 0".to_owned(),
+            ));
+        }
+        Ok(Self {
+            adapter_id,
+            workspace_id,
+            max_clock_skew_ms,
+            now_ms,
+            ingress: PrimaryTurnIngress::new(store, steer_sink, now_ms, lease_duration_ms),
+        })
+    }
+
+    /// 校验并提交一个外部事件。
+    pub fn submit(
+        &self,
+        event: ExternalEventEnvelope,
+    ) -> Result<InteractionIngressReceipt, ExternalEventIngressError> {
+        self.validate(&event)?;
+        let interaction = self.interaction(&event)?;
+        // 外部事件各自独立成轮，不合并进当前活动回合：route_input 会在有活动回合时
+        // 把输入 steer 进那一轮，导致不同渠道挤进同一轮 wire，也让同一 message_id 的
+        // 重复投递再追加一条 userMessage。独立成轮后由 durable 幂等键
+        // (source_channel, source_message_id) 统一去重。
+        self.ingress
+            .submit_new_interaction(&interaction)
+            .map_err(Into::into)
+    }
+
+    /// 解析目标会话：缺失即拒。存在性与归属由网关层查表确认，本层不做隐式建会话。
+    fn resolve_session_id(
+        &self,
+        event: &ExternalEventEnvelope,
+    ) -> Result<DaemonSessionId, ExternalEventIngressError> {
+        event.session_id.clone().ok_or_else(|| {
+            ExternalEventIngressError::SessionUnavailable("入站必须显式携带会话标识".to_owned())
+        })
+    }
+
+    fn validate(&self, event: &ExternalEventEnvelope) -> Result<(), ExternalEventIngressError> {
+        self.resolve_session_id(event)?;
+        let event_workspace_id = non_empty(event.workspace_id.clone(), "workspace_id")?;
+        if self
+            .workspace_id
+            .as_deref()
+            .is_some_and(|workspace_id| workspace_id != event_workspace_id)
+        {
+            return Err(ExternalEventIngressError::WorkspaceMismatch);
+        }
+        non_empty(event.source_channel.clone(), "source_channel")?;
+        non_empty(event.event_id.clone(), "event_id")?;
+        non_empty(event.content.clone(), "content")?;
+        bounded_field(&event.event_id, "event_id", MAX_EXTERNAL_EVENT_ID_LENGTH)?;
+        if let Some(title) = event.title.as_deref() {
+            bounded_field(title, "title", MAX_EXTERNAL_EVENT_TITLE_LENGTH)?;
+        }
+        if let Some(correlation_key) = event.correlation_key.as_deref() {
+            bounded_field(
+                correlation_key,
+                "correlation_key",
+                MAX_EXTERNAL_EVENT_CORRELATION_KEY_LENGTH,
+            )?;
+        }
+        validate_attachments(&event.attachments)?;
+        if let Some(model) = event.model.as_deref() {
+            if model.trim().is_empty() {
+                return Err(ExternalEventIngressError::InvalidInput(
+                    "model 不能为空".to_owned(),
+                ));
+            }
+            bounded_field(model.trim(), "model", MAX_EXTERNAL_EVENT_MODEL_LENGTH)?;
+        }
+        if let Some(reasoning_effort) = event.reasoning_effort.as_deref() {
+            if reasoning_effort.trim().is_empty() {
+                return Err(ExternalEventIngressError::InvalidInput(
+                    "reasoning_effort 不能为空".to_owned(),
+                ));
+            }
+            bounded_field(
+                reasoning_effort.trim(),
+                "reasoning_effort",
+                MAX_EXTERNAL_EVENT_REASONING_EFFORT_LENGTH,
+            )?;
+        }
+        non_empty(event.reply_channel.clone(), "reply_channel")?;
+        non_empty(event.reply_destination.clone(), "reply_destination")?;
+        if event.reply_channel != event.source_channel {
+            return Err(ExternalEventIngressError::InvalidInput(
+                "reply_channel 必须与 source_channel 一致".to_owned(),
+            ));
+        }
+        if event.expires_at_ms <= self.now_ms || event.expires_at_ms <= event.observed_at_ms {
+            return Err(ExternalEventIngressError::Expired);
+        }
+        let distance = event.observed_at_ms.abs_diff(self.now_ms);
+        if distance > self.max_clock_skew_ms {
+            return Err(ExternalEventIngressError::ClockSkew);
+        }
+        Ok(())
+    }
+
+    fn interaction(
+        &self,
+        event: &ExternalEventEnvelope,
+    ) -> Result<InteractionRecord, ExternalEventIngressError> {
+        let workspace_id = event.workspace_id.trim();
+        let scope = ScopeRef::workspace(workspace_id.to_owned())
+            .map_err(|error| ExternalEventIngressError::InvalidInput(error.to_string()))?;
+        let source_key = format!(
+            "{EXTERNAL_EVENT_SOURCE_PREFIX}{}:{}:{}:{}",
+            self.adapter_id, event.source_channel, workspace_id, event.event_id
+        );
+        let digest = sha256_hex(source_key.as_bytes());
+        let source = InteractionSource::new(
+            event.source_channel.clone(),
+            format!("{EXTERNAL_EVENT_SOURCE_PREFIX}{digest}"),
+        )
+        .and_then(|source| match event.client.as_deref().map(str::trim) {
+            Some(client) if !client.is_empty() => source.with_client(client),
+            // 外部事件没有人类发送端：缺省按渠道本身标注，webhook 渠道即 client=webhook。
+            _ => source.with_client(event.source_channel.trim()),
+        })
+        .map_err(|error| ExternalEventIngressError::InvalidInput(error.to_string()))?;
+        // 交互标识是服务端生成的 ULID：它不携带来源、也不由事件内容派生，
+        // 幂等完全由 (source_channel, source_message_id) 唯一键承担。
+        let interaction_id = axon_session::new_interaction_id();
+        let route = ReplyRoute::new(event.reply_channel.clone(), event.reply_destination.clone())
+            .map_err(|error| ExternalEventIngressError::InvalidInput(error.to_string()))?;
+        let mut record = InteractionRecord::new(
+            self.resolve_session_id(event)?,
+            interaction_id,
+            source,
+            scope,
+            AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly),
+            route,
+            event.content.clone(),
+            event.observed_at_ms,
+        )
+        .map_err(|error| ExternalEventIngressError::InvalidInput(error.to_string()))?;
+        // 附件只描述输入素材，原样带到 Provider turn 的 transportContext.files。
+        record.attachments = event.attachments.clone();
+        // 显式模型只跟随本轮 turn：它不落 Workspace 或 session 身份。
+        record.model = event
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+            .map(ToOwned::to_owned);
+        record.reasoning_effort = event
+            .reasoning_effort
+            .as_deref()
+            .map(str::trim)
+            .filter(|effort| !effort.is_empty())
+            .map(ToOwned::to_owned);
+        Ok(record)
+    }
+}
+
+fn non_empty(value: String, field: &str) -> Result<String, ExternalEventIngressError> {
+    if value.trim().is_empty() {
+        return Err(ExternalEventIngressError::InvalidInput(format!(
+            "{field} 不能为空"
+        )));
+    }
+    Ok(value)
+}
+
+fn bounded_field(
+    value: &str,
+    field: &str,
+    max_chars: usize,
+) -> Result<(), ExternalEventIngressError> {
+    if value.chars().count() > max_chars {
+        return Err(ExternalEventIngressError::InvalidInput(format!(
+            "{field} 不能超过 {max_chars} 个字符"
+        )));
+    }
+    Ok(())
+}
+
+/// 校验附件清单：数量有界，路径必须指向真实存在的文件。
+fn validate_attachments(attachments: &[String]) -> Result<(), ExternalEventIngressError> {
+    if attachments.len() > MAX_EXTERNAL_EVENT_ATTACHMENTS {
+        return Err(ExternalEventIngressError::InvalidInput(format!(
+            "单条事件最多携带 {MAX_EXTERNAL_EVENT_ATTACHMENTS} 个附件"
+        )));
+    }
+    for path in attachments {
+        let trimmed = path.trim();
+        if trimmed.is_empty() {
+            return Err(ExternalEventIngressError::InvalidInput(
+                "附件路径不能为空".to_owned(),
+            ));
+        }
+        if !std::path::Path::new(trimmed).is_file() {
+            return Err(ExternalEventIngressError::InvalidInput(format!(
+                "附件不存在或不是文件：{trimmed}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "external_event_ingress_tests.rs"]
+mod tests;

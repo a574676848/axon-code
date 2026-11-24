@@ -1,0 +1,422 @@
+import builtinLabels from '../../../../../axon-display/src/builtin_tool_labels.json' with { type: 'json' };
+import toolRowRules from '../../../../../axon-display/src/tool_row_rules.json' with { type: 'json' };
+
+const BUILTIN_LABELS: Readonly<Record<string, string>> = builtinLabels;
+const KIND_LABELS: Record<string, string> = {
+    read_file: '读取', write_file: '写入', search: builtinLabels.search, glob: '匹配',
+    edit: '编辑', shell: '执行', job: '作业', mcp: 'MCP',
+    invoke_skill: '技能', memory_write: '记忆写入', memory_search: '记忆检索',
+    history: '历史', notes: '便签', task_tool: '任务', subagent: '子代理',
+    get_context_remaining: builtinLabels.get_context_remaining,
+    new_context: builtinLabels.new_context,
+    list_mcp_resources: builtinLabels.list_mcp_resources,
+    read_mcp_resource: builtinLabels.read_mcp_resource,
+    update_plan: builtinLabels.update_plan,
+};
+const NAME_KINDS: Record<string, string> = {
+    read_file: 'read_file', write_file: 'write_file', edit_file: 'edit',
+    read: 'read_file', write: 'write_file', edit: 'edit',
+    apply_patch: 'edit', memory_write: 'memory_write', memory_search: 'memory_search',
+    shell: 'shell', shell_command: 'shell', exec_command: 'shell', bash: 'shell', write_stdin: 'shell',
+    invoke_skill: 'invoke_skill', search: 'search', glob: 'glob', history: 'history',
+};
+const FAILED_STATUSES = new Set(['failed', 'error', 'rejected', 'interrupted', 'cancelled', 'canceled']);
+
+/** 原始工具名优先区分记忆、便签与文件；MCP 保留现有前缀。 */
+export function toolLabel(toolKind: string, toolName: string): string {
+    const kind = toolKind.toLowerCase();
+    const rawName = toolName.trim();
+    if (kind === 'mcp' || rawName.startsWith('mcp__')) return 'MCP';
+    const name = rawName.replace(/^builtin\./, '');
+    if (Object.hasOwn(BUILTIN_LABELS, name)) return BUILTIN_LABELS[name];
+    if (Object.hasOwn(NAME_KINDS, name)) return KIND_LABELS[NAME_KINDS[name]];
+    // 名称存在但未识别时保留原名，避免把新工具误标成文件或便签写入。
+    if (rawName) return rawName;
+    return Object.hasOwn(KIND_LABELS, kind) ? KIND_LABELS[kind] : '工具';
+}
+
+export function toolFailed(status: string, exitCode: number | null): boolean {
+    return (exitCode !== null && exitCode !== 0) || FAILED_STATUSES.has(status.toLowerCase());
+}
+
+/** Shell 参数单独提取命令，JSON 参数仍在输入区完整展示。 */
+export function shellCommand(value: string): string | null {
+    try {
+        const parsed: unknown = JSON.parse(value);
+        if (typeof parsed !== 'object' || parsed === null) return null;
+        const args = parsed as Record<string, unknown>;
+        const command = args.command ?? args.cmd;
+        return typeof command === 'string' ? command : null;
+    } catch {
+        return null;
+    }
+}
+
+/** 文件工具的参数字段可信；纯路径参数也支持无目录的文件名。 */
+export function extractFilePath(value: string): string | null {
+    const text = value.trim();
+    if (!text) return null;
+    try {
+        const parsed: unknown = JSON.parse(text);
+        if (typeof parsed === 'object' && parsed !== null) {
+            for (const key of ['path', 'file_path', 'filePath', 'file', 'filename']) {
+                const candidate = (parsed as Record<string, unknown>)[key];
+                if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+            }
+        }
+        return null;
+    } catch {
+        return !/[\r\n]/.test(text) && !text.startsWith('{') ? text : null;
+    }
+}
+
+/**
+ * 模型偶尔把多行文本直接塞进 JSON 字符串，换行与制表符没有转义。
+ * 严格解析失败时，只把字符串内部的裸控制字符补成转义，再试一次；
+ * 字符串本身没有闭合时返回空串，保持原文，不猜结构。
+ */
+function escapeStringControls(text: string): string {
+    let repaired = '';
+    let inString = false;
+    let escaped = false;
+    for (const char of text) {
+        if (inString) {
+            if (escaped) {
+                repaired += char;
+                escaped = false;
+                continue;
+            }
+            if (char === '\\') {
+                repaired += char;
+                escaped = true;
+                continue;
+            }
+            if (char === '"') {
+                repaired += char;
+                inString = false;
+                continue;
+            }
+            if (char === '\n') {
+                repaired += '\\n';
+                continue;
+            }
+            if (char === '\r') {
+                repaired += '\\r';
+                continue;
+            }
+            if (char === '\t') {
+                repaired += '\\t';
+                continue;
+            }
+            if (char === '\b') {
+                repaired += '\\b';
+                continue;
+            }
+            if (char === '\f') {
+                repaired += '\\f';
+                continue;
+            }
+            repaired += char;
+            continue;
+        }
+        if (char === '"') inString = true;
+        repaired += char;
+    }
+    return inString || escaped ? '' : repaired;
+}
+
+/** 严格解析优先；失败时只修复字符串内的裸控制字符。 */
+function parseToolJson(text: string): unknown | null {
+    try {
+        return JSON.parse(text) as unknown;
+    } catch {
+        const repaired = escapeStringControls(text);
+        if (repaired.length === 0) return null;
+        try {
+            return JSON.parse(repaired) as unknown;
+        } catch {
+            return null;
+        }
+    }
+}
+
+/** shell 工具回执的字段分隔：只在这些键前换行，不改写字段值。 */
+const SHELL_RECEIPT_FIELDS =
+    / (exit_code=|timed_out=|output_handler=|output_tokens=|output_savings_pct=|stdout_truncated=|stdout_chars=|stderr_truncated=|stderr_chars=|full_output_available=|full_output_truncated=|full_output_failed=|stdout=|stderr=)/g;
+
+/**
+ * 回执里的执行细节字段：处理器、预算、截断标记、原始字符数。
+ *
+ * 它们对「命令说了什么」没有信息量，却会把正文压到十几行之下，因此界面不铺；
+ * 其中真正影响结论的两项（是否截断、归档是否可用）单独折成一句说明。
+ */
+const SHELL_RECEIPT_META_KEYS = new Set([
+    'shell command',
+    'job output job_id',
+    'elapsed_ms',
+    'exit_code',
+    'timed_out',
+    'output_handler',
+    'output_tokens',
+    'output_savings_pct',
+    'stdout_truncated',
+    'stdout_chars',
+    'stderr_truncated',
+    'stderr_chars',
+    'full_output_available',
+    'full_output_truncated',
+    'full_output_failed',
+    'artifact_path',
+]);
+
+/**
+ * 以这些字段开头的文本就是命令/作业回执。
+ *
+ * 三种头都认：`shell command=`（前台命令）、`job output job_id=`（读作业）、
+ * `output_handler=`（处理器在前的新格式）。判据取自回执自身，不查工具名。
+ */
+const SHELL_RECEIPT_HEAD =
+    /^(shell command=|job output job_id=|output_handler=|full_output_available=|stdout_chars=)/;
+
+/** 回执首行是否 shell 回执。 */
+export function isShellReceipt(value: string): boolean {
+    return SHELL_RECEIPT_HEAD.test(value.trimStart());
+}
+
+/** 把回执按字段拆行；PowerShell 的裸 CR 一并归一成 LF。 */
+function shellReceiptLines(value: string): string[] {
+    return value
+        .replace(/\r\n?/g, '\n')
+        .replace(SHELL_RECEIPT_FIELDS, '\n$1')
+        .split('\n');
+}
+
+/** 读一行的元数据键名；不是元数据行时返回 null。 */
+function metaKeyOf(line: string): string | null {
+    const match = /^([a-z_ ]+)=/.exec(line);
+    if (match === null) return null;
+    return SHELL_RECEIPT_META_KEYS.has(match[1]) ? match[1] : null;
+}
+
+/** 从 `stdout_chars=463/12000` 这种读数里取原始长度；取不到返回 null。 */
+function originalChars(chars: string): number | null {
+    const total = chars.split('/').pop();
+    const parsed = Number(total);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+/**
+ * 只保留命令真正写出的正文。
+ *
+ * 回执把执行细节与输出挤在同一行里，铺出来是十行元数据压着一行结果。这里按字段
+ * 归类：`stdout=` 与 `stderr=` 之后的内容原样保留（含其中的空行与换行），其余键值
+ * 一律不展示，命令本身由「命令」区块单独承担。
+ *
+ * 但「看到的不是全部」必须说出来：截断与归档缺失各折成末尾一句说明，否则界面在
+ * 无声地撒谎。
+ */
+export function shellOutputBody(value: string): string {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    let stream: 'stdout' | 'stderr' = 'stdout';
+    let stdoutTruncated = false;
+    let stderrTruncated = false;
+    let stdoutOriginal: number | null = null;
+    let archiveUnavailable = false;
+
+    for (const line of shellReceiptLines(value)) {
+        if (line.startsWith('stdout=')) {
+            stream = 'stdout';
+            stdout.push(line.slice('stdout='.length));
+            continue;
+        }
+        if (line.startsWith('stderr=')) {
+            stream = 'stderr';
+            const rest = line.slice('stderr='.length);
+            if (rest.length > 0) stderr.push(rest);
+            continue;
+        }
+        const key = metaKeyOf(line);
+        if (key !== null) {
+            if (key === 'stdout_truncated') stdoutTruncated = line.endsWith('=true');
+            if (key === 'stderr_truncated') stderrTruncated = line.endsWith('=true');
+            if (key === 'stdout_chars') stdoutOriginal = originalChars(line.slice(key.length + 1));
+            if (key === 'full_output_available') archiveUnavailable = line.endsWith('=false');
+            continue;
+        }
+        // 其余行是当前这一路正文的续行；首行落在元数据之前时按 stdout 处理。
+        (stream === 'stdout' ? stdout : stderr).push(line);
+    }
+
+    const sections: string[] = [];
+    const stdoutText = stdout.join('\n').trimEnd();
+    const stderrText = stderr.join('\n').trimEnd();
+    if (stdoutText.length > 0) sections.push(stdoutText);
+    if (stderrText.length > 0) {
+        if (sections.length > 0) sections.push('');
+        sections.push('--- stderr ---', stderrText);
+    }
+
+    const notes: string[] = [];
+    if (stdoutTruncated) {
+        notes.push(
+            stdoutOriginal === null
+                ? '（stdout 已截断）'
+                : `（stdout 已截断，原文 ${stdoutOriginal} 字符）`,
+        );
+    }
+    if (stderrTruncated) notes.push('（stderr 已截断）');
+    if (archiveUnavailable) notes.push('（完整输出归档不可用）');
+    if (notes.length > 0) {
+        if (sections.length > 0) sections.push('');
+        sections.push(...notes);
+    }
+
+    return sections.length > 0 ? sections.join('\n') : '（无输出）';
+}
+
+/** JSON 只调整缩进，Shell 与其他文本不改写原始语义。 */
+export function formatToolContent(value: string): { code: string; language: string | null } {
+    const text = value.trim();
+    if (isShellReceipt(text)) {
+        return { code: shellOutputBody(value), language: 'shell' };
+    }
+    if (text.startsWith('{') || text.startsWith('[')) {
+        const parsed = parseToolJson(text);
+        if (parsed !== null) {
+            return { code: JSON.stringify(parsed, null, 2), language: 'json' };
+        }
+    }
+    return { code: value, language: null };
+}
+
+/** 便签写入回执的开头：整文件写入与追加两种回执都以它起句。 */
+const NOTES_WRITE_RECEIPT_PREFIXES = ['便签已整文件写入：', '便签已追加：'];
+
+/**
+ * 便签写入回执里的正文。
+ *
+ * 回执行在最前，这次真正写进便签的正文以空行分隔跟在后面（见工具侧的
+ * `notes_write_summary`）。拆开是为了让界面把正文按「便签内容」摊开、回执只留一行
+ * 说明；判据因此必须严格：首段是已知的回执句式，空行之后确实还有内容。超过内联
+ * 上限的回执不带空行分隔，这里返回 null，界面照旧按回执原文展示。
+ */
+export function notesWriteOutput(value: string): { receipt: string; body: string } | null {
+    const text = value.replace(/\r\n?/g, '\n');
+    const split = text.indexOf('\n\n');
+    if (split < 0) return null;
+    const receipt = text.slice(0, split).trim();
+    if (!NOTES_WRITE_RECEIPT_PREFIXES.some((prefix) => receipt.startsWith(prefix))) return null;
+    const body = text.slice(split + 2);
+    return body.trim().length > 0 ? { receipt, body } : null;
+}
+
+/** 便签行展开态的两块内容。 */
+export interface NotesRowContent {
+    /** 便签正文：读取便签的输出本身，或写入 / 追加回执里拆出的原文。 */
+    body: string | null;
+    /** 一行回执说明（路径与体量）；读取便签没有独立回执，超限与失败时回执就是全部内容。 */
+    receipt: string | null;
+}
+
+/**
+ * 便签行的展开内容。
+ *
+ * 判据只有一条：这段输出是不是「便签正文」。读取便签的输出就是正文；写入与追加的回执
+ * 把正文附在回执之后，能拆出正文就拆，拆不出（正文超限、写入失败、空便签）就把回执
+ * 原样当说明展示，绝不把说明当正文渲染。其余便签工具（列举、检索）的输出是行号表格，
+ * 交给原来的输出块。
+ */
+export function notesRowContent(label: string, output: string): NotesRowContent {
+    const empty: NotesRowContent = { body: null, receipt: null };
+    if (output.trim().length === 0) return empty;
+    if (label === '读取便签') return { body: output, receipt: null };
+    if (label !== '写入便签') return empty;
+    return notesWriteOutput(output) ?? { body: null, receipt: output };
+}
+
+/** 折叠态专用规则：从调用参数里取出这一行最该看见的那一项事实。 */
+interface ToolRowRule {
+    /** 依次尝试的参数名；取第一个非空值。 */
+    fields?: string[];
+    /** 命中后的文案模板，`{value}` 替换为字段值。 */
+    template?: string;
+    /** 参数对用户没有信息量：收起时不追加任何内容。 */
+    silent?: boolean;
+}
+
+/*
+ * 规则表与 TUI 渠道共用 `axon-display` 的 `tool_row_rules.json`：
+ * 这些工具的参数 JSON 里只有一项对用户有意义，其余是分页、预算一类执行细节，
+ * 收起时摆了也只是噪声。
+ */
+const TOOL_ROW_RULES: Readonly<Record<string, ToolRowRule>> = toolRowRules.targets;
+
+/** 工具名去掉命名空间与大小写差异后的裸名。 */
+function bareToolName(toolName: string): string {
+    return toolName.trim().replace(/^builtin\./, '').toLowerCase();
+}
+
+/** MCP 工具名的服务名与工具名，形态为 `mcp__server__tool`。 */
+function mcpToolParts(toolName: string): { server: string; tool: string } | null {
+    const match = /^mcp__(.+?)__(.+)$/.exec(toolName.trim());
+    return match === null ? null : { server: match[1], tool: match[2] };
+}
+
+/** MCP 折叠态：服务名圆点拼工具名；不是 `mcp__` 形态时不接管这一行。 */
+function mcpRowTitle(toolKind: string, toolName: string): string | null {
+    if (toolKind.toLowerCase() !== 'mcp' && !toolName.trim().startsWith('mcp__')) return null;
+    const parts = mcpToolParts(toolName);
+    return parts === null ? null : `${parts.server} · ${parts.tool}`;
+}
+
+/** 逐字段取第一个非空值并折成单行；参数缺失、非字符串或 JSON 未完整时返回 null。 */
+function argumentField(argumentsJson: string, fields: string[]): string | null {
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(argumentsJson);
+    } catch {
+        return null;
+    }
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const args = parsed as Record<string, unknown>;
+    for (const field of fields) {
+        const value = args[field];
+        if (typeof value === 'number') return String(value);
+        if (typeof value === 'string' && value.trim().length > 0) {
+            return value.trim().split(/\s+/).join(' ');
+        }
+    }
+    return null;
+}
+
+/**
+ * 工具行折叠态的主文本。
+ *
+ * 顺序固定：模型自述的目的 → 该工具最该看见的那一项参数 → 文件路径 → 命令投影 → 结果摘要。
+ * 返回 null 表示这一行收起时不追加任何内容（例如查看剩余上下文：参数本身没有信息量），
+ * 此时行头只留图标与类别前缀。原始参数在展开态完整可见，事实不丢。
+ */
+export function toolRowTitle(cell: {
+    intent: string;
+    toolKind: string;
+    toolName: string;
+    arguments: string;
+    command: string;
+    editPath: string | null;
+    summary: string;
+}): string | null {
+    const intent = cell.intent.trim();
+    if (intent.length > 0) return intent;
+    const mcp = mcpRowTitle(cell.toolKind, cell.toolName);
+    if (mcp !== null) return mcp;
+    const rule = TOOL_ROW_RULES[bareToolName(cell.toolName)];
+    if (rule?.silent === true) return null;
+    if (rule?.fields !== undefined) {
+        const value = argumentField(cell.arguments, rule.fields);
+        if (value !== null) {
+            return rule.template === undefined ? value : rule.template.replace('{value}', value);
+        }
+    }
+    return cell.editPath ?? (cell.command.length > 0 ? cell.command : cell.summary);
+}

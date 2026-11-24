@@ -1,0 +1,31 @@
+[package]
+name = "axon-memory"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+axon-client-identity = { path = "../axon-client-identity" }
+axon-crypto = { path = "../axon-crypto" }
+axon-domain = { path = "../axon-domain" }
+hnsw_rs = { version = "0.3.4", optional = true }
+rusqlite = { workspace = true }
+serde_json.workspace = true
+tantivy = { version = "0.26", optional = true }
+
+[features]
+default = ["memory-core"]
+memory-core = []
+memory-text-index = ["dep:tantivy"]
+memory-vector-index = ["dep:hnsw_rs"]
+memory-indexes = ["memory-text-index", "memory-vector-index"]
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+[dev-dependencies]
+axon-test-support = { path = "../axon-test-support" }

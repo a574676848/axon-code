@@ -1,0 +1,133 @@
+# CLI 命令参考
+
+命令行帮助是参数与可用子命令的权威来源：
+
+```bash
+axon --help
+axon <COMMAND> --help
+```
+
+## 1. 任务交互与执行
+
+```bash
+# 启动终端全屏交互界面 (TUI)
+axon
+axon "解释当前工作区"
+
+# 启动跨平台桌面工作台
+axon desktop
+
+# 非交互执行单次任务 (适合脚本与自动化流程)
+axon run "为 API 添加错误处理"
+axon run --format json "检查测试失败原因"
+
+# 沿用当前工作区会话继续任务
+axon run --continue "继续处理上一轮任务"
+
+# 请求停止运行中的会话
+axon stop
+axon stop --session <SESSION_ID>
+```
+
+无子命令时，位置参数直接作为本轮 Personal Agent 请求执行，进入交互式 TUI。使用 `axon run` 可显式控制模型、会话、文件附件、工具白名单与结构化输出格式（Text 或 Json）。
+
+## 2. 配置与环境初始化
+
+```bash
+axon setup                             # 交互式初始化向导
+axon config --help                     # 查看配置项（get / set / validate / edit 等）
+axon config validate                   # 校验当前 config.toml 合法性
+axon providers                         # 列出已配置的 Provider 状态
+axon models                            # 查询可用模型列表
+axon auth --help                       # 管理认证状态与登录
+axon doctor                            # 运行系统全链路健康检查
+axon doctor --check runtime --fix      # 检测并自动修复运行态环境
+axon gateway --help                    # 管理 Gateway 多 Key 凭据（key 子命令）
+```
+
+`setup` 在本地验证并原子写入配置；手工修改 `config.toml` 或相邻 `.env` 后，后续命令执行时会自动重新加载。
+
+## 3. 扩展与工具生态
+
+```bash
+axon mcp --help                        # 管理 MCP 服务器（list / get / add / remove / login / logout）
+axon skills                            # 查看当前加载的技能列表
+axon skills --summary                  # 查看已加载技能摘要
+axon lsp --help                        # LSP 语言服务与代码诊断入口
+```
+
+工具调用受工具自身的 `Allowed` / `Forbidden` 二态执行权限、运行时安全边界和显式 `--tool` 白名单约束。图像生成与处理等高级能力由对应 Skill 或连接器按需提供，不占用 CLI 顶层子命令。
+
+## 4. 后台常驻与守护服务 (Daemon)
+
+```bash
+# 系统服务管理（安装器已自动注册，服务损坏时可显式修复）
+axon daemon install
+axon daemon uninstall
+axon daemon start
+axon daemon stop
+axon daemon status                     # 快速检查安装与运行状态
+axon daemon restart
+
+# 后台运维面
+axon daemon health                     # 内部健康快照（租约、并发积压、订阅连接）
+axon daemon drain                      # 排空待处理队列，安全停止服务
+axon daemon run --root <AXON_ROOT> --config-path <CONFIG>
+axon daemon attach <SESSION_ID>        # 重新挂接到指定会话事件流
+
+# 独立前台 HTTP 网关
+axon serve --host 127.0.0.1 --port 3000
+```
+
+Daemon 是 Axon 的常驻后台服务，负责接收输入、按工作区有序执行、托管定时任务、维护记忆治理并提供本机网关。客户端断开后，后台工作继续执行到终态。
+
+## 5. 自动化、统计与度量
+
+```bash
+axon cron --help                       # 管理定时任务（list / create / update / pause / resume / run / remove / tick / holiday）
+axon cron create --name 巡检 --schedule "0 9 * * *" --prompt "巡检仓库" --wake session:session-01ARZ3NDEKTSV4RRFFQ69G5FAV
+                                       # --wake 决定执行完唤醒哪条会话：向它注入一轮主 turn 继续跟进；
+                                       # 形态为 session:<session-id>，给的是已登记会话的标识，
+                                       # 省略时只记录运行事实，不产生任何投递
+axon cron create --name 工时提醒 --schedule "workday:0 8-20 * * *" --prompt "提醒记录工时"
+                                       # 计划表达式字段可自由组合：区间 1-9、步长 */5、范围步长 9-18/2；
+                                       # 日历前缀 workday、holiday、weekend 按中国年历筛选，
+                                       # weekday 只按周一到周五，不看节假日
+axon cron create --name 节假问候 --schedule "holiday:0 10 * * *" --prompt "发送节日问候"
+axon cron tick --limit 20              # 手动推进一轮到期扫描；停机期间错过的触发点只顺延不执行
+axon cron holiday sync                 # 拉取当前年与次年的法定节假日与调休安排
+axon cron holiday sync --year 2026 --year 2027   # 指定年份，可重复
+axon cron holiday status               # 查看已同步年份、数据目录与数据源
+axon usage --period 7d                 # 查询最近 7 天 Token 消耗与成本看板
+axon usage audit                       # 审计日志流水查询
+axon pricing --help                    # 模型计费规则与成本核算
+```
+
+## 6. 系统维护与运维诊断
+
+```bash
+axon upgrade                           # 检查并平滑升级至最新版本
+axon package                           # 生成便携式 Release 发行包
+axon export --output <PATH>            # 导出运行数据
+axon completion bash                   # 生成 Shell 自动补全脚本 (支持 bash/zsh/fish/powershell)
+axon exec <COMMAND...>                 # 执行本机受控命令
+
+# 人格系统：校验人设与查看持久化状态
+axon persona validate [--file <PATH>]  # 校验 SOUL.md（或指定文件）是否符合 axon-soul/v1
+axon persona status                    # 展示人格库、当前状态与已发布习得风格
+axon persona status [--json]           # 展示人格库、当前状态、最近转移与已发布习得风格
+axon persona style list [--all]        # 列出习得风格
+axon persona style retire <STYLE_ID>   # 退役一条习得风格
+axon persona reset --yes               # 把人格状态重置为基线，不动人设与习得风格
+```
+
+Axon 自行判断是否继续既有工作，并按工作区自动管理上下文。会话层面的查看、删除、导出与修复走 `axon sessions`，例如：
+
+```bash
+axon sessions list                     # 列出会话（含标题、最近活动与轮次）
+axon sessions list --all               # 含归档会话
+axon sessions resume <id>               # 设置 --continue 的默认目标（会话 ID）
+axon sessions reset <id>                # 保留会话与历史，只换一段新的运行窗口
+```
+
+人设与人格状态的字段、模式与体积预算见 [人格系统](./persona.md)；`axon doctor --check persona` 给出同一条判定。

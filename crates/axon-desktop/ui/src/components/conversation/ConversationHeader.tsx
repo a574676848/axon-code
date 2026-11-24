@@ -1,0 +1,192 @@
+import React from 'react';
+import {
+  headerClusters,
+  type HeaderClusterKind,
+  type HeaderMetricsInput,
+  type HeaderSegment,
+  type HeaderSegmentTone,
+} from '../../conversation/metrics';
+import { contextUsedRatio, type ContextSnapshotReading } from '../../conversation/contextSnapshot';
+import { contextUsageModel } from '../../conversation/contextUsage';
+import {
+  ChecklistIcon,
+  ClockIcon,
+  GaugeIcon,
+  ListIcon,
+  DatabaseIcon,
+  RingIcon,
+  ToolIcon,
+} from '../../icons';
+import { ContextUsagePopover } from './ContextUsagePopover';
+import { SessionUsagePopover } from './SessionUsagePopover';
+
+/*
+ * 主区域顶部指标条。
+ *
+ * 四簇按语义排开：身份（在不在干活）、预算（会话累计、上下文与缓存）、性能（首字、速率、耗时）、辅助（LSP 与计划）。
+ * 此前是十段用「·」连成一条，装不下就从中间硬裁，读起来像一串调试输出。
+ *
+ * 簇与簇之间用一个圆点分隔，不画竖线：一条从头到脚的竖线会随读数长短左右挪，把一行
+ * 读数切成表格栏线；圆点与读数同一节奏，读起来仍是一句话。
+ *
+ * MCP 台数与技能条数不在这里：它们是「这台机器上挂着什么」，与打开哪条会话无关，
+ * 由侧栏底栏的连接行常驻承载。
+ *
+ * 工作区路径不进这一行：侧栏与窗口标题已经说清楚当前在哪，指标条只留会变的读数。
+ * 装不下时整簇收起：断点由宽到窄依次让辅助、性能与预算退场，身份簇始终在。
+ * 行高恒 36px、字号恒 13/20，因此隐藏与出现都不会让下方正文跳位。
+ *
+ * 指标文本是可读的事实（模型、耗时、命中率都是用户会想抄走的东西），
+ * 因此这一行允许选中：双击选词、拖动选择、右键复制、Ctrl+C 都照常。
+ */
+
+/** 段色调到文本色的映射；文字一律取墨水档。 */
+const TONE_CLASS: Record<HeaderSegmentTone, string> = {
+  default: 'text-text-secondary',
+  warning: 'text-gold-ink',
+  critical: 'text-danger',
+};
+
+/**
+ * 簇的可见断点。
+ *
+ * 容器查询直接挂在左侧弹性指标流容器上（扣除右侧子代理/后台任务胶囊与窗口控制按钮之后的真实剩余宽度），
+ * 确保空间不足时整簇提前退场，绝不把「耗时」等读数从汉字中间硬劈成两半。
+ */
+const CLUSTER_VISIBILITY: Record<HeaderClusterKind, string> = {
+  // 会话读数组四段（耗时、累计、命中率、上下文）比只有后两段时更宽，断点随之上调：
+  // 装不下就整簇收起，绝不把读数从数字中间裁断。
+  session: 'hidden @min-[520px]:flex',
+  performance: 'hidden @min-[620px]:flex',
+  aux: 'hidden @min-[760px]:flex',
+};
+
+/** 上下文占用百分比；窗口未知时返回 null（环形图标因此不画进度）。 */
+function contextPercentValue(reading: ContextSnapshotReading | null): number | null {
+  const ratio = contextUsedRatio(reading);
+  return ratio === null ? null : Math.floor(ratio * 100);
+}
+/**
+ * 指标图标：线性图形，14px。
+ *
+ * 不再叠加 `opacity-70`：透明度乘到继承色上会把同一行的图标与文字拆成两个灰度，
+ * 图标色由父级的文本色统一决定。
+ */
+function metricIcon(segment: HeaderSegment, contextPercent: number | null): React.ReactNode {
+  const size = 14;
+  switch (segment.icon) {
+    case 'ring':
+      return <RingIcon size={size} className="shrink-0" ratio={(contextPercent ?? 0) / 100} />;
+    case 'database':
+      return <DatabaseIcon size={size} className="shrink-0" />;
+    case 'clock':
+      return <ClockIcon size={size} className="shrink-0" />;
+    case 'gauge':
+      return <GaugeIcon size={size} className="shrink-0" />;
+    case 'list':
+      return <ListIcon size={size} className="shrink-0" />;
+    // LSP 是代码结构层面的能力：用尖括号比井号更像「代码本身」。
+    case 'lsp':
+      return <ToolIcon size={size} className="shrink-0" />;
+    default:
+      return null;
+  }
+}
+
+export interface ConversationHeaderProps extends HeaderMetricsInput {
+  /** 指标条右侧的操作区。 */
+  trailing?: React.ReactNode;
+  /** 当前会话是否存在待答复提问。 */
+  hasPendingQuestion?: boolean;
+  /** 是否需要避让右上角窗口控制区（右侧栏收起时为 true，展开后由右侧栏顶条避让）。 */
+  avoidWindowControls?: boolean;
+}
+
+export const ConversationHeader: React.FC<ConversationHeaderProps> = ({
+  trailing,
+  hasPendingQuestion = false,
+  avoidWindowControls = true,
+  ...metrics
+}) => {
+  const clusters = headerClusters(metrics);
+  /** 两段读数带弹窗：会话累计展开用量明细，上下文展开构成明细。其余段是纯读数。 */
+  const contextUsage = contextUsageModel(metrics.contextSnapshot);
+  const sessionCumulative = metrics.sessionCumulative ?? null;
+  const contextPercent = contextPercentValue(metrics.contextSnapshot);
+  return (
+    <header
+      data-tauri-drag-region
+      style={
+        avoidWindowControls
+          ? { paddingRight: 'calc(16px + var(--window-controls-inset, 0px))' }
+          : undefined
+      }
+      className="shrink-0 h-10 pl-4 pr-4 flex items-center gap-3 hairline-b border-border-hairline bg-canvas select-text"
+    >
+      <div className="@container flex-1 min-w-0 flex items-center gap-2.5 overflow-hidden whitespace-nowrap">
+        {hasPendingQuestion && (
+          <span
+            className="shrink-0 inline-flex items-center gap-1 rounded-xs px-1.5 py-0.5 bg-gold-soft text-xs text-gold-ink confirm-pop"
+            title="当前会话存在待答复提问"
+          >
+            <ChecklistIcon size={14} className="shrink-0" aria-hidden="true" />
+            待答复
+          </span>
+        )}
+        {clusters.map((cluster, position) => (
+          <div
+            key={cluster.kind}
+            data-header-cluster={cluster.kind}
+            className={`${CLUSTER_VISIBILITY[cluster.kind]} min-w-0 items-center gap-2.5`}
+          >
+            {/*
+              簇的间隔就是这一枚圆点本身：它长在簇内部，因此整簇收起时圆点跟着一起走，
+              不会在行尾留下一个孤零零的分隔符。簇间距与簇内间距取同一档，读数之间
+              因此是一串等节奏的字，而不是被空白分栏的表格。
+            */}
+            {position > 0 && (
+              <span aria-hidden="true" className="shrink-0 text-text-tertiary">
+                ·
+              </span>
+            )}
+
+            {cluster.segments.map((segment) => {
+              const withContextCard = segment.kind === 'context' && contextUsage !== null;
+              const withUsageCard = segment.kind === 'sessionTokens' && sessionCumulative !== null;
+
+              const reading = (
+                <span
+                  className={`min-w-0 shrink-0 inline-flex items-center gap-1 text-row tabular-nums ${TONE_CLASS[segment.tone]}`}
+                  title={
+                    withContextCard || withUsageCard
+                      ? undefined
+                      : (segment.title ?? segment.text)
+                  }
+                >
+                  {metricIcon(segment, contextPercent)}
+                  <span className="truncate">{segment.text}</span>
+                </span>
+              );
+              if (withContextCard) {
+                return (
+                  <ContextUsagePopover key={segment.kind} model={contextUsage}>
+                    {reading}
+                  </ContextUsagePopover>
+                );
+              }
+              if (withUsageCard) {
+                return (
+                  <SessionUsagePopover key={segment.kind} cumulative={sessionCumulative}>
+                    {reading}
+                  </SessionUsagePopover>
+                );
+              }
+              return <React.Fragment key={segment.kind}>{reading}</React.Fragment>;
+            })}
+          </div>
+        ))}
+      </div>
+      {trailing !== undefined && <div className="shrink-0 flex items-center gap-0.5">{trailing}</div>}
+    </header>
+  );
+};

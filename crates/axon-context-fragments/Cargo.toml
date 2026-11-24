@@ -1,0 +1,15 @@
+[package]
+name = "axon-context-fragments"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "axon_context_fragments"
+path = "src/lib.rs"
+test = false
+doctest = false
+
+[lints]
+workspace = true

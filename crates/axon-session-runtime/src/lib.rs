@@ -1,0 +1,26 @@
+//! 持久 Session Action 的应用运行时。
+//!
+//! 本 crate 只协调 Action、checkpoint、recovery 与 Agent 执行端口，
+//! 不依赖 CLI、IPC 或操作系统服务。
+
+pub mod application;
+pub mod model;
+pub mod ports;
+
+pub use application::{
+    AgentTurnExecutor, ContinuationResult, ORIGIN_CHANNEL_GOAL, ORIGIN_CHANNEL_KEY,
+    PRIMARY_TURN_ACTION_KIND, ProviderToolEnvironment, ProviderTurnRequest, ProviderTurnResult,
+    ProviderTurnRunner, RuntimeProfile, RuntimeProfileSelector, SnapshotChunker,
+    TerminalAccounting, TerminalFailureOwner, TurnContextProfile, TurnOrigin, TurnProfile,
+    wire_event_to_runtime_event,
+};
+pub use model::{
+    ActionExecutionRequest, NextExecutionRequest, RuntimeEvent, SessionExecutionContext,
+    TurnExecutionError, TurnExecutionOutcome, TurnFailureKind,
+};
+pub use ports::{
+    AtomicTurnPerformanceRecorder, EventPublisher, RuntimeClock, SubagentSessionIdentity,
+    SubagentSessionSinkFactory, TurnEventSink, TurnExecutor, TurnPerformanceRecorder,
+    TurnPerformanceSnapshot, TurnPerformanceStage, TurnPerformanceStageTiming,
+    configure_first_token_telemetry, first_token_telemetry_enabled,
+};

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Axon macOS 安装包分发定义。 -->
+<!-- 注：不引用 welcome / conclusion / background / license 资源（仓库未提供资源目录），
+     引用不存在的资源会让 productbuild 直接报错；版本号由下面的 pkg-ref 决定。
+     注意 XML 注释内不得出现连续两个短横线，写 flag 时请拆开。 -->
+<installer-gui-script minSpecVersion="2">
+    <title>Axon — 模型路由 Agentic 编码工作台</title>
+
+    <pkg-ref id="com.github.a574676848.axon" version="__VERSION__">#axon-component.pkg</pkg-ref>
+
+    <options
+        hostArchitectures="x86_64,arm64"
+        allow-external-scripts="no"
+        customize="never"
+        require-scripts="false" />
+
+    <choices-outline>
+        <line choice="default">
+            <line choice="com.github.a574676848.axon" />
+        </line>
+    </choices-outline>
+
+    <choice id="default" title="default" />
+    <choice
+        id="com.github.a574676848.axon"
+        visible="true"
+        title="Axon"
+        description="安装 Axon 模型路由 Agentic 编码工作台，使用稳定 launcher 管理不可变版本并启用 Daemon">
+        <pkg-ref id="com.github.a574676848.axon" />
+    </choice>
+
+    <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true" />
+</installer-gui-script>

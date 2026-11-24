@@ -1,0 +1,659 @@
+//! Daemon Gateway 内核：只负责适配器编排、生命周期和有界资源。
+//!
+//! Gateway 内核不解析具体传输协议，也不拥有 Interaction、Task、Execution
+//! 或 Delivery 存储。Adapter 必须通过注入的 [`GatewayIngress`] 写入既有
+//! durable ingress，再通过 [`GatewayEgress`] 订阅既有事件桥。
+
+use crate::application::ExternalEventEnvelope;
+use crate::application::SilentTurnSettlementOutcome;
+use crate::infrastructure::gateway_auth::{GatewayAuth, GatewayIdentity, GatewayKeyStore};
+use axon_protocol::SubmitInteractionReceipt;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicU8, Ordering},
+    mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError},
+};
+use std::time::Duration;
+use thiserror::Error;
+
+#[path = "gateway_kernel_connections.rs"]
+mod connections;
+#[path = "gateway_kernel_live.rs"]
+mod live;
+pub use connections::{GatewayConnectionLimiter, GatewayConnectionPermit};
+pub use live::GatewaySessionLive;
+
+const STATE_STOPPED: u8 = 0;
+const STATE_RUNNING: u8 = 1;
+const STATE_DRAINING: u8 = 2;
+const DEFAULT_CONNECTION_LIMIT: usize = 256;
+
+/// Gateway 运行状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GatewayLifecycle {
+    /// 尚未启动。
+    Stopped,
+    /// 接受新连接和新事件。
+    Running,
+    /// 正在排空，只允许已建立连接完成工作。
+    Draining,
+}
+
+impl GatewayLifecycle {
+    fn from_u8(value: u8) -> Self {
+        match value {
+            STATE_RUNNING => Self::Running,
+            STATE_DRAINING => Self::Draining,
+            _ => Self::Stopped,
+        }
+    }
+}
+
+/// Gateway 内核错误。
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum GatewayKernelError {
+    /// Adapter 标识为空。
+    #[error("Gateway Adapter ID 不能为空")]
+    EmptyAdapterId,
+    /// Adapter 标识已注册。
+    #[error("Gateway Adapter 已注册：{0}")]
+    DuplicateAdapter(String),
+    /// 当前生命周期不允许操作。
+    #[error("Gateway 当前状态不允许操作：{0:?}")]
+    InvalidLifecycle(GatewayLifecycle),
+    /// 连接数达到有界上限。
+    #[error("Gateway 连接数已达到上限：{0}")]
+    ConnectionLimitReached(usize),
+    /// Adapter 启停失败。
+    #[error("Gateway Adapter {adapter_id} 操作失败：{message}")]
+    Adapter {
+        /// 失败的 Adapter 标识。
+        adapter_id: String,
+        /// Adapter 返回的错误信息。
+        message: String,
+    },
+    /// Adapter ingress 失败。
+    #[error("Gateway ingress 失败：{0}")]
+    Ingress(String),
+    /// 查询目标不存在。
+    #[error("{0}")]
+    NotFound(String),
+    /// 查询参数不合法（例如分页参数互相矛盾）。
+    #[error("{0}")]
+    InvalidQuery(String),
+    /// 事件进入 durable ingress 之前的预处理失败（正文归档等）。
+    #[error("Gateway 事件预处理失败：{0}")]
+    Preparation(String),
+}
+
+/// Adapter 使用的 durable ingress 桥。
+pub trait GatewayIngress: Send + Sync {
+    /// 校验并 durable append 外部事件；实现必须在返回前完成 append。
+    fn submit_external_event(
+        &self,
+        event: ExternalEventEnvelope,
+    ) -> Result<SubmitInteractionReceipt, GatewayKernelError>;
+
+    /// 查询外部交互记录与当前执行结果；默认返回 None。
+    fn get_interaction_response(
+        &self,
+        _interaction_id: &axon_domain::InteractionId,
+    ) -> Result<Option<GatewayInteractionResponse>, GatewayKernelError> {
+        Ok(None)
+    }
+
+    /// 读一条会话的上下文快照。
+    ///
+    /// `Ok(None)` 表示会话存在但还没有任何可用读数；会话不存在时返回
+    /// [`GatewayKernelError::NotFound`]，由路由映射成 404，让读侧能区分
+    /// 「没有记录」与「没有这条会话」。
+    fn context_snapshot(
+        &self,
+        session_id: &axon_domain::DaemonSessionId,
+    ) -> Result<Option<axon_session::ContextSnapshot>, GatewayKernelError>;
+
+    /// 显式收口一条静默轮次：桌面端 ESC 之后的服务端出口。
+    ///
+    /// 会话不存在返回 [`GatewayKernelError::NotFound`]；会话存在但没有这条在途轮次时
+    /// 返回 [`SilentTurnSettlementOutcome::NotInFlight`]，由路由如实回给调用方。
+    fn settle_silent_turn(
+        &self,
+        session_id: &axon_domain::DaemonSessionId,
+        interaction_id: &axon_domain::InteractionId,
+    ) -> Result<SilentTurnSettlementOutcome, GatewayKernelError>;
+
+    /// 读一条会话的运行态证据：`running` 必须能指回带租约且未过期的行。
+    ///
+    /// 默认实现表示该 ingress 不提供证据：路由按 500 如实拒绝，读侧据此降级，
+    /// 绝不用「未知」冒充「在跑」。会话不存在时返回
+    /// [`GatewayKernelError::NotFound`]，由路由映射成 404。
+    fn session_live(
+        &self,
+        session_id: &axon_domain::DaemonSessionId,
+    ) -> Result<GatewaySessionLive, GatewayKernelError> {
+        let _ = session_id;
+        Err(GatewayKernelError::Ingress(
+            "该网关实现不提供运行态证据".to_owned(),
+        ))
+    }
+}
+
+/// Adapter 使用的事件出口桥。
+pub trait GatewayEgress: Send + Sync {
+    /// 建立一个由既有 Daemon 事件桥驱动的订阅。
+    fn subscribe(
+        &self,
+        request: GatewaySubscriptionRequest,
+    ) -> Result<Box<dyn GatewayEventStream>, GatewayKernelError>;
+
+    /// 只推轮次头的订阅：`interaction.created` 与 `interaction.settled`。
+    ///
+    /// 目标执行与子代理会话不在侧栏清单里，前端无法靠 `interaction_count` 发现新轮；
+    /// 这一路订阅把「又多了一轮」「这一轮收口了」变成可订阅的轻事实，不推任何正文。
+    fn subscribe_session_turns(
+        &self,
+        request: GatewaySessionTurnsRequest,
+    ) -> Result<Box<dyn GatewayEventStream>, GatewayKernelError>;
+}
+
+/// 轮次头订阅请求：只跟一条会话的轮次清单。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewaySessionTurnsRequest {
+    /// 会话所属 Workspace。
+    pub workspace_id: String,
+    /// 目标会话。
+    pub session_id: String,
+}
+
+/// 事件订阅请求；Workspace/Session 由调用方解析，不在 Kernel 固定。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewaySubscriptionRequest {
+    /// 事件所属 Workspace。
+    pub workspace_id: String,
+    /// 目标 Interaction。
+    pub interaction_id: String,
+    /// 上次已确认的 durable cursor。
+    pub resume_cursor: Option<String>,
+}
+
+/// 传输无关的事件流。
+pub trait GatewayEventStream: Send {
+    /// 在超时内读取一条事件；超时返回 `None`，不产生忙等。
+    fn recv_timeout(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Option<GatewayEvent>, GatewayKernelError>;
+
+    /// 订阅建立那一刻的对齐锚点：这条流已经知道的最新事实。
+    ///
+    /// 轮次头订阅首轮只建基线、不补历史。客户端如果在读索引之后才订阅，两次动作
+    /// 之间新建的那一轮会被折进基线、永远不播报。把基线放进 `subscribed` 回执后，
+    /// 客户端可以拿它与自己读到的索引对齐，发现落后就再读一次。
+    ///
+    /// 默认没有锚点：正文与事件订阅走 durable 游标，不需要额外对齐事实。
+    fn subscription_baseline(&self) -> Option<serde_json::Value> {
+        None
+    }
+
+    /// 建立这条流时 durable 回放留下的缺口。
+    ///
+    /// 客户端必须能看见「回放不完整」这件事：跳过缺失外置正文的帧、或没追到 durable 尾
+    /// 时，界面要能说清楚自己看的是残缺历史，而不是把缺帧当成会话本来就长这样；
+    /// 残缺时还必须拿到续读游标，否则下次续订会按「已到尾」跳过整段中间帧。
+    /// 默认没有缺口。
+    fn replay_report(&self) -> GatewayReplayReport {
+        GatewayReplayReport::default()
+    }
+}
+
+/// 一次 durable 回放的缺口统计。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GatewayReplayReport {
+    /// 因外置正文缺失而跳过的帧数。
+    pub skipped_archived_frames: u64,
+    /// 是否没追到 durable 尾（页数兜底触顶，或日志出现空洞）。
+    pub replay_truncated: bool,
+    /// 续读游标：这次回放**真正覆盖到**的位置；截断时是最后一条真读到的帧。
+    ///
+    /// 未截断时它等于回放上界（durable 尾），因此正常路径上的行为与修前一致；
+    /// 截断时客户端必须从它续读，不能当成「已经读到尾」。
+    pub resume_cursor: Option<String>,
+}
+
+/// 由 Daemon durable event bridge 映射出的最小事件。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewayEvent {
+    /// 稳定事件类型。
+    pub event_type: String,
+    /// 已提交事件的 JSON 内容。
+    pub payload_json: String,
+    /// 可选 durable cursor。
+    pub cursor: Option<String>,
+    /// 是否来自 durable 历史回放；客户端不得据此触发新消息通知。
+    pub replay: bool,
+}
+
+/// Gateway 外部交互记录概要与响应。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayInteractionResponse {
+    /// 交互记录标识。
+    pub interaction_id: String,
+    /// 当前处理状态（received, processing, understood, rejected, interrupted 等）。
+    pub status: String,
+    /// 接收时间（毫秒）。
+    pub received_at_ms: u64,
+    /// 来源渠道。
+    pub channel: String,
+    /// 原始交互正文。
+    pub content: String,
+    /// 主 turn 执行完成后的最终回复交付文本（尚未完成时为空）。
+    pub response: Option<String>,
+}
+
+/// Adapter 生命周期上下文。
+#[derive(Clone)]
+pub struct GatewayContext {
+    ingress: Arc<dyn GatewayIngress>,
+    egress: Arc<dyn GatewayEgress>,
+    connection_limiter: Arc<GatewayConnectionLimiter>,
+    auth: Option<Arc<GatewayAuth>>,
+    state: Arc<AtomicU8>,
+}
+
+impl GatewayContext {
+    fn new(
+        ingress: Arc<dyn GatewayIngress>,
+        egress: Arc<dyn GatewayEgress>,
+        connection_limiter: Arc<GatewayConnectionLimiter>,
+        state: Arc<AtomicU8>,
+        auth: Option<Arc<GatewayAuth>>,
+    ) -> Self {
+        Self {
+            ingress,
+            egress,
+            connection_limiter,
+            auth,
+            state,
+        }
+    }
+
+    /// 提交 durable ingress；排空或停止后拒绝新事件。
+    pub fn submit_external_event(
+        &self,
+        event: ExternalEventEnvelope,
+    ) -> Result<SubmitInteractionReceipt, GatewayKernelError> {
+        self.ensure_running()?;
+        self.ingress.submit_external_event(event)
+    }
+
+    /// 建立事件订阅；排空或停止后拒绝新订阅。
+    pub fn subscribe(
+        &self,
+        request: GatewaySubscriptionRequest,
+    ) -> Result<Box<dyn GatewayEventStream>, GatewayKernelError> {
+        self.ensure_running()?;
+        self.egress.subscribe(request)
+    }
+
+    /// 建立轮次头订阅；排空或停止后拒绝新订阅。
+    pub fn subscribe_session_turns(
+        &self,
+        request: GatewaySessionTurnsRequest,
+    ) -> Result<Box<dyn GatewayEventStream>, GatewayKernelError> {
+        self.ensure_running()?;
+        self.egress.subscribe_session_turns(request)
+    }
+
+    /// 按稳定 ID 查询外部交互结果；排空或停止后拒绝查询。
+    pub fn get_interaction_response(
+        &self,
+        interaction_id: &axon_domain::InteractionId,
+    ) -> Result<Option<GatewayInteractionResponse>, GatewayKernelError> {
+        self.ensure_running()?;
+        self.ingress.get_interaction_response(interaction_id)
+    }
+
+    /// 读会话级上下文快照；排空或停止后拒绝读取。
+    pub fn context_snapshot(
+        &self,
+        session_id: &axon_domain::DaemonSessionId,
+    ) -> Result<Option<axon_session::ContextSnapshot>, GatewayKernelError> {
+        self.ensure_running()?;
+        self.ingress.context_snapshot(session_id)
+    }
+
+    /// 显式收口静默轮次；排空或停止后拒绝写入。
+    pub fn settle_silent_turn(
+        &self,
+        session_id: &axon_domain::DaemonSessionId,
+        interaction_id: &axon_domain::InteractionId,
+    ) -> Result<SilentTurnSettlementOutcome, GatewayKernelError> {
+        self.ensure_running()?;
+        self.ingress.settle_silent_turn(session_id, interaction_id)
+    }
+
+    /// 读会话运行态证据；排空或停止后拒绝读取。
+    pub fn session_live(
+        &self,
+        session_id: &axon_domain::DaemonSessionId,
+    ) -> Result<GatewaySessionLive, GatewayKernelError> {
+        self.ensure_running()?;
+        self.ingress.session_live(session_id)
+    }
+
+    /// 尝试取得一个连接许可；许可释放后才会减少活动连接计数。
+    pub fn try_acquire_connection(&self) -> Result<GatewayConnectionPermit, GatewayKernelError> {
+        self.ensure_running()?;
+        self.connection_limiter.try_acquire()
+    }
+
+    fn ensure_running(&self) -> Result<(), GatewayKernelError> {
+        let state = GatewayLifecycle::from_u8(self.state.load(Ordering::Acquire));
+        (state == GatewayLifecycle::Running)
+            .then_some(())
+            .ok_or(GatewayKernelError::InvalidLifecycle(state))
+    }
+
+    /// 在 transport 创建连接、mailbox 或订阅资源前校验 Bearer token。
+    #[must_use]
+    pub fn authorize_bearer(&self, token: &str) -> bool {
+        self.auth
+            .as_deref()
+            .is_some_and(|auth| auth.authorize_bearer(token))
+    }
+
+    /// 在 transport 创建连接、mailbox 或订阅资源前校验完整 Authorization header。
+    #[must_use]
+    pub fn authorize_header(&self, header: Option<&str>) -> bool {
+        self.auth
+            .as_deref()
+            .is_some_and(|auth| auth.authorize_header(header))
+    }
+
+    /// 在 transport 创建连接、mailbox 或订阅资源前校验请求凭据。
+    ///
+    /// `Authorization: Bearer` 与 URL 查询串 token 任一命中即通过；部分发送方
+    /// （Jira Server WebHooks 等）无法配置 HTTP header，只能把凭据写在 URL 上。
+    #[must_use]
+    pub fn authorize_request(&self, header: Option<&str>, query_token: Option<&str>) -> bool {
+        self.auth
+            .as_deref()
+            .is_some_and(|auth| auth.authorize_request(header, query_token))
+    }
+
+    /// 按 Authorization header 解析身份；未配置鉴权或未命中时为 `None`。
+    ///
+    /// 路由层据此分级，不再把"是否通过"当成全部信息。
+    #[must_use]
+    pub fn identify_header(&self, header: Option<&str>) -> Option<GatewayIdentity> {
+        self.auth.as_deref()?.identify_header(header)
+    }
+
+    /// 按 header 与查询串凭据解析身份；两条通道任一命中即给出身份。
+    #[must_use]
+    pub fn identify_request(
+        &self,
+        header: Option<&str>,
+        query_token: Option<&str>,
+    ) -> Option<GatewayIdentity> {
+        self.auth.as_deref()?.identify_request(header, query_token)
+    }
+
+    /// 多 Key 存储句柄；未配置时为 `None`。
+    ///
+    /// 管理面适配器取这一份句柄读写，与鉴权层共享同一份热更新存储，因此签发与吊销
+    /// 对下一次鉴权立即生效。
+    #[must_use]
+    pub fn key_store(&self) -> Option<Arc<GatewayKeyStore>> {
+        self.auth.as_deref()?.key_store()
+    }
+
+    /// 旧 token 通道是否启用；未配置鉴权时按默认口径返回 `true`。
+    #[must_use]
+    pub fn legacy_token_enabled(&self) -> bool {
+        self.auth
+            .as_deref()
+            .is_none_or(GatewayAuth::legacy_token_enabled)
+    }
+}
+
+/// Gateway Adapter 实现的最小生命周期契约。
+pub trait GatewayAdapter: Send + Sync {
+    /// 返回进程内唯一的稳定 Adapter ID。
+    fn adapter_id(&self) -> &str;
+    /// 启动 Adapter 的接收循环。
+    fn start(&self, context: GatewayContext) -> Result<(), String>;
+    /// 请求 Adapter 停止接受新连接并排空。
+    fn drain(&self);
+    /// 释放 Adapter 资源。
+    fn stop(&self);
+}
+
+/// 固定容量 mailbox；满载时拒绝写入，避免无限堆积。
+pub struct GatewayMailbox<T> {
+    sender: SyncSender<T>,
+    receiver: Mutex<Receiver<T>>,
+}
+
+impl<T> GatewayMailbox<T> {
+    /// 创建至少容量为 1 的 mailbox。
+    #[must_use]
+    pub fn new(capacity: usize) -> Self {
+        let (sender, receiver) = mpsc::sync_channel(capacity.max(1));
+        Self {
+            sender,
+            receiver: Mutex::new(receiver),
+        }
+    }
+
+    /// 非阻塞写入；满载返回 `false`。
+    pub fn try_send(&self, value: T) -> bool {
+        match self.sender.try_send(value) {
+            Ok(()) => true,
+            Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => false,
+        }
+    }
+
+    /// 在指定时间内读取一条消息。
+    pub fn recv_timeout(&self, timeout: Duration) -> Result<Option<T>, GatewayKernelError> {
+        let receiver = self
+            .receiver
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match receiver.recv_timeout(timeout) {
+            Ok(value) => Ok(Some(value)),
+            Err(RecvTimeoutError::Timeout) => Ok(None),
+            Err(RecvTimeoutError::Disconnected) => Err(GatewayKernelError::InvalidLifecycle(
+                GatewayLifecycle::Stopped,
+            )),
+        }
+    }
+}
+
+/// Gateway 内核组合根。
+pub struct GatewayKernel {
+    state: Arc<AtomicU8>,
+    adapters: Mutex<HashMap<String, Arc<dyn GatewayAdapter>>>,
+    context: GatewayContext,
+}
+
+impl GatewayKernel {
+    /// 创建内核；Adapter 共享既有 Daemon ingress/egress。
+    #[must_use]
+    pub fn new(
+        ingress: Arc<dyn GatewayIngress>,
+        egress: Arc<dyn GatewayEgress>,
+        connection_limit: usize,
+    ) -> Self {
+        Self::new_with_auth(ingress, egress, connection_limit, None)
+    }
+
+    /// 创建使用默认 256 连接上限的内核。
+    #[must_use]
+    pub fn with_default_connection_limit(
+        ingress: Arc<dyn GatewayIngress>,
+        egress: Arc<dyn GatewayEgress>,
+    ) -> Self {
+        Self::new_with_auth(ingress, egress, DEFAULT_CONNECTION_LIMIT, None)
+    }
+
+    /// 创建带统一 Gateway token 的内核。
+    #[must_use]
+    pub fn new_with_auth(
+        ingress: Arc<dyn GatewayIngress>,
+        egress: Arc<dyn GatewayEgress>,
+        connection_limit: usize,
+        auth: Option<Arc<GatewayAuth>>,
+    ) -> Self {
+        let state = Arc::new(AtomicU8::new(STATE_STOPPED));
+        Self {
+            state: Arc::clone(&state),
+            adapters: Mutex::new(HashMap::new()),
+            context: GatewayContext::new(
+                ingress,
+                egress,
+                Arc::new(GatewayConnectionLimiter::new(connection_limit)),
+                state,
+                auth,
+            ),
+        }
+    }
+
+    /// 创建带默认连接上限和统一 Gateway token 的内核。
+    #[must_use]
+    pub fn with_default_connection_limit_and_auth(
+        ingress: Arc<dyn GatewayIngress>,
+        egress: Arc<dyn GatewayEgress>,
+        auth: Option<Arc<GatewayAuth>>,
+    ) -> Self {
+        Self::new_with_auth(ingress, egress, DEFAULT_CONNECTION_LIMIT, auth)
+    }
+
+    /// 注册 Adapter；运行中和排空状态禁止动态变更，避免竞态。
+    pub fn register_adapter(
+        &self,
+        adapter: Arc<dyn GatewayAdapter>,
+    ) -> Result<(), GatewayKernelError> {
+        if self.lifecycle() != GatewayLifecycle::Stopped {
+            return Err(GatewayKernelError::InvalidLifecycle(self.lifecycle()));
+        }
+        let adapter_id = adapter.adapter_id().trim().to_owned();
+        if adapter_id.is_empty() {
+            return Err(GatewayKernelError::EmptyAdapterId);
+        }
+        let mut adapters = self
+            .adapters
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if adapters.contains_key(&adapter_id) {
+            return Err(GatewayKernelError::DuplicateAdapter(adapter_id));
+        }
+        adapters.insert(adapter_id, adapter);
+        Ok(())
+    }
+
+    /// 启动全部 Adapter；任一失败时停止已启动 Adapter 并回到 Stopped。
+    pub fn start(&self) -> Result<(), GatewayKernelError> {
+        if self
+            .state
+            .compare_exchange(
+                STATE_STOPPED,
+                STATE_RUNNING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_err()
+        {
+            return Err(GatewayKernelError::InvalidLifecycle(self.lifecycle()));
+        }
+        let adapters = self.adapter_snapshot();
+        let mut started: Vec<Arc<dyn GatewayAdapter>> = Vec::with_capacity(adapters.len());
+        for adapter in adapters {
+            if let Err(message) = adapter.start(self.context.clone()) {
+                for running in started {
+                    running.stop();
+                }
+                self.state.store(STATE_STOPPED, Ordering::Release);
+                return Err(GatewayKernelError::Adapter {
+                    adapter_id: adapter.adapter_id().to_owned(),
+                    message,
+                });
+            }
+            started.push(adapter);
+        }
+        Ok(())
+    }
+
+    /// 开始排空并通知全部 Adapter。
+    pub fn begin_drain(&self) -> Result<(), GatewayKernelError> {
+        if self
+            .state
+            .compare_exchange(
+                STATE_RUNNING,
+                STATE_DRAINING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_err()
+        {
+            return Err(GatewayKernelError::InvalidLifecycle(self.lifecycle()));
+        }
+        for adapter in self.adapter_snapshot() {
+            adapter.drain();
+        }
+        Ok(())
+    }
+
+    /// 停止全部 Adapter 并释放 Kernel 状态。
+    pub fn stop(&self) -> Result<(), GatewayKernelError> {
+        let previous = self.state.swap(STATE_STOPPED, Ordering::AcqRel);
+        if previous == STATE_STOPPED {
+            return Err(GatewayKernelError::InvalidLifecycle(
+                GatewayLifecycle::Stopped,
+            ));
+        }
+        for adapter in self.adapter_snapshot() {
+            adapter.stop();
+        }
+        Ok(())
+    }
+
+    /// 当前生命周期。
+    #[must_use]
+    pub fn lifecycle(&self) -> GatewayLifecycle {
+        GatewayLifecycle::from_u8(self.state.load(Ordering::Acquire))
+    }
+
+    /// 当前注册 Adapter 数量。
+    #[must_use]
+    pub fn adapter_count(&self) -> usize {
+        self.adapters
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
+    }
+
+    /// 运行状态下取得 Adapter 上下文；排空后拒绝新 ingress。
+    pub fn context(&self) -> Result<GatewayContext, GatewayKernelError> {
+        match self.lifecycle() {
+            GatewayLifecycle::Running => Ok(self.context.clone()),
+            state => Err(GatewayKernelError::InvalidLifecycle(state)),
+        }
+    }
+
+    fn adapter_snapshot(&self) -> Vec<Arc<dyn GatewayAdapter>> {
+        self.adapters
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .cloned()
+            .collect()
+    }
+}
+
+#[cfg(test)]
+#[path = "gateway_kernel_tests.rs"]
+mod tests;

@@ -1,0 +1,47 @@
+[package]
+name = "axon-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+axon-eventlog = { path = "../axon-eventlog" }
+axon-agent-runtime = { path = "../axon-agent-runtime" }
+axon-crypto = { path = "../axon-crypto" }
+axon-domain = { path = "../axon-domain" }
+axon-logger = { path = "../axon-logger" }
+axon-process = { path = "../axon-process" }
+axon-prompts = { path = "../axon-prompts" }
+axon-protocol = { path = "../axon-protocol" }
+axon-session = { path = "../axon-session" }
+axon-session-runtime = { path = "../axon-session-runtime" }
+axon-voice = { path = "../axon-voice" }
+axon-voice-bridge = { path = "../axon-voice-bridge" }
+serde.workspace = true
+axum.workspace = true
+chrono.workspace = true
+hmac.workspace = true
+interprocess.workspace = true
+sha2.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+futures-util.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+widestring.workspace = true
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[dev-dependencies]
+axon-test-support = { path = "../axon-test-support" }
+rusqlite.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

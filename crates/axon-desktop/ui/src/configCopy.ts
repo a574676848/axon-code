@@ -1,0 +1,101 @@
+import type { ConfigKeySpec } from './types';
+
+/*
+ * 配置项的中文产品化文案。
+ *
+ * 界面只呈现这里的文案，不直接把配置键或带英文标识的原始描述抛给用户：
+ * 标签是一句话能读懂的中文名称，说明是一行补充，不出现 name / id / catalog
+ * 这类实现词汇。新增配置键时在此登记，缺失时回落到清洗后的描述。
+ */
+
+/** 单个配置项的文案。 */
+interface ConfigCopy {
+  /** 中文标签。 */
+  label: string;
+  /** 一行补充说明；不需要补充时省略。 */
+  detail?: string;
+}
+
+/** 按配置键登记的文案。 */
+const CONFIG_COPY: Record<string, ConfigCopy> = {
+  // 通用设置
+  'agent.default_model': { label: '主模型', detail: '默认使用的对话模型' },
+  'agent.fast_model': { label: '快速模型', detail: '处理轻量请求的模型' },
+  'agent.reasoning_effort': { label: '推理强度', detail: '主模型的思考深度' },
+  'agent.log_level': { label: '日志级别', detail: '记录日志的详细程度' },
+  'agent.max_subagent_threads': {
+    label: '子代理线程上限',
+    detail: '单个会话可并发的子代理数量',
+  },
+  'agent.max_subagent_active_turns': {
+    label: '并发子代理上限',
+    detail: '单个会话同时运行的子代理数量',
+  },
+  // 负载均衡
+  'channel_balancer.failure_threshold': {
+    label: '熔断失败次数',
+    detail: '连续失败多少次后暂停该通道',
+  },
+  'channel_balancer.cooldown_ms': { label: '熔断冷却时长', detail: '暂停多久后恢复，单位毫秒' },
+  'channel_balancer.affinity_ttl_ms': {
+    label: '通道亲和时长',
+    detail: '同一任务固定走同一通道的时长，单位毫秒',
+  },
+  'channel_balancer.telemetry_persistence_enabled': {
+    label: '保存渠道遥测',
+    detail: '是否把渠道指标落盘留存',
+  },
+
+  // 记忆
+  'memory.embedding.enabled': { label: '启用记忆检索', detail: '是否开启长期记忆的向量检索' },
+  'memory.embedding.model': { label: '向量模型', detail: '用于记忆检索的嵌入模型' },
+
+  // 远控
+  'remote.gateway.api_token_env': {
+    label: '网关密钥变量名',
+    detail: '存放网关访问密钥的环境变量',
+  },
+  'remote.gateway.http_bind': { label: 'HTTP 监听地址', detail: '接收 Webhook 的地址' },
+  'remote.gateway.websocket_bind': {
+    label: 'WebSocket 监听地址',
+    detail: '接收长连接的地址',
+  },
+  'remote.gateway.auth_keys': {
+    label: '多 Key 存储路径',
+    detail: '留空时使用运行目录下的默认文件',
+  },
+  'remote.gateway.legacy_token_enabled': {
+    label: '保留全局密钥通道',
+    detail: '关闭后业务接口只接受已签发的 Key',
+  },
+};
+
+/** 判断文本里是否含中文。 */
+function hasChinese(text: string): boolean {
+  return /[\u4e00-\u9fa5]/.test(text);
+}
+
+/** 去掉描述里的实现词汇，只保留面向用户的一句中文。 */
+function cleanDescription(description: string): string {
+  return description
+    .replace(/`[^`]*`/g, '')
+    .split(/[，,。；;：:（(]/)
+    .map((piece) => piece.trim())
+    .filter((piece) => piece.length > 0 && hasChinese(piece))
+    .join('，');
+}
+
+/** 取配置项的中文标签。 */
+export function configLabel(spec: ConfigKeySpec): string {
+  const copy = CONFIG_COPY[spec.key];
+  if (copy !== undefined) return copy.label;
+  const cleaned = cleanDescription(spec.description);
+  return cleaned.length > 0 ? cleaned : '未命名配置项';
+}
+
+/** 取配置项的一行说明；没有可读说明时返回空串。 */
+export function configDetail(spec: ConfigKeySpec): string {
+  const copy = CONFIG_COPY[spec.key];
+  if (copy !== undefined) return copy.detail ?? '';
+  return '';
+}

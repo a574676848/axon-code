@@ -1,0 +1,165 @@
+use std::collections::BTreeSet;
+
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    DEFAULT_AFFINITY_TTL_MS, DEFAULT_AGENT_AUTO_COMPACTION_THRESHOLD, DEFAULT_AGENT_LOG_LEVEL,
+    DEFAULT_AGENT_MAX_SUBAGENT_ACTIVE_TURNS, DEFAULT_AGENT_MAX_SUBAGENT_THREADS,
+    DEFAULT_AGENT_REASONING_EFFORT, DEFAULT_BREAKER_COOLDOWN_MS, DEFAULT_BREAKER_FAILURE_THRESHOLD,
+    DEFAULT_CHANNEL_METRICS_PERSISTENCE_ENABLED, DEFAULT_GATEWAY_API_TOKEN_ENV,
+    DEFAULT_GATEWAY_HTTP_BIND, DEFAULT_GATEWAY_WEBSOCKET_BIND,
+};
+
+/// Agent 配置。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentConfig {
+    /// 默认主模型。
+    pub default_model: String,
+    /// 快速委托模型。
+    pub fast_model: String,
+    /// 主 Agent 默认推理强度，仅作用于 default_model。
+    pub reasoning_effort: String,
+    /// 每个 run session 允许的最大子代理线程数。
+    pub max_subagent_threads: usize,
+    /// 每个 run session 允许同时运行的子代理 turn 数。
+    pub max_subagent_active_turns: usize,
+    /// 自动压缩触发阈值（context_window 的比例，0.0-1.0）。
+    pub auto_compaction_threshold: f64,
+    /// 日志级别：debug、info、warning、error。
+    pub log_level: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+/// TUI 配置段；三段式 TUI 不暴露终端原生历史兼容配置。
+pub struct TuiConfig {}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            default_model: String::new(),
+            fast_model: String::new(),
+            reasoning_effort: DEFAULT_AGENT_REASONING_EFFORT.to_owned(),
+            max_subagent_threads: DEFAULT_AGENT_MAX_SUBAGENT_THREADS,
+            max_subagent_active_turns: DEFAULT_AGENT_MAX_SUBAGENT_ACTIVE_TURNS,
+            auto_compaction_threshold: DEFAULT_AGENT_AUTO_COMPACTION_THRESHOLD,
+            log_level: DEFAULT_AGENT_LOG_LEVEL.to_owned(),
+        }
+    }
+}
+
+/// Skills 启用状态配置。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SkillsConfig {
+    /// 被用户禁用的 skill 名称。
+    pub disabled: BTreeSet<String>,
+}
+
+/// 远控配置。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RemoteConfig {
+    /// 统一 Gateway 配置；远控目标态始终启用。
+    pub gateway: RemoteGatewayConfig,
+}
+
+/// 统一 Gateway 配置。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RemoteGatewayConfig {
+    /// API token 对应的环境变量名；token 原文只存在于用户级 env 文件。
+    pub api_token_env: String,
+    /// HTTP Webhook 监听地址。
+    pub http_bind: String,
+    /// 通用 WebSocket 监听地址。
+    pub websocket_bind: String,
+    /// 多 Key 存储文件路径；空串表示运行时根下 `data/gateway/auth-keys.json`。
+    pub auth_keys: String,
+    /// 是否保留启动时那把全局 token 的旧通道。
+    pub legacy_token_enabled: bool,
+}
+
+impl Default for RemoteGatewayConfig {
+    fn default() -> Self {
+        Self {
+            api_token_env: DEFAULT_GATEWAY_API_TOKEN_ENV.to_owned(),
+            http_bind: DEFAULT_GATEWAY_HTTP_BIND.to_owned(),
+            websocket_bind: DEFAULT_GATEWAY_WEBSOCKET_BIND.to_owned(),
+            auth_keys: String::new(),
+            legacy_token_enabled: true,
+        }
+    }
+}
+
+/// 视觉配置。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VisionConfig {
+    /// 图片进入视觉模型前是否要求本机确认。
+    #[serde(skip)]
+    pub require_local_confirmation: bool,
+    /// 支持的 MIME。
+    #[serde(skip)]
+    pub supported_mime_types: Vec<String>,
+}
+
+impl Default for VisionConfig {
+    fn default() -> Self {
+        Self {
+            require_local_confirmation: false,
+            supported_mime_types: vec![
+                "image/png".to_owned(),
+                "image/jpeg".to_owned(),
+                "image/webp".to_owned(),
+            ],
+        }
+    }
+}
+
+/// Memory 配置。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MemoryConfig {
+    /// embedding provider 引用配置。
+    pub embedding: MemoryEmbeddingConfig,
+}
+
+/// 渠道负载均衡配置。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChannelBalancerConfig {
+    /// 连续失败几次熔断。
+    pub failure_threshold: u32,
+    /// 熔断冷却窗口。
+    pub cooldown_ms: u64,
+    /// 内存亲和 TTL。
+    pub affinity_ttl_ms: u64,
+    /// 是否将渠道遥测样本持久化到运行态 data 目录。
+    pub telemetry_persistence_enabled: bool,
+}
+
+impl Default for ChannelBalancerConfig {
+    fn default() -> Self {
+        Self {
+            failure_threshold: DEFAULT_BREAKER_FAILURE_THRESHOLD,
+            cooldown_ms: DEFAULT_BREAKER_COOLDOWN_MS,
+            affinity_ttl_ms: DEFAULT_AFFINITY_TTL_MS,
+            telemetry_persistence_enabled: DEFAULT_CHANNEL_METRICS_PERSISTENCE_ENABLED,
+        }
+    }
+}
+
+/// Memory embedding 配置。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MemoryEmbeddingConfig {
+    /// 是否启用 embedding。
+    pub enabled: bool,
+    /// embedding 模型名称，引用顶层 model catalog 的 name 或 id。
+    pub model: String,
+    /// embedding 维度。
+    #[serde(skip)]
+    pub dimension: usize,
+}

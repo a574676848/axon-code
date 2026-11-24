@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1180" viewBox="0 0 1400 1180" role="img" aria-labelledby="title desc">
+  <title id="title">Axon 系统架构全景图（42 个 workspace member）</title>
+  <desc id="desc">按依赖方向由外向内展示入口与宿主、应用与运行时、协议与领域、接入适配、通用基础设施、测试与验收六层，共 41 个 axon crate 与 1 个独立验收工具</desc>
+  <defs>
+    <style>
+      text { font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif; }
+      .title { font-size: 30px; font-weight: 800; fill: #0f172a; }
+      .subtitle { font-size: 15px; fill: #64748b; }
+      .layer-title { font-size: 19px; font-weight: 700; }
+      .layer-desc { font-size: 13px; fill: #64748b; }
+      .crate { font-size: 14px; font-weight: 600; fill: #1e293b; }
+      .note { font-size: 13px; fill: #64748b; }
+      .layer { rx: 14; stroke-width: 1.5; }
+      .arrow { stroke: #94a3b8; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+    </style>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" style="stop-color:#f8fafc"/>
+      <stop offset="100%" style="stop-color:#eef2f7"/>
+    </linearGradient>
+    <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+
+  <rect width="1400" height="1180" fill="url(#bg)"/>
+  <g transform="translate(40, 50)">
+    <text x="0" y="0" class="title">Axon 系统架构全景图</text>
+    <text x="0" y="28" class="subtitle">严格洋葱架构 · 统一多端运行时 · 依赖方向由外向内 · 共 42 个 workspace member</text>
+  </g>
+
+  <g transform="translate(40, 110)">
+    <rect width="1320" height="110" class="layer" fill="#f8fafc" stroke="#94a3b8"/>
+    <text x="24" y="32" class="layer-title" fill="#1e293b">① 入口与宿主层</text>
+    <text x="24" y="56" class="layer-desc">命令行 · 桌面工作台 · 终端界面 · 稳定入口 · 后台宿主</text>
+    <text class="crate"><tspan x="24" y="84">axon-cli</tspan><tspan x="290" y="84">axon-desktop</tspan><tspan x="580" y="84">axon-tui-runtime</tspan><tspan x="900" y="84">axon-launcher</tspan><tspan x="1130" y="84">axon-daemon</tspan></text>
+  </g>
+  <path d="M700 220 V236" class="arrow"/>
+
+  <g transform="translate(40, 236)">
+    <rect width="1320" height="180" class="layer" fill="#f0f9ff" stroke="#7dd3fc"/>
+    <text x="24" y="32" class="layer-title" fill="#0369a1">② 应用与运行时层</text>
+    <text x="24" y="56" class="layer-desc">Agent 循环 · 会话状态机 · 事件日志 · 记忆读写与治理 · 补丁应用 · 输出过滤</text>
+    <text class="crate">
+      <tspan x="24" y="84">axon-agent-runtime</tspan><tspan x="24" y="110">axon-session-runtime</tspan><tspan x="24" y="136">axon-session</tspan><tspan x="24" y="162">axon-eventlog</tspan><tspan x="24" y="188">axon-memory</tspan>
+      <tspan x="290" y="84">axon-memory-read</tspan><tspan x="290" y="110">axon-memory-write</tspan><tspan x="290" y="136">axon-memory-ops</tspan><tspan x="290" y="162">axon-apply</tspan><tspan x="290" y="188">axon-output-filter</tspan>
+      <tspan x="600" y="84">axon-patch-model</tspan>
+    </text>
+  </g>
+  <path d="M700 416 V432" class="arrow"/>
+
+  <g transform="translate(40, 432)">
+    <rect width="1320" height="180" class="layer" fill="#fdf4ff" stroke="#f0abfc"/>
+    <text x="24" y="32" class="layer-title" fill="#86198f">③ 协议与领域层</text>
+    <text x="24" y="56" class="layer-desc">共享契约 · 提示词与动态上下文 · 核心领域模型 · 配置 · 人格</text>
+    <text class="crate">
+      <tspan x="24" y="84">axon-protocol</tspan><tspan x="24" y="110">axon-prompts</tspan><tspan x="24" y="136">axon-context-fragments</tspan><tspan x="24" y="162">axon-domain</tspan>
+      <tspan x="360" y="84">axon-config</tspan><tspan x="360" y="110">axon-env</tspan><tspan x="360" y="136">axon-persona</tspan>
+    </text>
+  </g>
+  <path d="M700 612 V628" class="arrow"/>
+
+  <g transform="translate(40, 628)">
+    <rect width="1320" height="180" class="layer" fill="#f0fdf4" stroke="#86efac"/>
+    <text x="24" y="32" class="layer-title" fill="#166534">④ 接入适配层</text>
+    <text x="24" y="56" class="layer-desc">模型传输 · TLS 证书 · MCP 客户端 · 语音领域模型与协议</text>
+    <text class="crate">
+      <tspan x="24" y="84">axon-provider-transport</tspan><tspan x="24" y="110">axon-rustls-provider</tspan><tspan x="24" y="136">axon-mcp-runtime</tspan>
+      <tspan x="360" y="84">axon-voice</tspan><tspan x="360" y="110">axon-voice-bridge</tspan><tspan x="360" y="136">axon-voice-protocol</tspan>
+    </text>
+  </g>
+  <path d="M700 808 V824" class="arrow"/>
+
+  <g transform="translate(40, 824)">
+    <rect width="1320" height="180" class="layer" fill="#f8fafc" stroke="#cbd5e1" stroke-dasharray="4 4"/>
+    <text x="24" y="32" class="layer-title" fill="#475569">⑤ 通用基础设施层</text>
+    <text x="24" y="56" class="layer-desc">结构化读写 · 时钟 · 子进程隔离 · 文件遍历 · 加密 · 显示格式 · 身份 · 轮次视图 · WebView2 诊断</text>
+    <text class="crate">
+      <tspan x="24" y="84">axon-jsonl</tspan><tspan x="24" y="110">axon-time</tspan><tspan x="24" y="136">axon-process</tspan><tspan x="24" y="162">axon-shell-assoc</tspan><tspan x="24" y="188">axon-fs-walk</tspan>
+      <tspan x="290" y="84">axon-crypto</tspan><tspan x="290" y="110">axon-display</tspan><tspan x="290" y="136">axon-client-identity</tspan><tspan x="290" y="162">axon-turn-view</tspan><tspan x="290" y="188">axon-webview2-failure</tspan>
+    </text>
+  </g>
+  <path d="M700 1004 V1020" class="arrow"/>
+
+  <g transform="translate(40, 1020)">
+    <rect width="1320" height="110" class="layer" fill="#fefce8" stroke="#fde047"/>
+    <text x="24" y="32" class="layer-title" fill="#854d0e">⑥ 测试与验收层</text>
+    <text x="24" y="56" class="layer-desc">确定性样例 · 临时产物隔离 · 独立验收工具</text>
+    <text class="crate"><tspan x="24" y="84">axon-fixtures</tspan><tspan x="290" y="84">axon-test-support</tspan><tspan x="620" y="84">tools/output-filter-acceptance</tspan></text>
+  </g>
+
+  <text x="40" y="1164" class="note">完整清单以仓库根 Cargo.toml 的 [workspace].members 为准；边界由 cargo metadata 与 tools/verify-architecture.py 强制校验。</text>
+</svg>

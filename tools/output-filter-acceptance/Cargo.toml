@@ -1,0 +1,9 @@
+[package]
+name = "output-filter-acceptance"
+version.workspace = true
+edition = "2024"
+publish = false
+
+[dependencies]
+axon-display = { path = "../../crates/axon-display" }
+axon-output-filter = { path = "../../crates/axon-output-filter" }

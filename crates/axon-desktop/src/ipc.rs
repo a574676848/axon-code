@@ -1,0 +1,643 @@
+//! 基础配置的 IPC 命令与数据模型。
+//!
+//! 界面的配置读写一律经网关（`GET /api/v1/config` 与 `PUT /api/v1/config` 的
+//! 联合模式），桌面端不再解析本机 `config.toml`：同一份代码在云端档案下因而
+//! 同样成立。下面的 `execute_*_at` 系列是本地实现，只服务离线自检
+//! （`--self-check` 在临时根内做读、校验、写、复读往返）与单元测试。
+
+use std::collections::{BTreeMap, HashMap};
+use std::fs;
+use std::path::Path;
+
+use axon_config::{
+    AxonConfig, ConfigLoader, ConfigValue, ConfigValueKind, config_key_specs, get_config_value,
+    provider_credential, set_config_value, to_toml_string,
+};
+use serde::{Deserialize, Serialize};
+
+use crate::config_gateway::{self, ConfigUpdate};
+
+/// 前端键规格传输模型。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigKeySpecDto {
+    /// 配置键点分路径。
+    pub key: String,
+    /// 键类型。
+    pub kind: String,
+    /// 是否允许用户编辑。
+    pub editable: bool,
+    /// 说明文本。
+    pub description: String,
+    /// 所属 setup 模块。
+    pub setup_module: String,
+    /// 默认值文本。
+    pub default_value: String,
+    /// 可选项。
+    pub options: Vec<String>,
+    /// 依赖前置键。
+    pub depends_on: Vec<String>,
+}
+
+/// 供应商配置模型。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderDto {
+    /// 供应商标识名称。
+    pub name: String,
+    /// 是否启用。
+    pub enabled: bool,
+    /// 通信协议。
+    pub protocol: String,
+    /// API 端点基础路径。
+    pub base_url: String,
+    /// API Key 环境变量引用名。
+    pub api_key_env: Option<String>,
+    /// 该引用当前是否能解析到真实凭据。
+    pub api_key_configured: bool,
+    /// 底层网络协议传输。
+    pub wire_transport: String,
+    /// 调度优先级。
+    pub priority: i32,
+    /// 调度权重。
+    pub weight: u32,
+}
+
+/// 模型条目配置模型。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelDto {
+    /// 模型名称。
+    pub name: String,
+    /// 真实模型 ID。
+    pub id: String,
+    /// 关联供应商。
+    pub provider: String,
+    /// 上下文视口大小。
+    pub context_window: u64,
+    /// 最大输出 Token。
+    pub max_output_tokens: Option<u64>,
+    /// 是否支持视觉多模态。
+    pub supports_vision: bool,
+    /// 是否支持向量检索。
+    pub supports_embedding: bool,
+    /// 向量维度；仅 supports_embedding 为 true 时有效。
+    pub embedding_dimension: usize,
+    /// 是否要求历史助手消息逐条回传推理内容。
+    pub requires_reasoning_content_on_assistant_messages: bool,
+}
+
+/// 配置读取响应。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigReadResponse {
+    /// 扁平配置键值字典。
+    pub flat_values: HashMap<String, serde_json::Value>,
+    /// 权威 TOML 规格文本。
+    pub toml_content: String,
+    /// 仅展示的环境变量名清单（绝不透出密钥明文）。
+    pub env_vars: Vec<String>,
+    /// 配置键规格定义。
+    pub specs: Vec<ConfigKeySpecDto>,
+    /// 配置文件权威路径。
+    pub config_path: String,
+    /// 已注册供应商列表。
+    pub providers: Vec<ProviderDto>,
+    /// 已注册模型列表。
+    pub models: Vec<ModelDto>,
+    /// 供应商协议候选值，与配置校验保持单一事实源。
+    pub provider_protocols: Vec<String>,
+    /// 供应商链路候选值。
+    pub provider_wire_transports: Vec<String>,
+}
+
+/// 配置校验响应（纯内存，不落盘）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigValidateResponse {
+    /// 校验是否完全通过。
+    pub valid: bool,
+    /// 错误信息列表。
+    pub errors: Vec<String>,
+    /// 警告信息列表。
+    pub warnings: Vec<String>,
+    /// 变更或校验摘要。
+    pub diff_summary: Vec<String>,
+}
+
+/// 配置写入响应。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigWriteResponse {
+    /// 是否实际执行了写入（内容未变时为 false）。
+    pub written: bool,
+    /// 状态说明消息。
+    pub message: String,
+    /// 是否建立了安全备份。
+    pub backup_created: bool,
+}
+
+/// 将系统 ConfigValue 转为 JSON Value。
+fn convert_config_value_to_json(val: ConfigValue) -> serde_json::Value {
+    match val {
+        ConfigValue::Bool(b) => serde_json::Value::Bool(b),
+        ConfigValue::Unsigned(u) => serde_json::Value::Number(u.into()),
+        ConfigValue::String(s) => serde_json::Value::String(s),
+        ConfigValue::StringList(list) => {
+            serde_json::Value::Array(list.into_iter().map(serde_json::Value::String).collect())
+        }
+    }
+}
+
+/// 加载配置相邻 `.env` 中的凭据。
+///
+/// 运行时会话启动时会加载该文件；离线自检与单元测试走同一份读取逻辑，
+/// 否则已配好的密钥会被误报成「未配置」。
+fn ensure_credentials_loaded(config_path: &Path) {
+    let Some(parent) = config_path.parent() else {
+        return;
+    };
+    let _ = axon_config::load_provider_credentials_from_env_file(&parent.join(".env"));
+}
+
+// ------------------------------------------------- 本地实现（离线自检与单测）
+//
+// 下面这组函数按给定路径读写本机文件，只在两条场合使用：`--self-check` 在临时
+// 根里做「读、校验、写、复读」往返，以及单元测试。界面的配置命令只经网关，
+// 不得调用这里。
+
+/// 执行真实配置读取。
+pub fn execute_config_read_at(config_path: &Path) -> Result<ConfigReadResponse, String> {
+    ensure_credentials_loaded(config_path);
+    let loaded =
+        ConfigLoader::load_from_path(config_path).map_err(|e| format!("加载配置失败: {e:?}"))?;
+
+    let toml_content =
+        to_toml_string(&loaded.config).map_err(|e| format!("序列化配置失败: {e:?}"))?;
+
+    let mut flat_values = HashMap::new();
+    let specs_raw = config_key_specs();
+    let mut specs = Vec::with_capacity(specs_raw.len());
+
+    for s in specs_raw {
+        if let Some(val) = get_config_value(&loaded.config, s.key) {
+            flat_values.insert(s.key.to_string(), convert_config_value_to_json(val));
+        }
+
+        let kind_str = match s.kind {
+            ConfigValueKind::Bool => "bool",
+            ConfigValueKind::Unsigned => "unsigned",
+            ConfigValueKind::String => "string",
+            ConfigValueKind::StringList => "string_list",
+        };
+
+        specs.push(ConfigKeySpecDto {
+            key: s.key.to_string(),
+            kind: kind_str.to_string(),
+            editable: s.editable,
+            description: s.description.to_string(),
+            setup_module: s.setup_module.to_string(),
+            default_value: s.default_value.to_string(),
+            options: s.options.iter().map(|&opt| opt.to_string()).collect(),
+            depends_on: s.depends_on.iter().map(|&dep| dep.to_string()).collect(),
+        });
+    }
+
+    // 收集安全环境变量名清单（仅透出变量名，绝不透传密钥明文）
+    let known_env_keys = [
+        "AXON_RUNTIME_ROOT",
+        "AXON_CONFIG_PATH",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "GLM_API_KEY",
+        "DEEPSEEK_API_KEY",
+    ];
+    let env_vars = known_env_keys
+        .iter()
+        .filter(|&&k| std::env::var(k).is_ok())
+        .map(|&k| k.to_string())
+        .collect();
+
+    let providers = loaded
+        .config
+        .providers
+        .iter()
+        .map(|p| ProviderDto {
+            name: p.name.clone(),
+            enabled: p.enabled,
+            protocol: p.protocol.clone(),
+            base_url: p.base_url.clone(),
+            api_key_env: p.api_key_env.clone(),
+            api_key_configured: p
+                .api_key_env
+                .as_deref()
+                .is_some_and(|name| provider_credential(name).is_some()),
+            wire_transport: p.wire_transport.clone(),
+            priority: p.priority,
+            weight: p.weight,
+        })
+        .collect();
+
+    let models = loaded
+        .config
+        .models
+        .iter()
+        .map(|m| ModelDto {
+            name: m.name.clone(),
+            id: m.id.clone(),
+            provider: m.provider.clone(),
+            context_window: m.context_window,
+            max_output_tokens: m.max_output_tokens,
+            supports_vision: m.supports_vision,
+            supports_embedding: m.supports_embedding,
+            embedding_dimension: m.embedding_dimension,
+            requires_reasoning_content_on_assistant_messages: m
+                .requires_reasoning_content_on_assistant_messages,
+        })
+        .collect();
+
+    Ok(ConfigReadResponse {
+        flat_values,
+        toml_content,
+        env_vars,
+        specs,
+        config_path: config_path.to_string_lossy().to_string(),
+        providers,
+        models,
+        provider_protocols: vec![
+            axon_config::PROVIDER_PROTOCOL_OPENAI.to_string(),
+            axon_config::PROVIDER_PROTOCOL_OPENAI_CHAT.to_string(),
+            axon_config::PROVIDER_PROTOCOL_ANTHROPIC.to_string(),
+            axon_config::PROVIDER_PROTOCOL_DASHSCOPE.to_string(),
+            axon_config::PROVIDER_PROTOCOL_VOLCENGINE_ARK_MULTIMODAL.to_string(),
+        ],
+        provider_wire_transports: vec![
+            axon_config::PROVIDER_WIRE_TRANSPORT_HTTP.to_string(),
+            axon_config::PROVIDER_WIRE_TRANSPORT_WEBSOCKET.to_string(),
+        ],
+    })
+}
+
+/// 执行权威内存校验（纯内存，不落盘）。
+pub fn execute_config_validate(toml_content: &str) -> ConfigValidateResponse {
+    match ConfigLoader::load_from_str(toml_content) {
+        Ok(_) => ConfigValidateResponse {
+            valid: true,
+            errors: Vec::new(),
+            warnings: Vec::new(),
+            diff_summary: vec!["权威内存校验通过 (语法与结构完整)".to_string()],
+        },
+        Err(err) => ConfigValidateResponse {
+            valid: false,
+            errors: vec![format!("{err:?}")],
+            warnings: Vec::new(),
+            diff_summary: Vec::new(),
+        },
+    }
+}
+
+/// 备份后直接写入配置（复用 ConfigLoader::save_to_path）。
+pub fn execute_config_write_at(
+    config_path: &Path,
+    toml_content: &str,
+) -> Result<ConfigWriteResponse, String> {
+    // 1. 内存中先行严格校验
+    let loaded = ConfigLoader::load_from_str(toml_content)
+        .map_err(|e| format!("配置校验未通过，禁止落盘: {e:?}"))?;
+
+    let canonical_toml =
+        to_toml_string(&loaded.config).map_err(|e| format!("规范化序列化失败: {e:?}"))?;
+
+    // 2. 检查现有文件是否完全一致
+    let existing_match = fs::read(config_path)
+        .ok()
+        .is_some_and(|existing| existing == canonical_toml.as_bytes());
+
+    if existing_match {
+        return Ok(ConfigWriteResponse {
+            written: false,
+            message: "配置内容未发生变化，已跳过写入".to_string(),
+            backup_created: false,
+        });
+    }
+
+    // 3. 父目录按需创建
+    if let Some(parent) = config_path.parent()
+        && !parent.exists()
+    {
+        fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败: {e:?}"))?;
+    }
+
+    // 4. 调用权威配置保存
+    ConfigLoader::save_to_path(config_path, &loaded.config)
+        .map_err(|e| format!("写入配置失败: {e:?}"))?;
+
+    Ok(ConfigWriteResponse {
+        written: true,
+        message: "配置已备份并写入".to_string(),
+        backup_created: config_path.exists(),
+    })
+}
+
+/// 在指定路径上批量应用配置键值，备份后直接写入原文件。
+pub fn execute_apply_values_at(
+    path: &Path,
+    values: &HashMap<String, String>,
+) -> Result<ConfigWriteResponse, String> {
+    if values.is_empty() {
+        return Ok(ConfigWriteResponse {
+            written: false,
+            message: "没有需要应用的变更".to_string(),
+            backup_created: false,
+        });
+    }
+
+    let mut loaded =
+        ConfigLoader::load_from_path(path).map_err(|error| format!("加载配置失败: {error:?}"))?;
+
+    let mut keys: Vec<&String> = values.keys().collect();
+    keys.sort();
+    for key in keys {
+        let raw = values.get(key).cloned().unwrap_or_default();
+        set_config_value(&mut loaded.config, key, &raw)
+            .map_err(|error| format!("配置项 {key} 取值非法：{error:?}"))?;
+    }
+
+    ConfigLoader::save_to_path(path, &loaded.config)
+        .map_err(|error| format!("写入配置失败: {error:?}"))?;
+    Ok(ConfigWriteResponse {
+        written: true,
+        message: "已保存".to_string(),
+        backup_created: true,
+    })
+}
+
+/// 在指定路径上把单个配置项恢复为内置默认值。
+pub fn execute_reset_key_at(path: &Path, key: &str) -> Result<ConfigWriteResponse, String> {
+    let default_value = get_config_value(&AxonConfig::default(), key)
+        .ok_or_else(|| format!("未知配置键：{key}"))?;
+
+    let mut loaded =
+        ConfigLoader::load_from_path(path).map_err(|error| format!("加载配置失败: {error:?}"))?;
+    set_config_value(&mut loaded.config, key, &default_value.to_string())
+        .map_err(|error| format!("重置配置项失败：{error:?}"))?;
+    ConfigLoader::save_to_path(path, &loaded.config)
+        .map_err(|error| format!("写入配置失败: {error:?}"))?;
+    Ok(ConfigWriteResponse {
+        written: true,
+        message: "已恢复默认值".to_string(),
+        backup_created: true,
+    })
+}
+
+/// 在指定路径上对一批待应用变更做纯内存试算校验，不落盘。
+pub fn execute_validate_values_at(
+    path: &Path,
+    values: &HashMap<String, String>,
+) -> ConfigValidateResponse {
+    let mut loaded = match ConfigLoader::load_from_path(path) {
+        Ok(value) => value,
+        Err(error) => {
+            return ConfigValidateResponse {
+                valid: false,
+                errors: vec![format!("加载配置失败: {error:?}")],
+                warnings: Vec::new(),
+                diff_summary: Vec::new(),
+            };
+        }
+    };
+
+    let mut keys: Vec<&String> = values.keys().collect();
+    keys.sort();
+    let mut errors = Vec::new();
+    for key in &keys {
+        let raw = values.get(*key).cloned().unwrap_or_default();
+        if let Err(error) = set_config_value(&mut loaded.config, key, &raw) {
+            errors.push(format!("{key}：{error:?}"));
+        }
+    }
+
+    ConfigValidateResponse {
+        valid: errors.is_empty(),
+        errors,
+        warnings: Vec::new(),
+        diff_summary: if keys.is_empty() {
+            vec!["没有待应用的变更".to_string()]
+        } else {
+            vec![format!("待应用 {} 项配置变更", keys.len())]
+        },
+    }
+}
+
+// ---------------------------------------------------------------- 网关命令
+//
+// 界面只有这一组命令：数据来源是后台服务，桌面端不再碰本机配置文件。
+
+/// Tauri IPC 命令：读取基础配置。
+///
+/// 回执与 [`ConfigReadResponse`] 逐字同构，因此直接反序列化成既有类型。
+///
+/// # Errors
+///
+/// 网关不可达、凭据不匹配或后台服务版本过旧（缺该路由）。
+#[tauri::command(async)]
+pub fn config_read() -> Result<ConfigReadResponse, String> {
+    config_gateway::decode(config_gateway::get_json(config_gateway::CONFIG_PATH)?)
+}
+
+/// Tauri IPC 命令：校验配置（纯内存，不落盘）。
+///
+/// 判定权在后台：`validate` 模式只校验、不落盘。校验没跑成同样按不通过上报，
+/// 绝不因为网关不通就报成合法。
+#[tauri::command(async)]
+pub fn config_validate(toml_content: String) -> ConfigValidateResponse {
+    let update = ConfigUpdate::Validate { toml_content };
+    match update.send() {
+        Ok(receipt) => config_gateway::decode(receipt).unwrap_or_else(invalid_report),
+        Err(error) => invalid_report(error),
+    }
+}
+
+/// Tauri IPC 命令：校验并写入配置（文本模式）。
+///
+/// # Errors
+///
+/// 配置校验未通过（后台拒绝落盘）、网关不可达或后台服务版本过旧。
+#[tauri::command(async)]
+pub fn config_write(toml_content: String) -> Result<ConfigWriteResponse, String> {
+    let receipt = (ConfigUpdate::Text { toml_content }).send()?;
+    config_gateway::decode(receipt)
+}
+
+/// Tauri IPC 命令：批量应用配置键值并落盘（按值模式）。
+///
+/// 键名升序整理后交给后台逐键应用；空变更集由后台回「没有需要应用的变更」，
+/// 与旧行为一致，因此桌面端不另判一次。
+///
+/// # Errors
+///
+/// 某个键的取值不合法、网关不可达或后台服务版本过旧。
+#[tauri::command(async)]
+pub fn config_apply_values(values: HashMap<String, String>) -> Result<ConfigWriteResponse, String> {
+    let receipt = (ConfigUpdate::Values {
+        values: values.into_iter().collect(),
+    })
+    .send()?;
+    config_gateway::decode(receipt)
+}
+
+/// Tauri IPC 命令：把单个配置项恢复为内置默认值。
+///
+/// # Errors
+///
+/// 未知配置键、网关不可达或后台服务版本过旧。
+#[tauri::command(async)]
+pub fn config_reset_key(key: String) -> Result<ConfigWriteResponse, String> {
+    let receipt = (ConfigUpdate::ResetKey { key }).send()?;
+    config_gateway::decode(receipt)
+}
+
+/// Tauri IPC 命令：对一批待应用变更做纯内存试算校验，不落盘。
+///
+/// 后台没有「按值校验」的联合模式，因此先取权威配置全文、在内存里把这批值应用
+/// 上去，再交给 `validate` 模式判定：判定权仍在后台，桌面端只负责拼出候选全文。
+/// 拼不出来时如实报失败，不猜也不跳过校验。
+#[tauri::command(async)]
+pub fn config_validate_values(values: HashMap<String, String>) -> ConfigValidateResponse {
+    if values.is_empty() {
+        // 没有待应用的变更：不打扰后台，直接给结论。
+        return ConfigValidateResponse {
+            valid: true,
+            errors: Vec::new(),
+            warnings: Vec::new(),
+            diff_summary: vec!["没有待应用的变更".to_string()],
+        };
+    }
+    let values: BTreeMap<String, String> = values.into_iter().collect();
+    let candidate = match config_gateway::compose_candidate_text(&values) {
+        Ok(candidate) => candidate,
+        Err(errors) => {
+            return ConfigValidateResponse {
+                valid: false,
+                errors,
+                warnings: Vec::new(),
+                diff_summary: Vec::new(),
+            };
+        }
+    };
+    match (ConfigUpdate::Validate {
+        toml_content: candidate,
+    })
+    .send()
+    {
+        Ok(receipt) => config_gateway::decode(receipt).unwrap_or_else(invalid_report),
+        Err(error) => invalid_report(error),
+    }
+}
+
+/// 校验结论的失败形态：原因进 errors，valid 为假。
+///
+/// 网关不通与回执结构不符都属于「没校验成」，不能报成通过。
+fn invalid_report(reason: String) -> ConfigValidateResponse {
+    ConfigValidateResponse {
+        valid: false,
+        errors: vec![reason],
+        warnings: Vec::new(),
+        diff_summary: Vec::new(),
+    }
+}
+
+/// 朗读音频：base64 编码的 WAV 与 MIME 类型。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceAudioPayload {
+    /// base64 编码的 WAV 字节。
+    pub audio_base64: String,
+    /// MIME 类型，固定 `audio/wav`。
+    pub mime_type: String,
+}
+
+/// 合成一段朗读音频，由 Rust 侧带网关凭据发起请求。
+///
+/// 合成是秒级到十几秒的操作：必须放在阻塞池里执行，否则会占住主线程，
+/// 窗口在这段时间内既不响应点击也不响应滚动。
+///
+/// # Errors
+///
+/// 参数为空、网关不可达、语音提供方未就绪或合成失败。
+#[tauri::command]
+pub async fn voice_tts(
+    text: String,
+    preset_id: Option<String>,
+) -> Result<VoiceAudioPayload, String> {
+    tauri::async_runtime::spawn_blocking(move || synthesize(text, preset_id))
+        .await
+        .map_err(|error| format!("朗读任务失败：{error}"))?
+}
+
+/// 朗读合成的同步实现；命令通道放在阻塞池里调它，调试桥直接调。
+pub(crate) fn synthesize(
+    text: String,
+    preset_id: Option<String>,
+) -> Result<VoiceAudioPayload, String> {
+    use base64::Engine as _;
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("没有可朗读的内容".to_owned());
+    }
+    let persona = persona_payload();
+    let bytes = crate::gateway::post_voice_tts(text, preset_id.as_deref(), persona.as_ref())
+        .map_err(|error| match error {
+            crate::gateway::VoiceTtsError::Unavailable(reason) => {
+                format!("voice_unavailable: {reason}")
+            }
+            crate::gateway::VoiceTtsError::Failed(reason) => reason,
+        })?;
+    Ok(VoiceAudioPayload {
+        audio_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        mime_type: "audio/wav".to_owned(),
+    })
+}
+
+/// 列出音色预设与可用性，供设置页渲染。
+///
+/// # Errors
+///
+/// 网关不可达或鉴权失败。
+#[tauri::command(async)]
+pub fn voice_presets() -> Result<serde_json::Value, String> {
+    crate::gateway::get_voice_presets()
+}
+
+/// 语音提供方状态：点麦克风之前先确认语音是否就绪。
+///
+/// # Errors
+///
+/// 网关不可达或鉴权失败。
+#[tauri::command(async)]
+pub fn voice_runtime_status() -> Result<serde_json::Value, String> {
+    crate::gateway::get_voice_runtime_status()
+}
+
+/// 从人格摘要里取语音需要的表达参数；字段缺失时返回 `None`，交给默认基线。
+pub(crate) fn persona_payload() -> Option<serde_json::Value> {
+    let summary = crate::persona::persona_summary().ok()?;
+    let voice = summary
+        .get("soul")
+        .and_then(|soul| soul.get("voice"))
+        .or_else(|| summary.get("voice"))
+        .or_else(|| summary.get("expression"))
+        .unwrap_or(&summary);
+    let mode = summary
+        .get("mode")
+        .or_else(|| voice.get("mode"))
+        .and_then(|value| value.as_str());
+    let warmth = voice.get("warmth").and_then(|value| value.as_u64());
+    let formality = voice.get("formality").and_then(|value| value.as_u64());
+    let humor = voice.get("humor").and_then(|value| value.as_str());
+    let verbosity = voice.get("verbosity").and_then(|value| value.as_str());
+    if mode.is_none() && warmth.is_none() && formality.is_none() {
+        return None;
+    }
+    Some(serde_json::json!({
+        "mode": mode.unwrap_or("casual"),
+        "warmth": warmth.unwrap_or(50),
+        "formality": formality.unwrap_or(60),
+        "humor": humor.unwrap_or("subtle"),
+        "verbosity": verbosity.unwrap_or("concise"),
+    }))
+}

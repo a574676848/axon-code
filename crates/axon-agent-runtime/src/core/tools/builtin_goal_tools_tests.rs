@@ -1,0 +1,394 @@
+//! Goal 工具「单一解析实现 + 五工具外部 schema 守恒」的回归测试。
+
+use super::{
+    GOAL_CANCEL_TOOL_NAME, GOAL_CREATE_TOOL_NAME, GOAL_GET_TOOL_NAME, GOAL_LIST_TOOL_NAME,
+    GOAL_START_TOOL_NAME, GOAL_UPDATE_TOOL_NAME, GoalToolRuntime, goal_tool_definitions,
+};
+use axon_domain::{AxonError, ToolError};
+use axon_protocol::GoalToolCommand;
+use serde_json::json;
+
+/// 构造模型面看到的限定工具名。
+fn qualified(bare_name: &str) -> String {
+    format!("builtin.{bare_name}")
+}
+
+/// 断言错误是「工具参数无效」这一类结构化拒绝。
+fn assert_tool_invalid_arguments(error: AxonError, case: &str) {
+    assert!(
+        matches!(error, AxonError::Tool(ToolError::InvalidArguments(_))),
+        "{case} 必须返回工具参数错误，实际为 {error:?}"
+    );
+}
+
+/// 六个 Goal 工具必须各自映射到唯一的 wire 命令变体。
+#[test]
+fn every_goal_tool_maps_to_exactly_one_command_variant() {
+    let cases = [
+        (
+            GOAL_CREATE_TOOL_NAME,
+            json!({
+                "scope": "current_workspace",
+                "title": "整理发布说明",
+                "objective": "输出可验收的发布说明",
+                "steps": ["汇总变更"],
+                "acceptance": ["发布说明通过审阅"],
+            }),
+        ),
+        (GOAL_LIST_TOOL_NAME, json!({"scope": "current_context"})),
+        (GOAL_GET_TOOL_NAME, json!({"goalId": "goal-1"})),
+        (
+            GOAL_UPDATE_TOOL_NAME,
+            json!({"goalId": "goal-1", "expectedRevision": 3, "nextStep": "复核产物"}),
+        ),
+        (
+            GOAL_CANCEL_TOOL_NAME,
+            json!({"goalId": "goal-1", "expectedRevision": 3, "reason": "用户取消"}),
+        ),
+        (
+            GOAL_START_TOOL_NAME,
+            json!({"goalId": "goal-1", "expectedRevision": 3}),
+        ),
+    ];
+    let mut variants = Vec::new();
+    for (bare_name, input) in cases {
+        let name = qualified(bare_name);
+        let command = GoalToolRuntime::parse_command(&name, &input)
+            .unwrap_or_else(|error| panic!("{name} 必须解析成功：{error:?}"));
+        variants.push(command_variant(&command));
+        assert_eq!(
+            command_variant(&command),
+            bare_name,
+            "{name} 命令变体必须唯一"
+        );
+    }
+    variants.sort_unstable();
+    variants.dedup();
+    assert_eq!(variants.len(), 6, "六个工具的 wire 命令变体必须两两不同");
+}
+
+/// 缺省值由唯一解析实现补齐，下游层不再二次计算。
+#[test]
+fn the_single_parser_applies_documented_defaults() {
+    let list = GoalToolRuntime::parse_command(
+        &qualified(GOAL_LIST_TOOL_NAME),
+        &json!({
+            "scope": "current_context"
+        }),
+    )
+    .expect("列表命令解析成功");
+    assert!(
+        matches!(list, GoalToolCommand::List(query) if query.limit == 20),
+        "列表缺省页大小必须为 20"
+    );
+
+    let get = GoalToolRuntime::parse_command(
+        &qualified(GOAL_GET_TOOL_NAME),
+        &json!({
+            "goalId": "goal-1"
+        }),
+    )
+    .expect("详情命令解析成功");
+    assert!(
+        matches!(get, GoalToolCommand::Get(query) if query.limit == 20),
+        "详情缺省记录上限必须为 20"
+    );
+
+    let create = GoalToolRuntime::parse_command(
+        &qualified(GOAL_CREATE_TOOL_NAME),
+        &json!({
+            "scope": "global",
+            "title": "标题",
+            "objective": "目标",
+            "steps": ["步骤"],
+            "acceptance": ["验收"],
+        }),
+    )
+    .expect("创建命令解析成功");
+    assert!(
+        matches!(create, GoalToolCommand::Create(command) if !command.create_execution),
+        "缺省不创建首个 Execution"
+    );
+}
+
+/// 未知工具名、未限定名与非法参数统一返回结构化工具参数拒绝。
+#[test]
+fn unknown_tool_names_and_invalid_arguments_are_rejected() {
+    let valid_create = json!({
+        "scope": "global",
+        "title": "标题",
+        "objective": "目标",
+        "steps": ["步骤"],
+        "acceptance": ["验收"],
+    });
+    let cases: Vec<(String, serde_json::Value)> = vec![
+        (qualified("goal_unknown"), json!({})),
+        (qualified("goal_archive"), json!({})),
+        ("goal_create".to_owned(), valid_create.clone()),
+        (qualified(GOAL_CREATE_TOOL_NAME), {
+            let mut input = valid_create.clone();
+            input["scope"] = json!("unsupported_scope");
+            input
+        }),
+        (qualified(GOAL_CREATE_TOOL_NAME), {
+            let mut input = valid_create.clone();
+            input["title"] = json!("   ");
+            input
+        }),
+        (qualified(GOAL_CREATE_TOOL_NAME), {
+            let mut input = valid_create.clone();
+            input["createExecutionAlias"] = json!(true);
+            input
+        }),
+        (
+            qualified(GOAL_LIST_TOOL_NAME),
+            json!({"scope": "current_context", "limit": 0}),
+        ),
+        (
+            qualified(GOAL_LIST_TOOL_NAME),
+            json!({"scope": "unsupported_scope"}),
+        ),
+        (
+            qualified(GOAL_UPDATE_TOOL_NAME),
+            json!({"goalId": "goal-1", "expectedRevision": 1}),
+        ),
+        (
+            qualified(GOAL_CANCEL_TOOL_NAME),
+            json!({"goalId": "goal-1", "expectedRevision": 1, "reason": "  "}),
+        ),
+    ];
+    for (name, input) in cases {
+        let case = format!("{name} + {input}");
+        let error = GoalToolRuntime::parse_command(&name, &input)
+            .expect_err("该输入必须被单一解析实现拒绝");
+        assert_tool_invalid_arguments(error, &case);
+    }
+}
+
+/// §5.4.3 守恒项：六个工具的外部 schema 与目标态逐字段一致，无别名无兼容层。
+#[test]
+fn goal_tool_definitions_freeze_the_six_external_schemas() {
+    let definitions = goal_tool_definitions();
+    let frozen: [(&str, &[&str], &[&str]); 6] = [
+        (
+            GOAL_CREATE_TOOL_NAME,
+            &[
+                "scope",
+                "title",
+                "objective",
+                "steps",
+                "acceptance",
+                "intent",
+            ],
+            &[
+                "acceptance",
+                "createExecution",
+                "intent",
+                "objective",
+                "scope",
+                "steps",
+                "title",
+                "writePolicy",
+            ],
+        ),
+        (
+            GOAL_LIST_TOOL_NAME,
+            &["scope", "intent"],
+            &["cursor", "intent", "limit", "scope", "status"],
+        ),
+        (
+            GOAL_GET_TOOL_NAME,
+            &["goalId", "intent"],
+            &[
+                "goalId",
+                "includeEvents",
+                "includeExecutions",
+                "intent",
+                "limit",
+            ],
+        ),
+        (
+            GOAL_UPDATE_TOOL_NAME,
+            &["goalId", "expectedRevision", "intent"],
+            &[
+                "expectedRevision",
+                "goalId",
+                "intent",
+                "nextStep",
+                "priority",
+                "status",
+                "title",
+                "waitingReason",
+            ],
+        ),
+        (
+            GOAL_CANCEL_TOOL_NAME,
+            &["goalId", "expectedRevision", "reason", "intent"],
+            &["expectedRevision", "goalId", "intent", "reason"],
+        ),
+        (
+            GOAL_START_TOOL_NAME,
+            &["goalId", "expectedRevision", "intent"],
+            &["expectedRevision", "goalId", "intent"],
+        ),
+    ];
+    assert_eq!(
+        definitions.len(),
+        frozen.len(),
+        "外部 Goal 工具必须恰为六个"
+    );
+    for (definition, (name, required, properties)) in definitions.iter().zip(frozen) {
+        assert_eq!(definition.name, name, "工具名与顺序必须保持目标态");
+        assert_eq!(definition.namespace, "builtin");
+        assert!(definition.enabled, "{name} 必须处于启用状态");
+        assert_eq!(
+            definition.schema.required_field_names(),
+            required,
+            "{name} 必填字段发生变化"
+        );
+        let mut actual = definition.schema.field_names();
+        actual.sort_unstable();
+        assert_eq!(actual, properties, "{name} 属性集合发生变化");
+        assert_eq!(
+            definition.schema.input_schema["additionalProperties"],
+            json!(false),
+            "{name} 不得放开额外字段（即不得引入别名或兼容层）"
+        );
+        assert_eq!(
+            definition.schema.input_schema["type"],
+            json!("object"),
+            "{name} 必须保持 object 入参"
+        );
+    }
+}
+
+/// `intent` 是 schema 必填的展示字段：解析必须接受它，且不得进入领域命令。
+#[test]
+fn intent_is_accepted_and_stripped_before_the_domain_command() {
+    let cases = [
+        (
+            GOAL_CREATE_TOOL_NAME,
+            json!({
+                "intent": "拆解记忆增强目标",
+                "scope": "current_workspace",
+                "title": "记忆增强",
+                "objective": "落地可交付的清单",
+                "steps": ["梳理", "拆解"],
+                "acceptance": ["清单可验收"],
+            }),
+        ),
+        (
+            GOAL_LIST_TOOL_NAME,
+            json!({"intent": "盘点进行中的目标", "scope": "current_context"}),
+        ),
+        (
+            GOAL_GET_TOOL_NAME,
+            json!({"intent": "确认目标进度", "goalId": "goal-1"}),
+        ),
+        (
+            GOAL_UPDATE_TOOL_NAME,
+            json!({
+                "intent": "标记等待输入",
+                "goalId": "goal-1",
+                "expectedRevision": 3,
+                "waitingReason": "等待用户确认"
+            }),
+        ),
+        (
+            GOAL_CANCEL_TOOL_NAME,
+            json!({
+                "intent": "取消过期目标",
+                "goalId": "goal-1",
+                "expectedRevision": 3,
+                "reason": "需求已变更"
+            }),
+        ),
+        (
+            GOAL_START_TOOL_NAME,
+            json!({"intent": "继续执行目标", "goalId": "goal-1", "expectedRevision": 3}),
+        ),
+    ];
+    for (bare_name, input) in cases {
+        let name = qualified(bare_name);
+        GoalToolRuntime::parse_command(&name, &input)
+            .unwrap_or_else(|error| panic!("{name} 必须接受 intent：{error:?}"));
+    }
+    // 只摘 intent：其余未知字段仍按严格 schema 拒绝。
+    let error = GoalToolRuntime::parse_command(
+        &qualified(GOAL_CREATE_TOOL_NAME),
+        &json!({
+            "intent": "拆解目标",
+            "scope": "global",
+            "title": "标题",
+            "objective": "目标",
+            "steps": ["步骤"],
+            "acceptance": ["验收"],
+            "createExecutionAlias": true,
+        }),
+    )
+    .expect_err("未知字段必须继续被拒绝");
+    assert_tool_invalid_arguments(error, "intent 之外的单别名字段");
+}
+
+/// 从 wire 命令取回其工具名，用于断言「一命令一变体」。
+fn command_variant(command: &GoalToolCommand) -> &'static str {
+    match command {
+        GoalToolCommand::Create(_) => GOAL_CREATE_TOOL_NAME,
+        GoalToolCommand::List(_) => GOAL_LIST_TOOL_NAME,
+        GoalToolCommand::Get(_) => GOAL_GET_TOOL_NAME,
+        GoalToolCommand::Update(_) => GOAL_UPDATE_TOOL_NAME,
+        GoalToolCommand::Cancel(_) => GOAL_CANCEL_TOOL_NAME,
+        GoalToolCommand::Start(_) => GOAL_START_TOOL_NAME,
+    }
+}
+
+/// 创建工具必须接受 `writePolicy`，缺省为允许改动。
+#[test]
+fn goal_create_accepts_write_policy_and_defaults_to_allow() {
+    let base = json!({
+        "scope": "current_workspace",
+        "title": "W8.5 探针",
+        "objective": "只核验目标执行落点",
+        "steps": ["读取目标", "验证会话"],
+        "acceptance": ["执行产生终态"],
+        "createExecution": true,
+    });
+
+    let allowed = GoalToolRuntime::parse_create(&base).expect("缺省即允许改动");
+    assert_eq!(allowed.write_policy, axon_domain::GoalWritePolicy::Allow);
+
+    let mut read_only_input = base;
+    read_only_input["writePolicy"] = json!("read_only");
+    let read_only = GoalToolRuntime::parse_create(&read_only_input).expect("只读档必须可解析");
+    assert_eq!(
+        read_only.write_policy,
+        axon_domain::GoalWritePolicy::ReadOnly
+    );
+
+    let mut unknown = read_only_input;
+    unknown["writePolicy"] = json!("sometimes");
+    assert_tool_invalid_arguments(
+        GoalToolRuntime::parse_create(&unknown).unwrap_err(),
+        "越界的 writePolicy",
+    );
+}
+
+/// 创建工具的 schema 必须把写权限暴露给模型，否则它永远只能拿到缺省档。
+#[test]
+fn goal_create_schema_exposes_write_policy() {
+    let schema = super::goal_create();
+    let properties = &schema.schema.input_schema["properties"];
+
+    assert!(
+        properties.get("writePolicy").is_some(),
+        "writePolicy 必须在工具 schema 里：{properties}"
+    );
+    let required = schema.schema.input_schema["required"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !required.iter().any(|value| value == "writePolicy"),
+        "writePolicy 必须可选，否则老调用会全部失效"
+    );
+}

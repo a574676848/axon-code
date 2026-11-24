@@ -1,0 +1,40 @@
+# Cargo 构建配置
+#
+# 这里的默认配置必须保持跨平台可用。不要在仓库级默认启用只在
+# 某些机器上存在的工具，例如 sccache 或特定系统链接器；需要时请
+# 在本机 shell 环境中通过 RUSTC_WRAPPER/RUSTFLAGS 临时开启。
+
+[build]
+# 编译并发度：默认跟随机器逻辑核数（此前固定 8，在 16 核开发机上只用了一半并行度，
+# 明显拉长改一个 crate 后全仓测试的重编译时间）。内存受限的机器可临时降级：
+#   $env:CARGO_BUILD_JOBS = "8"
+jobs = 8
+
+[env]
+# 单测默认并行执行：全仓测试耗时的关键是不要让 RUST_TEST_THREADS 全局退化为串行。
+# 需要定位终端 / 后台线程相关的时序问题时，可在本机显式降级：
+#   $env:RUST_TEST_THREADS = "1"; cargo test --workspace
+# 与 Rust x86_64 macOS 目标的默认版本保持一致，避免原生依赖继承 SDK 版本。
+MACOSX_DEPLOYMENT_TARGET = { value = "10.12", force = false }
+
+# 增量编译缓存目录（可选：移到更快的磁盘）
+# incremental = true  # 已在 profile 中启用
+
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"
+
+[target.x86_64-pc-windows-gnu]
+linker = "rust-lld.exe"
+
+[target.x86_64-apple-darwin]
+# AWS-LC SHA-3 汇编保留 DWARF unwind，但无法转换为 macOS compact unwind。
+rustflags = ["-A", "linker-messages"]
+
+[profile.dev]
+# Windows 上加速调试符号生成
+split-debuginfo = "unpacked"
+
+[term]
+# 简化输出，减少终端渲染开销
+verbose = false
+quiet = false

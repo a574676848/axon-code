@@ -1,0 +1,144 @@
+//! 运行时事实源的进程内连接池。
+//!
+//! SQLite 单写者模型下逐操作重建连接会在 Windows 上引入可观的打开与日志配置
+//! 开销（实测 500 次提交相差两个数量级）。池以「取用 / 归还」替代全局互斥：
+//! 同一线程嵌套取用会拿到另一条连接，因此不会自死锁；多条连接在 WAL 下可并行
+//! 读取，写事务仍由 SQLite 自身的写锁串行化。
+
+use super::{RuntimeStoreError, storage};
+use rusqlite::Connection;
+use std::ops::{Deref, DerefMut};
+use std::path::PathBuf;
+use std::sync::{Mutex, PoisonError};
+use std::time::Duration;
+
+/// 空闲连接保留上限；超出的归还连接直接关闭，避免长尾线程堆积文件句柄。
+const MAX_IDLE_CONNECTIONS: usize = 8;
+/// 单条连接等待写锁的毫秒数；超时返回 Busy 交由上层可观测地失败，而不是无限阻塞。
+const BUSY_TIMEOUT_MS: u64 = 1_000;
+/// 生产默认的写锁等待上限。
+const DEFAULT_BUSY_TIMEOUT: Duration = Duration::from_millis(BUSY_TIMEOUT_MS);
+/// 每条连接共享的 PRAGMA 配置。
+///
+/// `synchronous=NORMAL` 是 WAL 下的推荐档位：`COMMIT` 不再逐事务 `fsync`，只在
+/// checkpoint 与显式同步点落盘。代价是断电可能丢掉最近一小段已提交事务，但库结构
+/// 不会损坏；对运行态事实（会话状态、队列、事件水位）这是可接受的语义弱化，崩溃恢复
+/// 本就按「以日志为准回退水位、从结算记录重建叙述」设计。原先的 `FULL` 让每批流式帧
+/// 都承担一次持久性代价，实测直接决定了单帧延迟上限。
+///
+/// WAL **不在此批次内**：它是库级持久属性，且切换到 WAL 需要独占锁，逐连接重复切换
+/// 会在并发读写下反复争抢该锁并以 `SQLITE_BUSY` 失败（实测 busy_timeout 到期仍失败）。
+/// WAL 由建库路径按需确保一次，见 `schema` 模块。
+///
+/// `journal_size_limit` 是 WAL 的硬上限：没有它，WAL 会随着每次写入无限增长
+/// （实测 743 MB，与主库同量级），而一次 checkpoint 要把这些页全部回写主库，
+/// 期间独占写锁数十秒，所有写者按 busy_timeout 排队失败。上限一旦生效，
+/// checkpoint 只在有界体量上发生，写锁抖动不再波及无关写入方。
+/// `wal_autocheckpoint` 显式钉住默认值：1000 页（约 4 MB）触发一次 checkpoint，
+/// 不依赖 SQLite 编译期默认，也让「多久回写一次」成为代码里的可见事实。
+const CONNECTION_PRAGMAS: &str = "PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL; \
+     PRAGMA journal_size_limit = 67108864; PRAGMA wal_autocheckpoint = 1000;";
+/// 守卫在连接被取走后再解引用时的显式失败信息。
+const CONNECTION_TAKEN: &str = "运行时连接在守卫释放前被取走";
+
+/// 进程内可复用的 SQLite 连接池。
+pub(crate) struct ConnectionPool {
+    path: PathBuf,
+    busy_timeout: Duration,
+    idle: Mutex<Vec<Connection>>,
+}
+
+impl std::fmt::Debug for ConnectionPool {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ConnectionPool")
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ConnectionPool {
+    /// 创建指向同一数据库文件路径的连接池。
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self::with_busy_timeout(path, DEFAULT_BUSY_TIMEOUT)
+    }
+
+    /// 使用自定义写锁等待上限创建连接池。
+    pub(crate) fn with_busy_timeout(path: PathBuf, busy_timeout: Duration) -> Self {
+        Self {
+            path,
+            busy_timeout,
+            idle: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// 取出一条可用连接；空闲池为空时新建一条。
+    pub(crate) fn acquire(&self) -> Result<PooledConnection<'_>, RuntimeStoreError> {
+        let pooled = self
+            .idle
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .pop();
+        let connection = match pooled {
+            Some(connection) => connection,
+            None => self.open()?,
+        };
+        Ok(PooledConnection {
+            pool: self,
+            connection: Some(connection),
+        })
+    }
+
+    fn open(&self) -> Result<Connection, RuntimeStoreError> {
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| RuntimeStoreError::Storage(error.to_string()))?;
+        }
+        let connection = Connection::open(&self.path)
+            .map_err(|error| RuntimeStoreError::Storage(error.to_string()))?;
+        // 写锁等待上限先于任何语句：连接上的 PRAGMA 与初始化语句都可能需要等锁，
+        // 未设上限时会以默认的零等待撞上并发写者。
+        connection
+            .busy_timeout(self.busy_timeout)
+            .map_err(storage)?;
+        connection
+            .execute_batch(CONNECTION_PRAGMAS)
+            .map_err(storage)?;
+        Ok(connection)
+    }
+
+    fn release(&self, connection: Connection) {
+        let mut idle = self.idle.lock().unwrap_or_else(PoisonError::into_inner);
+        if idle.len() < MAX_IDLE_CONNECTIONS {
+            idle.push(connection);
+        }
+    }
+}
+
+/// 归还式连接守卫；离开作用域时把连接放回池中复用。
+pub(crate) struct PooledConnection<'a> {
+    pool: &'a ConnectionPool,
+    connection: Option<Connection>,
+}
+
+impl Deref for PooledConnection<'_> {
+    type Target = Connection;
+
+    fn deref(&self) -> &Self::Target {
+        self.connection.as_ref().expect(CONNECTION_TAKEN)
+    }
+}
+
+impl DerefMut for PooledConnection<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.connection.as_mut().expect(CONNECTION_TAKEN)
+    }
+}
+
+impl Drop for PooledConnection<'_> {
+    fn drop(&mut self) {
+        if let Some(connection) = self.connection.take() {
+            self.pool.release(connection);
+        }
+    }
+}

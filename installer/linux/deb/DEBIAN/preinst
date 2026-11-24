@@ -1,0 +1,14 @@
+#!/usr/bin/env sh
+# Axon .deb preinst: stop the running daemon before replacing the fixed version directory.
+set -e
+
+TARGET_USER="${SUDO_USER:-${USER:-root}}"
+TARGET_HOME="$(getent passwd "${TARGET_USER}" 2>/dev/null | cut -d: -f6)"
+TARGET_HOME="${TARGET_HOME:-/root}"
+INSTALL_BIN="${TARGET_HOME}/.axon/bin/axon"
+
+if [ -x "${INSTALL_BIN}" ]; then
+    "${INSTALL_BIN}" daemon stop >/dev/null 2>&1 || true
+fi
+
+exit 0

@@ -1,0 +1,160 @@
+import React from 'react';
+import type { TurnState } from '../../conversation/transcript';
+import { Z_CONTENT_RAIL } from './chatChrome';
+
+/*
+ * 消息导航条：贴在正文列右侧预留的那条窄沟里，一条刻度对应一轮对话，
+ * 当前视口所在的那一轮加长加深，点击刻度直接定位到该轮。
+ *
+ * 沟宽由正文列决定：列宽是 `--axon-chat-user-width`，两侧各留 88px 安全区，
+ * 导航条因此永远不压在正文上，也永远在正文列的右侧边缘之外。
+ *
+ * 命中区 24×24（此前 3px 高、几乎点不中）；刻度本身仍是 2px 的一条短线，
+ * 视觉上不抢注意力，指向起来却不费劲。
+ *
+ * 位置同步用 IntersectionObserver 观察每一轮的首个单元，观察根的上边界收成一条窄带：
+ * 只有跨过这条带的单元才算「当前」，因此不需要监听滚动事件（门禁亦禁止）。
+ */
+
+/** 导航条允许占用的最大高度比例。 */
+const MAX_HEIGHT_RATIO = 0.6;
+/** 顶部窄带的高度比例；落在带内的那一轮即为当前轮。 */
+const ACTIVE_BAND_TOP_RATIO = 0.08;
+const ACTIVE_BAND_HEIGHT_RATIO = 0.2;
+
+/** 一轮的定位锚点。 */
+export interface TurnAnchor {
+  /** 轮次标识。 */
+  turnId: string;
+  /** 该轮首单元的 DOM 节点。 */
+  element: HTMLElement | null;
+}
+
+export interface MessageRailProps {
+  turns: TurnState[];
+  /** 滚动容器。 */
+  scrollRef: React.RefObject<HTMLDivElement | null>;
+  /** 各轮首个单元的节点登记表。 */
+  anchors: React.RefObject<Map<string, HTMLElement>>;
+  atBottom: boolean;
+  onNavigate: () => void;
+}
+
+/**
+ * 这一轮用于导航的那一句。
+ *
+ * 每一轮都有自己的用户气泡：索引轮与折叠轮都原位保留它，因此导航条只需读它。
+ */
+function turnNavLabel(turn: TurnState): string {
+  for (const cell of turn.cells) {
+    if (cell.role === 'user' && cell.text.trim().length > 0) return cell.text;
+  }
+  return '';
+}
+
+/**
+ * 可导航轮次的稳定签名。
+ *
+ * 导航条只关心「哪些轮次带用户那一句」，不关心正文长到哪儿了。签名因此只由这批
+ * 轮次的标识拼成：同一批轮次继续流式变长时签名不变，观察者就一直挂在原处；
+ * 只有真的有轮次进来或离开时才换一份。不这么做的话，投影每来一批 token 都会换一次
+ * 数组引用，观察者随之每帧重建，一屏几十个轮次的观察反复注册注销。
+ */
+export function navigableSignature(turns: readonly TurnState[]): string {
+  return turns
+    .map((turn) => (turnNavLabel(turn).length > 0 ? turn.id : ''))
+    .filter((id) => id.length > 0)
+    .join('|');
+}
+
+export const MessageRail: React.FC<MessageRailProps> = ({ turns, scrollRef, anchors, atBottom, onNavigate }) => {
+  const [activeId, setActiveId] = React.useState<string | null>(null);
+  const [hoveredId, setHoveredId] = React.useState<string | null>(null);
+
+  const signature = navigableSignature(turns);
+  /**
+   * 只有带「用户那一句」的轮次才值得导航。
+   *
+   * 索引轮同样有真实的用户气泡（它由索引的入站正文立起来），因此翻到第一百条时
+   * 导航条上仍然有对应的那一句，不会因为「这一轮还没回放」就少一个点。
+   * 按签名记忆：签名不变就沿用上一份清单，每帧不重建。
+   */
+  const navigable = React.useMemo(
+    () => turns.filter((turn) => turnNavLabel(turn).length > 0),
+    [signature],
+  );
+
+  React.useEffect(() => {
+    const root = scrollRef.current;
+    const registry = anchors.current;
+    if (root === null || registry === null || signature.length === 0) return undefined;
+
+    const rootRect = root.getBoundingClientRect();
+    const top = rootRect.height * ACTIVE_BAND_TOP_RATIO;
+    const height = rootRect.height * ACTIVE_BAND_HEIGHT_RATIO;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const turnId = (entry.target as HTMLElement).dataset.turnId;
+          if (turnId !== undefined) setActiveId(turnId);
+        }
+      },
+      { root, rootMargin: `-${top}px 0px -${rootRect.height - top - height}px 0px`, threshold: 0 },
+    );
+    for (const turnId of signature.split('|')) {
+      const element = registry.get(turnId);
+      if (element !== undefined) observer.observe(element);
+    }
+    return () => observer.disconnect();
+  }, [anchors, signature, scrollRef]);
+
+  const jumpTo = React.useCallback(
+    (turnId: string) => {
+      onNavigate();
+      setActiveId(turnId);
+      anchors.current?.get(turnId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    },
+    [anchors, onNavigate],
+  );
+
+  if (navigable.length < 2) return null;
+
+  return (
+    <div
+      role="navigation"
+      aria-label="消息导航"
+      className={`${Z_CONTENT_RAIL} absolute right-2 top-1/2 -translate-y-1/2 flex flex-col items-center overflow-y-auto no-scrollbar py-1`}
+      style={{ maxHeight: `${MAX_HEIGHT_RATIO * 100}%` }}
+    >
+      {navigable.map((turn) => {
+        const active = turn.id === (atBottom ? navigable[navigable.length - 1]?.id : activeId);
+        const hovered = turn.id === hoveredId;
+        const label = turnNavLabel(turn);
+        return (
+          <button
+            key={turn.id}
+            type="button"
+            title={label}
+            aria-label={`定位到：${label.slice(0, 40)}`}
+            aria-current={active ? 'location' : undefined}
+            onClick={() => jumpTo(turn.id)}
+            onMouseEnter={() => setHoveredId(turn.id)}
+            onMouseLeave={() => setHoveredId(null)}
+            className="group shrink-0 flex items-center justify-center w-6 h-6 cursor-pointer"
+          >
+            <span
+              className={`block h-0.5 rounded-full transition-colors duration-150 ${
+                active
+                  ? 'w-4 bg-text-primary'
+                  : hovered
+                    ? 'w-3 bg-text-secondary'
+                    : 'w-2 bg-border-strong'
+              }`}
+            />
+          </button>
+        );
+      })}
+    </div>
+  );
+};

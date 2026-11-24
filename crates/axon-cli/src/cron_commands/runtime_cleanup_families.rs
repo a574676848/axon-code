@@ -1,0 +1,620 @@
+//! Daemon runtime 运行态事实的按族清理（R1~R7）。
+//!
+//! 每个族遵循同一模式：在 IMMEDIATE 事务内选出有界批次主键，按依赖顺序删除
+//! 派生数据与根记录后提交。所有族共享同一墙上时钟预算，预算耗尽即停止，剩余
+//! 数据由下一轮 Cron 幂等继续。
+
+use std::path::Path;
+use std::time::Instant;
+
+use rusqlite::{Connection, params_from_iter};
+
+use super::runtime_cleanup::{
+    EXECUTION_ACTIVE_STATUSES, INTERACTION_TERMINAL_KINDS, LEDGER_EVENT_MIN_RETAINED,
+    RuntimeCleanupCounts, SESSION_ACTIVE_STATUSES, delete_family, delete_ids_in, placeholders,
+    quoted_list, task_expiry_filter,
+};
+use axon_session::NotificationDeliveryState;
+
+/// 删除长期过期且不再代表任何在线客户端的 presence 记录。
+///
+/// presence 只表达「客户端此刻能否接收投递」。过期行没有任何历史价值，但会持续
+/// 参与投递选路与清理扫描，因此必须随保留策略回收，避免表随客户端重启次数增长。
+pub(super) fn delete_expired_client_presence(
+    connection: &mut Connection,
+    cutoff_ms: i64,
+    deadline: Instant,
+) -> Result<RuntimeCleanupCounts, String> {
+    delete_family(
+        connection,
+        cutoff_ms,
+        deadline,
+        &expired_client_presence_selection_sql(),
+        |transaction, ids| {
+            let placeholders = placeholders(ids.len());
+            Ok(RuntimeCleanupCounts {
+                client_presence: delete_ids_in(
+                    transaction,
+                    "client_presence",
+                    "client_id",
+                    &placeholders,
+                    ids,
+                )?,
+                ..RuntimeCleanupCounts::default()
+            })
+        },
+    )
+}
+
+/// 删除已经终结且超出保留期的完成通知。
+///
+/// 只回收 `delivered` 与 `expired`：`pending` 与 `dispatched` 代表用户尚未看到的
+/// 完成消息，删除它们等同于静默丢弃 Result，属于产品定义禁止的行为。
+pub(super) fn delete_settled_completion_notifications(
+    connection: &mut Connection,
+    cutoff_ms: i64,
+    deadline: Instant,
+) -> Result<RuntimeCleanupCounts, String> {
+    let mut counts = RuntimeCleanupCounts::default();
+    for state in [
+        NotificationDeliveryState::Delivered,
+        NotificationDeliveryState::Expired,
+    ] {
+        counts.merge(delete_settled_completion_notifications_by_state(
+            connection, cutoff_ms, deadline, state,
+        )?);
+    }
+    Ok(counts)
+}
+
+fn delete_settled_completion_notifications_by_state(
+    connection: &mut Connection,
+    cutoff_ms: i64,
+    deadline: Instant,
+    state: NotificationDeliveryState,
+) -> Result<RuntimeCleanupCounts, String> {
+    delete_family(
+        connection,
+        cutoff_ms,
+        deadline,
+        &settled_completion_notifications_selection_sql_for_state(state),
+        |transaction, ids| {
+            let placeholders = placeholders(ids.len());
+            Ok(RuntimeCleanupCounts {
+                completion_notifications: delete_ids_in(
+                    transaction,
+                    "notifications",
+                    "notification_id",
+                    &placeholders,
+                    ids,
+                )?,
+                ..RuntimeCleanupCounts::default()
+            })
+        },
+    )
+}
+
+/// 客户端 presence 保留谓词（`?1` 为保留截止时间）。
+///
+/// dry-run 统计与实际删除共用同一份谓词，避免口径漂移。
+pub(super) fn expired_client_presence_filter() -> &'static str {
+    "FROM client_presence
+     INDEXED BY client_presence_expiry
+     WHERE expires_at_ms < ?1"
+}
+
+/// 完成通知保留谓词（`?1` 为保留截止时间）：只回收已经终结的通知。
+///
+/// 终结 = 渠道确认送达（`delivered`）或隔天未读自动失效（`expired`）。
+/// `pending` / `dispatched` 一律保留，删除它们等同于静默丢弃完成结论。
+pub(super) fn settled_completion_notifications_filter() -> String {
+    format!(
+        "FROM notifications
+         INDEXED BY notifications_retention
+         WHERE state IN ('{delivered}','{expired}') AND updated_at_ms < ?1
+           AND NOT EXISTS (
+               SELECT 1 FROM notification_deliveries AS d
+               WHERE d.notification_id = notifications.notification_id
+                 AND d.state IN ('{pending}','{dispatched}')
+           )",
+        delivered = NotificationDeliveryState::Delivered.as_str(),
+        expired = NotificationDeliveryState::Expired.as_str(),
+        pending = NotificationDeliveryState::Pending.as_str(),
+        dispatched = NotificationDeliveryState::Dispatched.as_str(),
+    )
+}
+
+/// 渠道投递记录保留谓词（`?1` 为保留截止时间）：只回收已经终结的渠道投递。
+pub(super) fn settled_completion_deliveries_filter() -> String {
+    format!(
+        "FROM notification_deliveries
+         INDEXED BY notification_deliveries_retention
+         WHERE state IN ('{delivered}','{expired}') AND updated_at_ms < ?1",
+        delivered = NotificationDeliveryState::Delivered.as_str(),
+        expired = NotificationDeliveryState::Expired.as_str(),
+    )
+}
+
+pub(super) fn settled_completion_notifications_selection_sql_for_state(
+    state: NotificationDeliveryState,
+) -> String {
+    format!(
+        "SELECT notification_id FROM notifications
+         INDEXED BY notifications_retention
+         WHERE state='{}' AND updated_at_ms < ?1
+           AND NOT EXISTS (
+               SELECT 1 FROM notification_deliveries AS d
+               WHERE d.notification_id = notifications.notification_id
+                 AND d.state IN ('pending','dispatched')
+           )
+         ORDER BY updated_at_ms ASC, notification_id ASC LIMIT ?2",
+        state.as_str(),
+    )
+}
+
+/// 客户端 presence 清理的批次选择 SQL：按过期时间索引有序取有界批次。
+pub(super) fn expired_client_presence_selection_sql() -> String {
+    format!(
+        "SELECT client_id {} ORDER BY expires_at_ms ASC, client_id ASC LIMIT ?2",
+        expired_client_presence_filter(),
+    )
+}
+
+/// 删除已终结且超出保留期的渠道投递记录。
+///
+/// 只回收 `delivered` 与 `expired`：`pending` 与 `dispatched` 代表用户尚未看到的
+/// 完成消息，删除它们等同于静默丢弃完成结论，属于产品定义禁止的行为。渠道投递
+/// 记录是完成通知的派生数据，必须与通知本体使用同一保留口径，否则通知删除后
+/// 这些行会永久滞留并持续参与收件箱扫描。
+pub(super) fn delete_settled_completion_deliveries(
+    connection: &mut Connection,
+    cutoff_ms: i64,
+    deadline: Instant,
+) -> Result<RuntimeCleanupCounts, String> {
+    let mut counts = RuntimeCleanupCounts::default();
+    for state in [
+        NotificationDeliveryState::Delivered,
+        NotificationDeliveryState::Expired,
+    ] {
+        counts.merge(delete_settled_completion_deliveries_by_state(
+            connection, cutoff_ms, deadline, state,
+        )?);
+    }
+    Ok(counts)
+}
+
+fn delete_settled_completion_deliveries_by_state(
+    connection: &mut Connection,
+    cutoff_ms: i64,
+    deadline: Instant,
+    state: NotificationDeliveryState,
+) -> Result<RuntimeCleanupCounts, String> {
+    delete_family(
+        connection,
+        cutoff_ms,
+        deadline,
+        &settled_completion_deliveries_selection_sql_for_state(state),
+        |transaction, ids| {
+            let placeholders = placeholders(ids.len());
+            Ok(RuntimeCleanupCounts {
+                completion_deliveries: delete_ids_in(
+                    transaction,
+                    "notification_deliveries",
+                    "rowid",
+                    &placeholders,
+                    ids,
+                )?,
+                ..RuntimeCleanupCounts::default()
+            })
+        },
+    )
+}
+
+pub(super) fn settled_completion_deliveries_selection_sql_for_state(
+    state: NotificationDeliveryState,
+) -> String {
+    format!(
+        "SELECT CAST(rowid AS TEXT) FROM notification_deliveries
+         INDEXED BY notification_deliveries_retention
+         WHERE state='{}' AND updated_at_ms < ?1
+         ORDER BY updated_at_ms ASC LIMIT ?2",
+        state.as_str(),
+    )
+}
+
+/// 删除已过交接截止期的升级准入记录。
+pub(super) fn delete_expired_upgrade_admissions(
+    connection: &mut Connection,
+    cutoff_ms: i64,
+    deadline: Instant,
+) -> Result<RuntimeCleanupCounts, String> {
+    delete_family(
+        connection,
+        cutoff_ms,
+        deadline,
+        &expired_upgrade_admissions_selection_sql(),
+        |transaction, ids| {
+            let placeholders = placeholders(ids.len());
+            Ok(RuntimeCleanupCounts {
+                upgrade_admissions: delete_ids_in(
+                    transaction,
+                    "upgrade_handoffs",
+                    "admission_id",
+                    &placeholders,
+                    ids,
+                )?,
+                ..RuntimeCleanupCounts::default()
+            })
+        },
+    )
+}
+
+/// 在一个短 `IMMEDIATE` 事务中删除指定 Session family 的运行态数据。
+///
+/// 事务提交之后逐个回收该会话的外置事件正文目录：行确认没了，正文文件才有资格删；
+/// 反过来先删文件再提交，一旦回滚事实就永久丢失。`.jsonl.zst` 离线归档由
+/// `reclaim_session_archive_dir` 保留，运维仍可解压回看。
+pub(super) fn delete_session_families_by_ids(
+    connection: &mut Connection,
+    ids: &[String],
+    archive_root: &Path,
+) -> Result<RuntimeCleanupCounts, String> {
+    if ids.is_empty() {
+        return Ok(RuntimeCleanupCounts::default());
+    }
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|_| "Daemon runtime Session family 清理事务启动失败".to_owned())?;
+    let placeholders = placeholders(ids.len());
+    let active_sql = format!(
+        "SELECT COUNT(*) FROM sessions
+         WHERE session_id IN ({placeholders}) AND status IN ({active})",
+        active = quoted_list(&SESSION_ACTIVE_STATUSES),
+    );
+    let active: i64 = transaction
+        .query_row(&active_sql, params_from_iter(ids.iter()), |row| row.get(0))
+        .map_err(|_| "Daemon runtime Session family 活跃状态复核失败".to_owned())?;
+    // 只认在途状态：已终态但尚未归档的工作项拦不住会话删除，否则任何跑过一轮的
+    // 会话都永久留在运行态库里，清理成了空转。
+    let execution_sql = format!(
+        "SELECT COUNT(*) FROM work_items
+         WHERE session_id IN ({placeholders}) AND status IN ({active})",
+        active = quoted_list(&EXECUTION_ACTIVE_STATUSES),
+    );
+    let executions: i64 = transaction
+        .query_row(&execution_sql, params_from_iter(ids.iter()), |row| {
+            row.get(0)
+        })
+        .map_err(|_| "Daemon runtime Session family Execution 引用复核失败".to_owned())?;
+    if active > 0 || executions > 0 {
+        return Err("Daemon runtime Session family 已重新活跃，保留重试锚点".to_owned());
+    }
+    // 派生投影与入站事实同样属于会话族：留着就是指向已删会话的孤儿行，
+    // 既算进积压统计，也会让「已收到」的派生状态永远不收敛。
+    // 这三张表不在报告分项里，只删不计数（dry-run 口径与真实删除保持一致）。
+    //
+    // `turn_activity` 与 `thread_turn_facts` 是 B1/B2 两张投影表：它们按会话/线程累积
+    // 全部轮次的事实，本身没有保留期判定，只能跟着会话族一起删，否则会单调增长。
+    for table in ["session_metrics", "inbox", "turn_activity"] {
+        delete_ids_in(&transaction, table, "session_id", &placeholders, ids)?;
+    }
+    // `thread_turn_facts.thread_id` 存的是运行窗口（`sessions.current_run_id`），而候选里
+    // 一半是会话 ULID、一半本来就是 thread id：两个键空间都要试。映射必须在删 `sessions`
+    // 行之前用掉（同一事务内，行还在）。
+    //
+    // 末尾的 `NOT IN` 是护栏：若某个 thread id 恰好等于另一条**存活**会话的 ULID（手工指定
+    // id、将来改可读 id），删它就会连带删掉别的会话的侧车行。
+    transaction
+        .execute(
+            &format!(
+                "DELETE FROM thread_turn_facts
+                  WHERE (thread_id IN ({placeholders})
+                         OR thread_id IN (
+                             SELECT current_run_id FROM sessions
+                              WHERE session_id IN ({placeholders})
+                                AND current_run_id IS NOT NULL AND current_run_id <> ''
+                         ))
+                    AND thread_id NOT IN (
+                        SELECT session_id FROM sessions WHERE session_id NOT IN ({placeholders})
+                    )"
+            ),
+            params_from_iter(ids.iter().chain(ids.iter()).chain(ids.iter())),
+        )
+        .map_err(|_| "Daemon runtime 轮次事实侧车清理失败".to_owned())?;
+    // 恢复指针指向已删会话时一并清掉：指针只是「下次接续谁」的缓存，不构成事实。
+    transaction
+        .execute(
+            &format!("DELETE FROM resume_pointer WHERE session_id IN ({placeholders})"),
+            params_from_iter(ids.iter()),
+        )
+        .map_err(|_| "Daemon runtime 恢复指针清理失败".to_owned())?;
+    let counts = RuntimeCleanupCounts {
+        // 事件已随会话目录删除，这里不再按表计数。
+        session_events: 0,
+        schedules: delete_ids_in(&transaction, "schedules", "session_id", &placeholders, ids)?,
+        // 执行历史先于会话删除：终态行已迁出在途表，不删会留下无主历史。
+        // 在途表里残留的终态行必须同步回收：`work_items.session_id` 有外键指向
+        // `sessions`，漏删会让整个事务因外键约束回滚。
+        executions: delete_ids_in(&transaction, "work_items", "session_id", &placeholders, ids)?
+            + delete_ids_in(
+                &transaction,
+                "work_item_history",
+                "session_id",
+                &placeholders,
+                ids,
+            )?,
+        sessions: delete_ids_in(&transaction, "sessions", "session_id", &placeholders, ids)?,
+        ..RuntimeCleanupCounts::default()
+    };
+    transaction
+        .commit()
+        .map_err(|_| "Daemon runtime Session family 清理事务提交失败".to_owned())?;
+    for id in ids {
+        super::runtime_event_archive::reclaim_session_archive_dir(archive_root, id);
+    }
+    Ok(counts)
+}
+
+/// 删除终态且没有未读 Result 的 Task 家族：读回执、Result、Execution、Task。
+pub(super) fn delete_terminal_goals(
+    connection: &mut Connection,
+    cutoff_ms: i64,
+    deadline: Instant,
+) -> Result<RuntimeCleanupCounts, String> {
+    let sql = terminal_goals_selection_sql();
+    delete_family(connection, cutoff_ms, deadline, &sql, |transaction, ids| {
+        let placeholders = placeholders(ids.len());
+        let reads_sql = format!(
+            "DELETE FROM goal_result_reads WHERE result_id IN (
+                 SELECT result_id FROM goal_results WHERE goal_id IN ({placeholders})
+             )"
+        );
+        let mut reads_statement = transaction
+            .prepare_cached(&reads_sql)
+            .map_err(|_| "Daemon runtime goal_result_reads 清理失败".to_owned())?;
+        let result_reads = reads_statement
+            .execute(params_from_iter(ids.iter()))
+            .map_err(|_| "Daemon runtime goal_result_reads 清理失败".to_owned())?;
+        Ok(RuntimeCleanupCounts {
+            result_reads,
+            results: delete_ids_in(transaction, "goal_results", "goal_id", &placeholders, ids)?,
+            executions: delete_ids_in(transaction, "work_items", "goal_id", &placeholders, ids)?
+                + delete_ids_in(
+                    transaction,
+                    "work_item_history",
+                    "goal_id",
+                    &placeholders,
+                    ids,
+                )?,
+            goals: delete_ids_in(transaction, "goals", "goal_id", &placeholders, ids)?,
+            ..RuntimeCleanupCounts::default()
+        })
+    })
+}
+
+/// 删除终态且超出保留期的 Interaction。
+///
+/// 终态有两个载体：普通入站轮的终态在 `work_item_history.terminal_kind` 上，派发轮
+/// （`source_channel = 'agent'`）不建工作项，终态直接写在 `inbox.terminal_kind` 上。
+/// 两个载体各选一批：只查前者会让派发轮的入站行永远进不了候选集，`inbox` 因此单调
+/// 增长，而且每轮清理都要把它们从头扫一遍。
+///
+/// `inbox_retention` 以 `received_at_ms` 为前导列：强制走该索引
+/// 可同时满足范围过滤与 `ORDER BY`，避免优化器改走覆盖索引后追加临时排序。
+pub(super) fn delete_terminal_interactions(
+    connection: &mut Connection,
+    cutoff_ms: i64,
+    deadline: Instant,
+) -> Result<RuntimeCleanupCounts, String> {
+    let mut counts = delete_family(
+        connection,
+        cutoff_ms,
+        deadline,
+        &terminal_interactions_selection_sql(),
+        delete_terminal_interactions_by_ids,
+    )?;
+    counts.merge(delete_family(
+        connection,
+        cutoff_ms,
+        deadline,
+        &terminal_dispatch_interactions_selection_sql(),
+        delete_terminal_interactions_by_ids,
+    )?);
+    Ok(counts)
+}
+
+/// 按主键回收一批终态入站事实及其依赖。
+fn delete_terminal_interactions_by_ids(
+    transaction: &rusqlite::Transaction<'_>,
+    ids: &[String],
+) -> Result<RuntimeCleanupCounts, String> {
+    let placeholders = placeholders(ids.len());
+    // 工作项随入站事实一同回收：终态队列行没有独立保留价值，留着只会拖慢清扫。
+    delete_ids_in(transaction, "work_items", "inbox_id", &placeholders, ids)?;
+    delete_ids_in(
+        transaction,
+        "work_item_history",
+        "inbox_id",
+        &placeholders,
+        ids,
+    )?;
+    // 逐轮事实随终态入站事实一起回收：它按 interaction 累积，入站事实没了就是孤儿。
+    delete_ids_in(
+        transaction,
+        "turn_activity",
+        "interaction_id",
+        &placeholders,
+        ids,
+    )?;
+    Ok(RuntimeCleanupCounts {
+        interactions: delete_ids_in(transaction, "inbox", "interaction_id", &placeholders, ids)?,
+        ..RuntimeCleanupCounts::default()
+    })
+}
+
+/// 删除已过期的 Decision；无过期时间的权威决策长期保留。
+///
+/// 过期行由部分索引 `decisions_expiry` 直接按 `expires_at_ms` 有序定位，
+/// 避免在权威决策越积越多时退化为「全索引扫描 + 临时排序」。
+pub(super) fn delete_expired_decisions(
+    connection: &mut Connection,
+    cutoff_ms: i64,
+    deadline: Instant,
+) -> Result<RuntimeCleanupCounts, String> {
+    delete_family(
+        connection,
+        cutoff_ms,
+        deadline,
+        &expired_decisions_selection_sql(),
+        |transaction, ids| {
+            let placeholders = placeholders(ids.len());
+            Ok(RuntimeCleanupCounts {
+                decisions: delete_ids_in(
+                    transaction,
+                    "decisions",
+                    "decision_id",
+                    &placeholders,
+                    ids,
+                )?,
+                ..RuntimeCleanupCounts::default()
+            })
+        },
+    )
+}
+
+/// 删除超出保留期的 Ledger Event，同时保底保留最新一段以避免 sequence 回退。
+pub(super) fn delete_expired_events(
+    connection: &mut Connection,
+    cutoff_ms: i64,
+    deadline: Instant,
+) -> Result<RuntimeCleanupCounts, String> {
+    let sql = expired_events_selection_sql();
+    delete_family(connection, cutoff_ms, deadline, &sql, |transaction, ids| {
+        let placeholders = placeholders(ids.len());
+        Ok(RuntimeCleanupCounts {
+            events: delete_ids_in(transaction, "ledger_events", "event_id", &placeholders, ids)?,
+            ..RuntimeCleanupCounts::default()
+        })
+    })
+}
+
+/// 删除租约长期过期且不再被 Session 或升级准入引用的 Daemon Host 记录。
+pub(super) fn delete_expired_daemon_instances(
+    connection: &mut Connection,
+    cutoff_ms: i64,
+    deadline: Instant,
+) -> Result<RuntimeCleanupCounts, String> {
+    delete_family(
+        connection,
+        cutoff_ms,
+        deadline,
+        &expired_daemon_instances_selection_sql(),
+        |transaction, ids| {
+            let placeholders = placeholders(ids.len());
+            Ok(RuntimeCleanupCounts {
+                daemon_instances: delete_ids_in(
+                    transaction,
+                    "daemon_instances",
+                    "host_id",
+                    &placeholders,
+                    ids,
+                )?,
+                ..RuntimeCleanupCounts::default()
+            })
+        },
+    )
+}
+
+/// 升级准入清理的批次选择 SQL：dry-run 统计、实际删除与执行计划审计共用。
+pub(super) fn expired_upgrade_admissions_selection_sql() -> String {
+    "SELECT admission_id FROM upgrade_handoffs
+     WHERE deadline_at_ms < ?1
+     ORDER BY deadline_at_ms ASC
+     LIMIT ?2"
+        .to_owned()
+}
+
+/// Task 清理的批次选择 SQL：终态、无活跃 Execution 且无未读 Result。
+pub(super) fn terminal_goals_selection_sql() -> String {
+    format!("SELECT goal_id {} LIMIT ?2", task_expiry_filter())
+}
+
+/// Interaction 清理的批次选择 SQL：固定走保留期索引，避免临时排序。
+pub(super) fn terminal_interactions_selection_sql() -> String {
+    format!(
+        "SELECT i.interaction_id FROM inbox AS i
+         INDEXED BY inbox_retention
+         JOIN work_item_history AS w ON w.inbox_id = i.interaction_id
+         WHERE w.terminal_kind IN ({terminal})
+           AND i.received_at_ms < ?1
+         ORDER BY i.received_at_ms ASC
+         LIMIT ?2",
+        terminal = quoted_list(&INTERACTION_TERMINAL_KINDS),
+    )
+}
+
+/// 派发轮 Interaction 清理的批次选择 SQL：终态直接落在入站行上。
+///
+/// 派发轮（`source_channel = 'agent'`）没有工作项，`work_item_history` 上不可能有它的
+/// 终态行；因此这一族按 `inbox.terminal_kind` 选批，其余删除依赖与普通轮相同。
+///
+/// `source_channel` 必须显式限定：这一族绕过了工作项的终态判定，一旦别处给普通行写了
+/// `terminal_kind`（迁移、回填），仍在保护期的正常轮会被直接删掉。
+pub(super) fn terminal_dispatch_interactions_selection_sql() -> String {
+    format!(
+        "SELECT interaction_id FROM inbox
+         INDEXED BY inbox_retention
+         WHERE terminal_kind IN ({terminal})
+           AND source_channel = 'agent'
+           AND received_at_ms < ?1
+         ORDER BY received_at_ms ASC
+         LIMIT ?2",
+        terminal = quoted_list(&INTERACTION_TERMINAL_KINDS),
+    )
+}
+
+/// Decision 清理的批次选择 SQL：过期行由部分索引按到期时间有序定位。
+pub(super) fn expired_decisions_selection_sql() -> String {
+    "SELECT decision_id FROM decisions
+     INDEXED BY decisions_expiry
+     WHERE expires_at_ms IS NOT NULL AND expires_at_ms < ?1
+     ORDER BY expires_at_ms ASC
+     LIMIT ?2"
+        .to_owned()
+}
+
+/// Ledger Event 清理的批次选择 SQL：按 sequence 索引推进并保留最新一段。
+pub(super) fn expired_events_selection_sql() -> String {
+    format!(
+        "SELECT event_id FROM ledger_events
+         WHERE occurred_at_ms < ?1
+           AND sequence <= (SELECT COALESCE(MAX(sequence), 0) FROM ledger_events) - {retained}
+         ORDER BY sequence ASC
+         LIMIT ?2",
+        retained = LEDGER_EVENT_MIN_RETAINED,
+    )
+}
+
+/// Daemon Host 清理的批次选择 SQL：租约过期索引 + 两条引用保护子查询。
+pub(super) fn expired_daemon_instances_selection_sql() -> String {
+    "SELECT host_id FROM daemon_instances
+     WHERE lease_expires_at_ms < ?1
+       AND NOT EXISTS (
+           SELECT 1 FROM sessions
+           WHERE sessions.owner_host_id = daemon_instances.host_id
+       )
+       AND NOT EXISTS (
+           SELECT 1 FROM upgrade_handoffs
+           INDEXED BY upgrade_handoffs_owner
+           WHERE upgrade_handoffs.old_host_id = daemon_instances.host_id
+       )
+     LIMIT ?2"
+        .to_owned()
+}
+
+/// 纯保留期族（agent 间消息、子代理终态引用、用户提问）的清理实现。
+///
+/// 这三族只关心自身 `expires_at_ms` 是否越过，与会话族/执行引用保护无关，因此单独成
+/// 文件；调用方与执行计划守卫测试直接从 `retention` 取入口与选批 SQL。
+#[path = "runtime_cleanup_retention.rs"]
+pub(super) mod retention;

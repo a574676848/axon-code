@@ -1,0 +1,38 @@
+[package]
+name = "axon-shell-assoc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+base64 = { workspace = true }
+png = "0.18"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+# 本 crate 是 Shell 关联查询的唯一宿主：Windows 侧的 COM 枚举（`SHAssocEnumHandlers`
+# 与 `IAssocHandler`）、图标句柄提取（`SHDefExtractIconW` + GDI `GetDIBits`）均无安全封装，
+# 只能经裸 FFI 调用。因此这里显式放开 `unsafe_code`，与 `crates/axon-process` 同一口径。
+# unsafe 的许可范围被 `src/lib.rs` 的测试约束在 `src/windows.rs` 与 `src/windows_icon.rs`
+# 两个平台适配器文件内；Linux / macOS 适配器与公开 API 全部是安全代码。
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "allow"
+
+[dev-dependencies]
+axon-test-support = { path = "../axon-test-support" }

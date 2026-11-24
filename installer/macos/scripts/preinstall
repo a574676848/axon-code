@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Axon macOS pkg preinstall: stop the daemon before replacing the fixed version directory.
+set -euo pipefail
+
+resolve_target_user() {
+    if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+        printf '%s\n' "${SUDO_USER}"
+        return 0
+    fi
+    CONSOLE_USER="$(stat -f '%Su' /dev/console 2>/dev/null || true)"
+    case "${CONSOLE_USER}" in
+        ""|root|loginwindow) return 1 ;;
+        *) printf '%s\n' "${CONSOLE_USER}" ;;
+    esac
+}
+
+TARGET_USER="$(resolve_target_user || true)"
+TARGET_HOME="$(dscl . -read "/Users/${TARGET_USER}" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
+INSTALL_BIN="${TARGET_HOME:-/var/empty}/.axon/bin/axon"
+
+if [ -x "${INSTALL_BIN}" ]; then
+    "${INSTALL_BIN}" daemon stop >/dev/null 2>&1 || true
+fi
+
+exit 0

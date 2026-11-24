@@ -1,0 +1,322 @@
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, RwLock},
+    time::Duration,
+};
+
+use axon_agent_runtime::{
+    AgentControlRuntime, AgentGraphStore, AgentModelPayload, AgentPath,
+    ProviderStructuredOutputContract, SubagentSessionRuntime, ToolRegistry, WorkspaceFileSession,
+    validate_agent_run_provider_protocol,
+};
+use axon_client_identity::ClientChannel;
+use axon_config::{AxonConfig, ChannelBalancerConfig, ModelConfig, ProviderConfig};
+use axon_domain::{DisclosurePolicy, ModelProfileId, PermissionSnapshotId, QuotedMessageContext};
+use axon_session_runtime::TurnPerformanceRecorder;
+
+use super::RunCancelToken;
+use super::run_model_routing::{ChannelBalancedModel, resolve_model_profile_id};
+use super::run_request_builder::{RunRequestAssemblyInput, assemble_run_request};
+use super::run_request_payload::{
+    BuildRunModelPayloadInput, BuildRunModelPayloadOutput, build_run_model_payload,
+};
+use super::run_request_session::RunRequestSession;
+use super::run_request_subagents::{
+    RunSubagentExecutionWiringInput, run_subagent_execution_wiring,
+};
+use super::run_steer::RunSteerInbox;
+use super::run_subagent_executor::RunSubagentExecutor;
+use super::*;
+
+#[path = "run_request_build.rs"]
+mod build;
+
+/// 从 session_id 生成确定性 selector，用于渠道加权选择。
+pub(super) fn hash_session_selector(session_id: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    session_id.hash(&mut hasher);
+    hasher.finish()
+}
+
+pub(super) const CLI_RUN_DEFAULT_MODEL_PROFILE_ID: ModelProfileId = ModelProfileId(0);
+pub(super) const CLI_RUN_DEFAULT_PERMISSION_SNAPSHOT_ID: PermissionSnapshotId =
+    PermissionSnapshotId(0);
+
+#[derive(Clone)]
+pub(super) struct RunRequest {
+    pub(super) client_channel: ClientChannel,
+    pub(super) config_path: PathBuf,
+    /// 会话身份：`sessions.session_id`（服务端 ULID），用户可见的稳定身份。
+    pub(super) session_id: String,
+    /// 运行窗口：`sessions.current_run_id`，Thread 事件流与工具作业归属只认它。
+    pub(super) run_session_id: String,
+    /// 本轮入站事实标识（`inbox.interaction_id`）；本地直跑路径没有入站事实时为空。
+    pub(super) interaction_id: String,
+    pub(super) invocation_id: String,
+    pub(super) resumed_from: Option<String>,
+    /// 父会话身份（ULID）；只有子代理的一轮才有。
+    pub(super) parent_session_id: Option<String>,
+    /// 父运行窗口；Thread 的父链接只认它。
+    pub(super) parent_thread_id: Option<String>,
+    pub(super) cwd: PathBuf,
+    pub(super) prompt: String,
+    /// 本轮被回复消息的可见文本上下文。
+    pub(super) quoted_message: Option<QuotedMessageContext>,
+    /// 本轮普通 Coding turn 的可选结构化输出契约。
+    pub(super) structured_output: Option<ProviderStructuredOutputContract>,
+    pub(super) selected_skill_name: Option<String>,
+    pub(super) selected_skill_source_ref: Option<String>,
+    pub(super) model_payload: AgentModelPayload,
+    /// 本轮人格装配产生的降级告警；随响应回传给用户。
+    pub(super) persona_warnings: Vec<String>,
+    pub(super) startup: Arc<RunStartupSnapshot>,
+    pub(super) execution_tools: Arc<RwLock<ToolRegistry>>,
+    pub(super) workspace_files: Arc<WorkspaceFileSession>,
+    pub(super) provider: ProviderConfig,
+    pub(super) model: ModelConfig,
+    /// 本次请求发送给 provider 的 reasoning_effort。
+    pub(super) reasoning_effort: Option<String>,
+    /// 渠道失败重试链；第 0 项 == (model, provider)，后续为回退渠道。
+    pub(super) channel_chain: Vec<(ModelConfig, ProviderConfig)>,
+    /// 渠道负载均衡路由键（model.name 或 fallback 到 model.id）。
+    /// 用于健康注册表与亲和缓存的键，保证 selection / failover 一致。
+    pub(super) routing_key: String,
+    /// 渠道负载均衡配置（断路器策略、亲和 TTL、故障转移开关）。
+    pub(super) balancer: ChannelBalancerConfig,
+    pub(super) timeout: Duration,
+    pub(super) memory_recall: Option<RunMemoryRecallEvent>,
+    /// 工具执行必须继承的受众边界；群聊等受限主 turn 不得访问 Global Work Ledger。
+    pub(super) goal_disclosure_policy: DisclosurePolicy,
+    /// Goal 创建时继承的原 Interaction 路由与受众。
+    pub(super) goal_transport_context: Option<serde_json::Value>,
+    pub(super) cancel_token: Option<RunCancelToken>,
+    pub(super) model_profile_id: ModelProfileId,
+    pub(super) permission_snapshot_id: PermissionSnapshotId,
+    pub(super) current_agent_path: AgentPath,
+    pub(super) agent_control: Arc<Mutex<AgentControlRuntime>>,
+    pub(super) agent_graph_store: Arc<dyn AgentGraphStore>,
+    pub(super) subagent_sessions: Arc<Mutex<SubagentSessionRuntime>>,
+    pub(super) subagent_executor: Arc<dyn RunSubagentExecutor>,
+    pub(super) subagent_cancel_tokens: Arc<Mutex<HashMap<AgentPath, RunCancelToken>>>,
+    pub(super) steer_inbox: Option<RunSteerInbox>,
+    /// 主 turn 专属的用户提问端口。
+    ///
+    /// 只有用户可见的主 turn 才装配它：子代理与后台执行不得向用户提问，
+    /// 因此它们的 RunRequest 一律保持 `None`。
+    pub(super) user_question_port: Option<Arc<dyn axon_agent_runtime::UserQuestionPort>>,
+    /// 循环内自动压缩阈值（占 context_window 的比例）。
+    pub(super) auto_compaction_threshold: f64,
+    pub(super) performance: Option<Arc<dyn TurnPerformanceRecorder>>,
+}
+
+pub(super) struct PreparedRunInput {
+    command: RunCommand,
+    cwd: PathBuf,
+    prompt: String,
+    attached_files: Vec<PathBuf>,
+    /// 会话身份（`sessions.session_id`）。
+    session_id: String,
+    /// 运行窗口（`sessions.current_run_id`）。
+    run_session_id: String,
+    parent_thread_id: Option<String>,
+    model_history_json: Option<String>,
+}
+
+fn resumed_parent_thread_id(thread_id: &str, parent_thread_id: Option<&str>) -> Option<String> {
+    parent_thread_id
+        .filter(|parent| *parent != thread_id)
+        .map(ToOwned::to_owned)
+}
+
+pub(super) fn prepare_run_input(
+    command: &RunCommand,
+    previous_session: Option<&run_thread_store::PreparedRunSession>,
+    identities: RunIdentities,
+    config: &AxonConfig,
+    cwd: Option<&Path>,
+) -> Result<PreparedRunInput, String> {
+    let command = resumed_command(command, previous_session, config)?;
+    let resumed_cwd = previous_session
+        .and_then(|session| session.facts.cwd.as_deref())
+        .map(Path::new);
+    let cwd = resolve_effective_run_cwd(cwd, resumed_cwd)?;
+    let (prompt, attached_files) = compose_run_prompt(&command)?;
+    let model_history_json = previous_session.map(|session| session.model_history_json.clone());
+    let parent_thread_id = previous_session.and_then(|session| {
+        resumed_parent_thread_id(
+            &session.facts.thread_id,
+            session.facts.parent_session_id.as_deref(),
+        )
+    });
+    Ok(PreparedRunInput {
+        command,
+        cwd,
+        prompt,
+        attached_files,
+        session_id: identities.session_id,
+        run_session_id: identities.run_session_id,
+        parent_thread_id,
+        model_history_json,
+    })
+}
+
+pub(super) fn prepare_model_input_and_tools(
+    input: &BuildRunModelPayloadInput<'_>,
+) -> Result<(BuildRunModelPayloadOutput, Arc<RwLock<ToolRegistry>>), String> {
+    let tool_environment = input
+        .startup
+        .tool_environment_for_session(input.config_path, input.session_id);
+    let execution_tools = tool_environment.execution_tools();
+    let execution_tools = restrict_execution_tools(execution_tools, &input.command.tool)?;
+    let registry = execution_tools
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    // 线索与承诺写入：每轮只执行一次，且必须在可重复的 payload 构造之外。
+    // 归属按会话隔离，因此定时任务与其它客户端各写各的，不会覆盖用户会话的话题；
+    // 子代理不维护前台线索：它不承担会话话题，额外开一条 SQLite 连接只会拖慢并行执行。
+    // `include_delegation_catalog` 由身份判定产生，只有主 turn 为真。
+    if input.include_delegation_catalog
+        && let Ok(axon_root) = super::resolved_axon_root(input.config_path)
+    {
+        let now_ms = i64::try_from(axon_time::unix_now_ms()).unwrap_or(i64::MAX);
+        super::run_memory_thread_context::maintain_memory_thread(
+            &axon_root,
+            input.config,
+            input.session_id,
+            input.prompt_for_model,
+            now_ms,
+        );
+    }
+    let model_input = build_run_model_payload(input, &registry)?;
+    Ok((model_input, execution_tools))
+}
+
+fn restrict_execution_tools(
+    registry: Arc<RwLock<ToolRegistry>>,
+    tool_names: &[String],
+) -> Result<Arc<RwLock<ToolRegistry>>, String> {
+    if tool_names.is_empty() {
+        return Ok(registry);
+    }
+    let restricted = registry
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .restricted_to_qualified_names(tool_names)
+        .map_err(|error| format!("--tool 限制无效：{error:?}"))?;
+    Ok(Arc::new(RwLock::new(restricted)))
+}
+
+fn resolve_run_reasoning_effort(command: &RunCommand, config: &AxonConfig) -> String {
+    command
+        .reasoning_effort
+        .clone()
+        .unwrap_or_else(|| config.agent.reasoning_effort.clone())
+}
+
+fn validate_run_provider(provider: &ProviderConfig) -> Result<(), String> {
+    validate_agent_run_provider_protocol(provider)
+        .map_err(|_| "axon run 当前仅支持 chat-capable provider 协议".to_owned())
+}
+
+pub(super) fn resolve_run_cwd(cwd: Option<&Path>) -> Result<PathBuf, String> {
+    let cwd = match cwd {
+        Some(path) => path.to_path_buf(),
+        None => {
+            std::env::current_dir().map_err(|error| format!("无法读取当前工作目录：{error}"))?
+        }
+    };
+    let canonical =
+        fs::canonicalize(&cwd).map_err(|_| format!("工作目录不可访问：{}", cwd.display()))?;
+    if !canonical.is_dir() {
+        return Err(format!("工作目录不是目录：{}", canonical.display()));
+    }
+    Ok(canonical)
+}
+
+/// 解析本轮实际 Workspace：显式请求目录优先，否则沿用已持久化的上一轮目录。
+pub(super) fn resolve_effective_run_cwd(
+    requested_cwd: Option<&Path>,
+    recorded_cwd: Option<&Path>,
+) -> Result<PathBuf, String> {
+    resolve_run_cwd(requested_cwd.or(recorded_cwd))
+}
+
+fn compose_run_prompt(command: &RunCommand) -> Result<(String, Vec<PathBuf>), String> {
+    let prompt = command.prompt.trim().to_owned();
+    let mut attached_files = Vec::with_capacity(command.file.len());
+    for file in &command.file {
+        let canonical =
+            fs::canonicalize(file).map_err(|_| format!("附加文件不可访问：{}", file.display()))?;
+        if !canonical.is_file() {
+            return Err(format!("附加路径不是文件：{}", canonical.display()));
+        }
+        attached_files.push(canonical);
+    }
+    if prompt.is_empty() && attached_files.is_empty() {
+        return Err("axon run prompt 和附件不能同时为空".to_owned());
+    }
+    Ok((prompt, attached_files))
+}
+
+fn resumed_command(
+    command: &RunCommand,
+    previous_session: Option<&run_thread_store::PreparedRunSession>,
+    config: &AxonConfig,
+) -> Result<RunCommand, String> {
+    let Some(previous) = previous_session else {
+        return Ok(command.clone());
+    };
+    let mut effective = command.clone();
+    // 显式 --model 永远最高优先；未指定时沿用会话记录的模型，
+    // 只有该模型已从配置移除才回退 agent.default_model。
+    if effective.model.is_none()
+        && let Some(model) = resumed_session_model(config, &previous.facts)
+    {
+        effective.model = Some(model.name.clone());
+    }
+    Ok(effective)
+}
+
+/// 恢复历史会话时应当沿用的模型。
+///
+/// 优先级：同 Provider + 同别名（用户当初选的那条）> 同 Provider + 同 upstream
+/// model.id > 仅同 upstream model.id。同一 (provider, id) 在配置里可能对应多个
+/// 别名，只有按记录里的别名命中，才能还原用户当初选中的那一组参数。
+/// 返回 `None` 表示会话模型在配置内已不存在，调用方回退 `agent.default_model`。
+fn resumed_session_model<'a>(
+    config: &'a AxonConfig,
+    record: &run_thread_store::ResumedSessionFacts,
+) -> Option<&'a ModelConfig> {
+    let mut best: Option<(u8, &'a ModelConfig)> = None;
+    for model in config
+        .models
+        .iter()
+        .filter(|model| config.model_is_enabled(model))
+    {
+        if model.id != record.model {
+            continue;
+        }
+        let score = u8::from(model.provider == record.provider) * 2
+            + u8::from(record.model_name.as_deref() == Some(model.name.as_str()));
+        let better = match best {
+            Some((current, _)) => score > current,
+            None => true,
+        };
+        if better {
+            best = Some((score, model));
+        }
+    }
+    best.map(|(_, model)| model)
+}
+
+#[cfg(test)]
+#[path = "run_request_resume_tests.rs"]
+mod resume_tests;
+
+#[cfg(test)]
+#[path = "run_request_tests.rs"]
+mod tests;

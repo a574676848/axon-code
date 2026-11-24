@@ -1,0 +1,697 @@
+import type {
+  AnswerQuestionReceipt,
+  ConfigReadResult,
+  ConfigValidateResult,
+  ConfigWriteResult,
+  DiscoverModelsResult,
+  DocumentItem,
+  DocumentText,
+  FileEntryItem,
+  FileTextItem,
+  FileBytesItem,
+  FileApplicationItem,
+  ShellChoiceItem,
+  TerminalInfoItem,
+  TerminalOutputFrame,
+  TerminalExitFrame,
+  GatewayHealth,
+  InterruptReceipt,
+  JobStopReceipt,
+  SessionInteractions,
+  SessionJobsRoster,
+  SessionSubagents,
+  SubagentMessageReceipt,
+  ServiceAction,
+  McpServerInput,
+  McpServerItem,
+  ModelInput,
+  ProviderInput,
+  StagedAttachment,
+  SubmissionReceipt,
+  SystemInfo,
+  UpdateCheck,
+  SkillItem,
+  WorkspaceItem,
+  DesktopPreferences,
+  ThemeId,
+} from './types';
+import type { PersonaPortrait, PersonaSummary } from './personaTypes';
+import type {
+  ConnectionSnapshot,
+  ConnectionTestInput,
+  ConnectionTestResult,
+  KeyIssueReceipt,
+  KeyView,
+  SwitchOutcome,
+} from './connectionTypes';
+
+/** 会话事件通道名，与 Rust 侧 `CONVERSATION_EVENT` 一致；车道流与会话流共用这一条。 */
+import type { ConversationStreamPayload, ConversationStreamEvent } from './conversation/wire';
+import { expandStreamPayload } from './conversation/wire';
+import type { AnswerItem, QuestionSnapshot } from './conversation/questions';
+import { BRIDGE_PORT, call, isDesktopHost, singleFlight } from './backend';
+
+const CONVERSATION_EVENT = 'axon://conversation';
+
+/** 读取输入历史（最早在前）；与 TUI 共用同一份文件。 */
+export const inputHistoryList = (): Promise<string[]> => call('input_history_list');
+
+/** 记录一条输入历史；返回归一化之后的完整历史。 */
+export const inputHistoryAppend = (text: string): Promise<string[]> =>
+  call('input_history_append', { text });
+
+/*
+ * 传输层（Tauri IPC 与浏览器调试桥）与「后端服务未启用」的统一拦截都在
+ * `backend.ts`：这里按领域封装具体命令，并把它整体转出去，
+ * 因此调用方仍然只从 `ipc` 取后端能力，不必知道传输细节。
+ */
+export * from './backend';
+// ---------------------------------------------------------------- 连接档案
+
+/*
+ * 连接相关的命令只回一份快照或一份结论：界面不在本地推导健康态，也不自己拼地址。
+ * 凭据只以「输入一次」的形态出现，任何回执里都不含 Key 明文。
+ */
+
+/** 读取连接快照。 */
+export const connectionState = (): Promise<ConnectionSnapshot> => call('connection_state');
+
+/** 重新探测当前生效档案。 */
+export const connectionRetryProbe = (): Promise<ConnectionSnapshot> =>
+  call('connection_retry_probe');
+
+/** 界面存活报到：看门狗据此区分「界面还活着」与「渲染进程没了」。 */
+export const uiHeartbeat = (): Promise<void> => call('ui_heartbeat');
+
+/** 试连接：不落档案、不落凭据库。 */
+export const connectionTest = (input: ConnectionTestInput): Promise<ConnectionTestResult> =>
+  call('connection_test', { input });
+
+/** 保存云档案（必须先试连接成功）。 */
+export const connectionSaveProfile = (
+  label: string,
+  address: string,
+): Promise<ConnectionSnapshot> => call('connection_save_profile', { input: { label, address } });
+
+/** 删除档案；生效中的档案不可删。 */
+export const connectionDeleteProfile = (id: string): Promise<ConnectionSnapshot> =>
+  call('connection_delete_profile', { id });
+
+/** 重命名档案。 */
+export const connectionRenameProfile = (id: string, label: string): Promise<ConnectionSnapshot> =>
+  call('connection_rename_profile', { id, label });
+
+/** 切换档案：写 id 后重启应用。 */
+export const connectionSwitchProfile = (id: string): Promise<SwitchOutcome> =>
+  call('connection_switch_profile', { id });
+
+/** 记录本次会话内输入的凭据（仅本次会话有效的档案用）。 */
+export const connectionSetSessionSecret = (secret: string): Promise<ConnectionSnapshot> =>
+  call('connection_set_session_secret', { secret });
+
+/** 记录引导完成。 */
+export const connectionCompleteOnboarding = (): Promise<ConnectionSnapshot> =>
+  call('connection_complete_onboarding');
+
+/** 跳过引导，进入未连接态。 */
+export const connectionSkipOnboarding = (): Promise<ConnectionSnapshot> =>
+  call('connection_skip_onboarding');
+
+/** 列出全部未吊销的 Gateway Key；回执不含明文与摘要。 */
+export const connectionKeysList = (): Promise<KeyView[]> => call('connection_keys_list');
+
+/** 签发一把 Gateway Key；明文只在回执里出现一次。 */
+export const connectionKeysCreate = (label: string): Promise<KeyIssueReceipt> =>
+  call('connection_keys_create', { label });
+
+/** 吊销一把 Gateway Key；对下一次鉴权立即生效。 */
+export const connectionKeysRevoke = (id: string): Promise<void> =>
+  call('connection_keys_revoke', { id });
+
+// ---------------------------------------------------------------- 配置读写
+
+export const readConfig = (): Promise<ConfigReadResult> => call('config_read');
+
+export const validateConfig = (tomlContent: string): Promise<ConfigValidateResult> =>
+  call('config_validate', { tomlContent });
+
+export const writeConfig = (tomlContent: string): Promise<ConfigWriteResult> =>
+  call('config_write', { tomlContent });
+
+/** 批量应用配置键值，后端校验并备份后直接写入。 */
+export const applyConfigValues = (values: Record<string, string>): Promise<ConfigWriteResult> =>
+  call('config_apply_values', { values });
+
+/** 把单个配置项恢复为内置默认值。 */
+export const resetConfigKey = (key: string): Promise<ConfigWriteResult> =>
+  call('config_reset_key', { key });
+
+/** 对一批待应用变更做纯内存试算校验，不落盘。 */
+export const validateConfigValues = (
+  values: Record<string, string>,
+): Promise<ConfigValidateResult> => call('config_validate_values', { values });
+
+// ------------------------------------------------------- 供应商档案与模型
+
+/** 整体保存一个供应商档案：供应商配置加上它名下的完整模型集合。 */
+export const saveProviderProfile = (
+  input: ProviderInput,
+  models: ModelInput[],
+  originalName?: string,
+): Promise<ConfigWriteResult> => call('provider_profile_upsert', { input, models, originalName });
+
+/** 移除一个供应商档案，连同它名下的全部模型。 */
+export const removeProviderProfile = (name: string): Promise<ConfigWriteResult> =>
+  call('provider_profile_remove', { name });
+
+/** 向供应商端点获取可用模型列表；候选不会被自动写入配置。 */
+export const discoverModels = (
+  provider?: string,
+  baseUrl?: string,
+  protocol?: string,
+  apiKeyEnv?: string,
+): Promise<DiscoverModelsResult> => call('discover_models', { provider, baseUrl, protocol, apiKeyEnv });
+
+// --------------------------------------------------------- 工作区与车道
+
+export const fetchWorkspaces = (): Promise<WorkspaceItem[]> =>
+  singleFlight('workspace_list', () => call('workspace_list'));
+
+export const addWorkspace = (path: string): Promise<WorkspaceItem[]> =>
+  call('workspace_add', { path });
+
+export const removeWorkspace = (id: string): Promise<WorkspaceItem[]> =>
+  call('workspace_remove', { id });
+
+/** 打开系统原生目录选择器，返回选中路径；取消或不可用时返回 null。 */
+export const pickDirectory = (): Promise<string | null> => call('pick_directory');
+
+/** 新建会话的落库结论：刷新后的目录树与服务端刚给出的会话标识。 */
+export const createSession = (
+  workspaceId: string,
+): Promise<{ sessions: WorkspaceItem[]; sessionId: string }> =>
+  call('session_create', { workspaceId });
+
+/** 登记一条本机草稿会话：只写桌面状态，首条消息提交时才物化成真实会话。 */
+export const createSessionDraft = (workspaceId: string): Promise<WorkspaceItem[]> =>
+  call('session_draft', { workspaceId });
+
+export const setSessionPinned = (sessionId: string, pinned: boolean): Promise<WorkspaceItem[]> =>
+  call('session_set_pinned', { sessionId, pinned });
+
+export const setSessionArchived = (sessionId: string, archived: boolean): Promise<WorkspaceItem[]> =>
+  call('session_set_archived', { sessionId, archived });
+
+export const renameSession = (sessionId: string, title: string): Promise<WorkspaceItem[]> =>
+  call('session_rename', { sessionId, title });
+
+/** 保存某个工作区下车道的自定义顺序，用于手动排序。 */
+export const sessionReorder = (
+  workspaceId: string,
+  orderedIds: string[],
+): Promise<WorkspaceItem[]> => call('session_reorder', { workspaceId, orderedIds });
+
+// ------------------------------------------------- 文档、目录与 MCP 管理
+
+/** 读取已持久化的人格状态摘要。 */
+export const personaSummary = (): Promise<PersonaSummary> => call('persona_summary');
+
+/** 读取形象资产；尚未放置形象时抛出可读错误。 */
+export const personaPortrait = (): Promise<PersonaPortrait> => call('persona_portrait');
+
+/** 列出设置内可打开的文件与目录及其存在状态。 */
+export const documentCatalog = (): Promise<DocumentItem[]> => call('document_catalog');
+
+/** 用系统默认方式打开指定文件或目录。 */
+export const openDocument = (id: string): Promise<void> => call('open_document', { id });
+
+/** 用系统默认浏览器打开一个外部地址；只接受 http 与 https。 */
+export const openExternalUrl = (url: string): Promise<void> => call('open_external_url', { url });
+
+/** 列出 MCP 服务器；只含环境变量名，不含值。 */
+export const mcpList = (): Promise<McpServerItem[]> => call('mcp_list');
+
+/** 新增或更新一台 MCP 服务器。 */
+export const mcpUpsert = (input: McpServerInput, originalName?: string): Promise<void> =>
+  call('mcp_upsert', { input, originalName });
+
+/** 以完整 JSON 配置新增或更新一台 MCP 服务器。 */
+export const mcpUpsertRaw = (name: string, entryJson: string): Promise<void> =>
+  call('mcp_upsert_raw', { name, entryJson });
+
+/** 移除一台 MCP 服务器。 */
+export const mcpRemove = (name: string): Promise<void> => call('mcp_remove', { name });
+
+/** 列出已安装技能。 */
+export const skillsList = (): Promise<SkillItem[]> => call('skills_list');
+
+/** 移除一个已安装技能；技能目录会被删除，调用方必须先取得用户确认。 */
+export const skillsRemove = (id: string): Promise<void> => call('skills_remove', { id });
+
+/** 读取人设或行为准则文档。 */
+export const documentRead = (id: string): Promise<DocumentText> => call('document_read', { id });
+
+/** 写入人设或行为准则文档。 */
+export const documentWrite = (id: string, content: string): Promise<void> =>
+  call('document_write', { id, content });
+
+// ------------------------------------------------------------------ 密钥
+
+/** 查询某个环境变量是否已经配置密钥。 */
+export const secretStatus = (key: string): Promise<boolean> => call('secret_status_of', { key });
+
+/** 写入或更新一个密钥到配置相邻的 .env。 */
+export const secretSet = (key: string, value: string): Promise<void> =>
+  call('secret_set', { key, value });
+
+/** 从 .env 中清除一个密钥。 */
+export const secretClear = (key: string): Promise<void> => call('secret_clear', { key });
+
+// ------------------------------------------------------------ 系统信息
+
+/** 汇总运行态服务与版本。 */
+export const systemInfo = (): Promise<SystemInfo> => call('system_info');
+
+/** 经 GitHub 发布渠道检测更新。 */
+export const checkUpdate = (): Promise<UpdateCheck> => call('check_update');
+
+// ------------------------------------------------------------ 网关可用性
+
+/** 探测网关是否可用；应用启动即调用。 */
+export const gatewayHealth = (): Promise<GatewayHealth> => call('gateway_health');
+
+/** 启动、注册或重启 Axon 后台服务。 */
+export const gatewayStartService = (mode: 'start' | 'install' | 'restart'): Promise<ServiceAction> =>
+  call('gateway_start_service', { mode });
+
+// ------------------------------------------------------------ 会话事件流
+
+/** 提交一条用户消息，返回服务端回执。 */
+export const conversationSubmit = (
+  workspaceId: string,
+  sessionId: string | null,
+  destination: string,
+  content: string,
+  attachments: string[] = [],
+  // 用户在本会话里显式选定的模型；未选择时交给会话历史与配置决定。
+  model: string | null = null,
+  // 用户在本会话里显式选定的推理强度；未选择时交给 agent.reasoning_effort 决定。
+  reasoningEffort: string | null = null,
+): Promise<SubmissionReceipt> =>
+  call('conversation_submit', {
+    workspaceId,
+    sessionId,
+    destination,
+    content,
+    attachments,
+    model,
+    reasoningEffort,
+  });
+
+/** 提交待决提问的答案。 */
+export const conversationAnswerQuestion = (
+  sessionId: string,
+  callId: string,
+  answers: AnswerItem[],
+): Promise<AnswerQuestionReceipt> =>
+  call('conversation_answer_question', { sessionId, callId, answers });
+
+/**
+ * 按网关权威记录对账某条车道下的问答状态。
+ *
+ * 后端已完成字段适配（状态翻译、作答内容与 partId 补齐），这里拿到的就是可直接
+ * 覆盖本地投影的形状。对账必须看到全部状态：网关的 `state` 只能取单值，而「待决」与
+ * 「挂起」是两种状态，只查其一会把另一种误判成已结算，因此这里不传过滤条件。
+ */
+export const conversationSessionQuestions = (sessionId: string): Promise<QuestionSnapshot[]> =>
+  call('conversation_session_questions', { sessionId });
+
+/** 登记当前会话，供系统通知的标题与点击跳转使用。 */
+export const conversationSetActiveSession = (sessionId: string, title: string): Promise<void> =>
+  call('conversation_set_active_session', { sessionId, title });
+
+/**
+ * 按车道读取历史 Interaction。
+ *
+ * 分页口径是「一次一条」：不给游标取最近一条，给出游标取它之前的一条。
+ * 会话正文靠逐条订阅回放，因此这里只负责按需把游标往前推。
+ *
+ * 回执里另带整条车道的累计 token 用量：这个数与会话翻到第几页无关，由网关按会话聚合，
+ * 界面据此在打开历史会话时就得到整条会话的消耗，而不必先把前面几十条都回放一遍。
+ */
+export const conversationHistory = (
+  sessionId: string,
+  limit = 1,
+  before: { receivedAtMs: number; interactionId: string } | null = null,
+): Promise<SessionInteractions> =>
+  call('conversation_history', {
+    sessionId,
+    limit,
+    beforeMs: before?.receivedAtMs ?? null,
+    beforeId: before?.interactionId ?? null,
+  });
+
+/** 历史帧页里的一帧；字段与事件通道上的帧同形。 */
+export interface HistoryFrame {
+  eventType: string;
+  payloadJson: string;
+  cursor: string | null;
+  replay: boolean;
+}
+
+/** 一条 Interaction 的一段历史帧。 */
+export interface HistoryPage {
+  interactionId: string;
+  events: HistoryFrame[];
+  nextAfter: number;
+  hasMore: boolean;
+  tailSequence: number;
+  tailCursor: string | null;
+  /**
+   * 因正文归档已回收而被跳过的帧数（老网关无此字段）：界面据此说明「部分过程已回收」。
+   */
+  skippedArchivedFrames?: number;
+}
+
+/**
+ * 读取一段历史帧。
+ *
+ * 正文走这条 HTTP 通道，事件通道只负责读完之后从 `tailCursor` 起的实时尾：
+ * 大会话的上万帧因此不再挤在事件通道上。
+ */
+export const conversationHistoryEvents = (
+  interactionId: string,
+  after = 0,
+  limit?: number,
+  tail = false,
+): Promise<HistoryPage> =>
+  call('conversation_history_events', { interactionId, after, limit, tail });
+
+/** 订阅一条 Interaction 的事件流。 */
+export const conversationWatch = (
+  workspaceId: string,
+  interactionId: string,
+  resumeCursor: string | null,
+): Promise<void> => call('conversation_watch', { workspaceId, interactionId, resumeCursor });
+
+/** 订阅一条会话的轮次头：只推「多了一轮」与「这一轮收口了」；独立会话靠它发现新轮。 */
+export const conversationWatchTurns = (
+  workspaceId: string,
+  sessionId: string,
+): Promise<void> => call('conversation_watch_turns', { workspaceId, sessionId });
+
+/**
+ * 取消一条订阅。
+ *
+ * 必须按订阅标识精确取消：一条连接上并存多路订阅，整体关闭会把仍在服务的那一路
+ * 一起掐掉（子代理视图与车道视图正是这种并存关系）。
+ */
+export const conversationUnsubscribe = (subscribeId: string): Promise<void> =>
+  call('conversation_unsubscribe', { subscribeId });
+
+/** 中断某条车道正在运行的轮次。 */
+export const conversationInterrupt = (sessionId: string): Promise<InterruptReceipt> =>
+  call('conversation_interrupt', { sessionId });
+
+/** 用户手动停止某条车道上的后台作业。 */
+export const conversationStopJob = (sessionId: string, jobId: string): Promise<JobStopReceipt> =>
+  call('conversation_stop_job', { sessionId, jobId });
+
+/** 向正在运行的子代理投递一条用户消息。 */
+export const conversationSendSubagentMessage = (
+  sessionId: string,
+  agentId: string,
+  content: string,
+): Promise<SubagentMessageReceipt> =>
+  call('conversation_send_subagent_message', { sessionId, agentId, content });
+
+/** 读取一条车道上仍在运行的后台作业名册。 */
+export const conversationSessionJobs = (sessionId: string): Promise<SessionJobsRoster> =>
+  call('conversation_session_jobs', { sessionId });
+
+/** 后台作业输出的一页：网关按字节游标增量给出。 */
+export interface JobOutputStream {
+  sessionId: string;
+  jobId: string;
+  /** 本次读取的起始字节偏移（已在归档头部之后）。 */
+  offset: number;
+  /** 下一次读取的字节偏移。 */
+  nextOffset: number;
+  text: string;
+  /** 是否已到归档末尾；作业在跑时同样可能为真。 */
+  eof: boolean;
+  running: boolean;
+  status: string | null;
+  exitCode: number | null;
+  elapsedMs: number | null;
+  fullOutputAvailable: boolean;
+  /** 读不到的原因；为空表示这一页就是真实输出。 */
+  unavailable: string | null;
+}
+
+/** 读取一次后台作业的输出增量。 */
+export const conversationJobOutput = (
+  sessionId: string,
+  jobId: string,
+  offset: number,
+): Promise<JobOutputStream> => call('conversation_job_output', { sessionId, jobId, offset });
+
+/** 读取一条车道下的子代理会话清单。 */
+export const conversationSessionSubagents = (sessionId: string): Promise<SessionSubagents> =>
+  call('conversation_session_subagents', { sessionId });
+
+/**
+ * 监听会话事件流。
+ *
+ * 桌面宿主走 Tauri 事件通道，浏览器调试走调试桥的 SSE；两条通道承载同一种帧结构，
+ * 且**车道流与会话流合并到同一条 Tauri 事件通道**（每个订阅目标各持一条连接，帧内
+ * 自带 `subscribeId`，调用方按它分发），因此这里只有一个入口、一个 SSE 端点。
+ */
+export async function listenConversation(
+  handler: (event: ConversationStreamEvent) => void,
+): Promise<() => void> {
+  return listenStream(CONVERSATION_EVENT, handler);
+}
+
+async function listenStream(
+  eventName: string,
+  handler: (event: ConversationStreamEvent) => void,
+): Promise<() => void> {
+  if (isDesktopHost()) {
+    const { listen } = await import('@tauri-apps/api/event');
+    // 桌面宿主把回放帧攒成一批下发：一次载荷里有几帧就按序喂几帧，
+    // 上层仍然只面对「逐帧」这一种形状。
+    const unlisten = await listen<ConversationStreamPayload>(eventName, (event) => {
+      for (const item of expandStreamPayload(event.payload)) handler(item);
+    });
+    return unlisten;
+  }
+  // 浏览器调试走调试桥的同一条 SSE。
+  const source = new EventSource(`http://127.0.0.1:${BRIDGE_PORT}/events`);
+  source.onmessage = (message) => {
+    try {
+      handler(JSON.parse(message.data) as ConversationStreamEvent);
+    } catch {
+      // 单帧解析失败不终止整条流：后续帧仍然有效。
+    }
+  };
+  return () => source.close();
+}
+
+// ------------------------------------------------------------ 附件
+
+/** 落地一个粘贴进来的附件，返回可直接提交的绝对路径。 */
+export const attachmentStage = (name: string, dataBase64: string): Promise<StagedAttachment> =>
+  call('attachment_stage', { name, dataBase64 });
+
+/** 打开系统文件选择器并直接登记为附件。 */
+export const attachmentPick = (): Promise<StagedAttachment[]> => call('attachment_pick');
+
+/** 取一张附件图片的可渲染地址：桌面窗口走 IPC 数据地址，调试桥走字节路由。 */
+export async function attachmentSource(path: string): Promise<string> {
+  return isDesktopHost()
+    ? call('attachment_preview', { path })
+    : `http://127.0.0.1:${BRIDGE_PORT}/attachment/${encodeURIComponent(path)}`;
+}
+
+// ------------------------------------------------------------ 剪贴板
+
+/*
+ * 剪贴板走原生通道，不用网页层的 navigator.clipboard：
+ * 后者对读取要弹一次系统授权、对写入要求窗口处于焦点，都会让右键菜单的复制粘贴时灵时不灵。
+ */
+
+/** 读取剪贴板文本；剪贴板里没有文本时返回空串。 */
+export const clipboardReadText = (): Promise<string> => call('clipboard_read_text');
+
+/** 写入剪贴板文本。 */
+export const clipboardWriteText = (text: string): Promise<void> =>
+  call('clipboard_write_text', { text });
+
+// ------------------------------------------------------------ 正文导出
+
+/**
+ * 把一段正文另存为 Markdown 文件。
+ *
+ * 另存为对话框由后端调起，界面因此不需要文件系统权限；用户取消时返回 null。
+ */
+export const exportMarkdown = (suggestedName: string, content: string): Promise<string | null> =>
+  call('export_markdown', { suggestedName, content });
+
+// ------------------------------------------------------------ 工作区文件
+
+/** 列出工作区内某个目录的条目。 */
+export const listWorkspaceEntries = (
+  root: string,
+  relativePath: string,
+): Promise<FileEntryItem[]> =>
+  call('workspace_list_entries', { root, relativePath });
+
+/** 读取工作区内的文本文件。 */
+export const readWorkspaceFile = (
+  root: string,
+  relativePath: string,
+): Promise<FileTextItem> =>
+  call('workspace_read_file', { root, relativePath });
+
+/**
+ * 探测一个路径是文件还是目录。
+ *
+ * 目录不该按文本读（只会得到「目标不是文件」）：侧栏据此把目录按目录树展开，
+ * 与工作区文件页同一套浏览方式。
+ */
+export const statWorkspacePath = (
+  root: string,
+  relativePath: string,
+): Promise<{ is_dir: boolean; absolute_path: string; display_path: string }> =>
+  call('workspace_stat_path', { root, relativePath });
+
+/**
+ * 读取工作区内一个文件的原始字节。
+ *
+ * 图片、PDF、HTML 必须拿到未解码的字节：按文本读会把非 UTF-8 的部分换成占位符，
+ * 渲染出来的图或文档就是坏的。
+ */
+export const readWorkspaceBytes = (root: string, relativePath: string): Promise<FileBytesItem> =>
+  call('workspace_read_bytes', { root, relativePath });
+
+/**
+ * 列出系统为某个文件登记的打开方式。
+ *
+ * 候选由操作系统回答（Windows 走 Shell 的关联处理程序枚举，Linux 走 XDG 桌面条目），
+ * 因此换一台机器、装一个新应用，菜单会自己跟着变：这里没有一份精选目录。
+ */
+export const fileApplications = (
+  root: string,
+  relativePath: string,
+): Promise<FileApplicationItem[]> =>
+  call('workspace_applications', { root, relativePath });
+
+/** 用系统默认程序打开工作区内的文件。 */
+export const openWorkspaceFile = (root: string, relativePath: string): Promise<void> =>
+  call('workspace_open_default', { root, relativePath });
+
+/** 用系统登记的某个应用打开工作区内的文件；标识来自 `fileApplications`。 */
+export const openWorkspaceFileWith = (
+  root: string,
+  relativePath: string,
+  application: string,
+): Promise<void> => call('workspace_open_with', { root, relativePath, application });
+
+/** 在文件管理器中定位工作区内的文件。 */
+export const revealWorkspaceFile = (root: string, relativePath: string): Promise<void> =>
+  call('workspace_reveal', { root, relativePath });
+
+// ------------------------------------------------------------ 终端
+
+/** 终端输出事件通道名，与 Rust 侧 `TERMINAL_OUTPUT_EVENT` 一致。 */
+const TERMINAL_OUTPUT_EVENT = 'axon://terminal-output';
+
+/** 终端退出事件通道名，与 Rust 侧 `TERMINAL_EXIT_EVENT` 一致。 */
+const TERMINAL_EXIT_EVENT = 'axon://terminal-exit';
+
+/**
+ * 终端是否可用。
+ *
+ * 终端靠事件通道把输出送回界面，而浏览器调试桥没有这条通道，
+ * 因此只有桌面宿主内才是完整能力；调试桥下界面给出明确说明而不是开一个看不见输出的终端。
+ */
+export const terminalSupported = (): boolean => isDesktopHost();
+
+/** 列出本机可用的 shell。 */
+export const terminalShells = (): Promise<ShellChoiceItem[]> => call('terminal_shells');
+
+/** 在工作区里开一个终端。 */
+export const terminalOpen = (
+  root: string,
+  shell: string | null,
+  cols: number,
+  rows: number,
+): Promise<TerminalInfoItem> => call('terminal_open', { root, shell, cols, rows });
+
+/** 把键盘输入写进终端。 */
+export const terminalWrite = (id: string, data: string): Promise<void> =>
+  call('terminal_write', { id, data });
+
+/** 调整终端尺寸。 */
+export const terminalResize = (id: string, cols: number, rows: number): Promise<void> =>
+  call('terminal_resize', { id, cols, rows });
+
+/** 关闭终端。 */
+export const terminalClose = (id: string): Promise<void> => call('terminal_close', { id });
+
+/** 订阅终端输出；调试桥没有事件通道，返回空订阅。 */
+export async function listenTerminalOutput(
+  handler: (frame: TerminalOutputFrame) => void,
+): Promise<() => void> {
+  if (!isDesktopHost()) return () => undefined;
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen<TerminalOutputFrame>(TERMINAL_OUTPUT_EVENT, (event) => handler(event.payload));
+}
+
+/** 订阅终端退出；调试桥没有事件通道，返回空订阅。 */
+export async function listenTerminalExit(
+  handler: (frame: TerminalExitFrame) => void,
+): Promise<() => void> {
+  if (!isDesktopHost()) return () => undefined;
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen<TerminalExitFrame>(TERMINAL_EXIT_EVENT, (event) => handler(event.payload));
+}
+
+// ------------------------------------------------------------ 桌面偏好
+
+/** 读取桌面偏好。 */
+export const desktopPreferences = (): Promise<DesktopPreferences> => call('desktop_preferences');
+
+/** 设置是否发送系统通知。 */
+export const desktopSetNotifications = (enabled: boolean): Promise<DesktopPreferences> =>
+  call('desktop_set_notifications', { enabled });
+
+/** 设置左侧导航是否折叠。 */
+export const desktopSetSidebarCollapsed = (collapsed: boolean): Promise<DesktopPreferences> =>
+  call('desktop_set_sidebar_collapsed', { collapsed });
+
+/** 切换界面主题。 */
+export const desktopSetTheme = (theme: ThemeId): Promise<DesktopPreferences> =>
+  call('desktop_set_theme', { theme });
+
+/**
+ * 记下「上次看到哪」：工作区目录、会话标识与展开着的工作区。
+ *
+ * 只写本地状态文件，与服务端无关；启动时读同一份事实直接展开该工作区并打开那条会话。
+ */
+export const desktopRememberView = (view: {
+  workspaceDir?: string | null;
+  sessionId?: string | null;
+  expandedWorkspaceIds?: string[] | null;
+}): Promise<DesktopPreferences> => call('desktop_remember_view', view);
+
+/** 记下输入坞改选的主模型名称；新开会话时优先沿用。 */
+export const desktopSetComposerModel = (model: string): Promise<DesktopPreferences> => call('desktop_set_composer_model', { model });
+
+/** 记下输入坞改选的思考强度；新开会话时优先沿用。 */
+export const desktopSetComposerReasoningEffort = (
+  effort: string,
+): Promise<DesktopPreferences> => call('desktop_set_composer_reasoning_effort', { effort });
+
+export * from './ipcService';

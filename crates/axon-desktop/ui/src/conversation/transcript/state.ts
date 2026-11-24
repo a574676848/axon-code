@@ -1,0 +1,563 @@
+/*
+ * 对话投影的状态模型。
+ *
+ * 这一层只声明事实的形状与常量，不含任何归约逻辑：单元的判别联合、轮次的
+ * 终态字段、会话级状态与归约动作。事实源是订阅流，因此这里没有任何可写副本。
+ */
+
+import type { FailureReport } from '../failureReport';
+import type { RuntimeObservationFrame } from '../wire';
+import type { TurnChanges } from './changes';
+import type { AnswerItem, PendingQuestion, QuestionItem, QuestionStatus } from '../questions';
+
+/** 时间线上的单元。 */
+export type TranscriptCell =
+  | {
+      id: string;
+      role: 'user';
+      text: string;
+      atMs: number | null;
+      attachments: AttachmentRef[];
+      /**
+       * 这一轮由哪个渠道发起（cli / desktop / tui / cron / goal）。
+       *
+       * 历史里逐轮标注来源：同一会话可能由两端先后续聊，会话级统一值会撒谎。
+       */
+      channel?: string;
+      /**
+       * 服务端始终没有认领这条消息（发送失败，或中断时还没被注入）。
+       *
+       * 它是对投递的结论而不是消息本身的属性：一旦有任何一帧把它认领回来，这一位必须
+       * 撤下（见 `cells.claimedUserCell`），否则一条真的送到的消息会永远挂着「未送达」。
+       */
+      undelivered?: boolean;
+      /**
+       * 提交时附上的结构化输入块（`[结构化输入]` 段）。
+       *
+       * 只在运行中排队这一格上存在：中断转投要按原样重发，而引用与附件行
+       * 在正文被裁成可见文本之后就再也算不回来了。
+       */
+      structuredInput?: string;
+      /**
+       * 这条消息是「本轮运行中追加」的。
+       *
+       * 与本地排队标识不同，服务端认领这一刻也会原样保留：认领只换标识与时间。
+       * 渲染层据此判断它要不要让位给过程行（见 `transcript/order`）：还在排队时
+       * 排到本轮末尾，被模型接住之后留在原位，回答自然落在气泡下方。
+       */
+      steer?: boolean;
+      /** 追加时的先后序号：认领与注入都可能打乱顺序，只认这一条。 */
+      steerSeq?: number;
+      /**
+       * 已经交给下一轮（中断时交接）。
+       *
+       * 气泡原地留着并标成「转投下一条」，交接那一帧才从旧轮次摘走，
+       * 因此正文里不会出现「先清空、再重写」的空档，也不会留下两份。
+       */
+      requeued?: boolean;
+    }
+  | {
+      id: string;
+      role: 'assistant';
+      text: string;
+      streaming: boolean;
+      /** 这一格第一次被看到的服务端记录时间；操作条与用户气泡同款时间。 */
+      atMs: number | null;
+    }
+  | { id: string; role: 'reasoning'; text: string; done: boolean; durationMs: number | null; startedAtMs: number | null }
+  /**
+   * 整轮控件：一轮的过程已经收起，点开即回放该轮。
+   *
+   * 它是一根抬头而不是过程的替身：位置固定在开场输入之后，标题给这一轮的动作摘要，
+   * 行尾给用时。折叠态的其余可见单元（用户气泡、助手回复、提示与失败卡）都是原位保留
+   * 的真实单元，因此折叠不改变任何一句话的先后。
+   */
+  | {
+      id: string;
+      role: 'folded';
+      /** 回放这一轮用的 Interaction 标识。 */
+      interactionId: string;
+      /** 动作摘要；索引轮可能是状态短语（已中断、未执行）。 */
+      summary: string;
+      /** 这一轮的用时；没有时间事实时为空。 */
+      elapsedMs: number | null;
+      atMs: number | null;
+      /** 展开态：箭头朝下，点一下即收起并释放过程正文。 */
+      expanded?: boolean;
+    }
+  | {
+      id: string;
+      role: 'tool';
+      toolName: string;
+      toolKind: string;
+      command: string;
+      /** 服务端参数摘要，展开时保留 JSON 输入结构。 */
+      arguments: string;
+      /** 模型自述的调用目的概要；折叠态优先显示它，为空时显示命令投影。 */
+      intent: string;
+      status: string;
+      summary: string;
+      output: string;
+      durationMs: number | null;
+      /** 这一格第一次被看到的服务端记录时间；运行中的耗时由它起算。 */
+      startedAtMs: number | null;
+      exitCode: number | null;
+      jobId: string | null;
+      /** 作业自身状态；工具调用状态在 `status`，两者不混用。 */
+      jobStatus: string | null;
+      fullOutputAvailable: boolean;
+      filesystemWritePerformed: boolean;
+      /** 该工具改动的文件路径；无写入时为 null。 */
+      editPath: string | null;
+      /** 改动新增与删除的行数。 */
+      added: number;
+      removed: number;
+      /** unified diff 文本；仅在有文件变更时存在，用于展开查看。 */
+      diff: string | null;
+    }
+  | {
+      id: string;
+      role: 'fileChange';
+      path: string;
+      changeType: string;
+      added: number;
+      removed: number;
+      diff: string;
+    }
+  | { id: string; role: 'history'; title: string; status: string; summary: string }
+  | { id: string; role: 'plan'; title: string; steps: { step: string; status: string }[] }
+  | { id: string; role: 'notice'; title: string; summary: string; tone: 'info' | 'danger' }
+  | { id: string; role: 'failure'; report: FailureReport | null; text: string }
+  | { id: string; role: 'summary'; durationMs: number | null; usage: TokenUsage | null; firstTokenAvgMs: number | null; generationTpsX10: number | null }
+  | {
+      id: string;
+      role: 'question';
+      callId: string;
+      status: QuestionStatus;
+      questions: QuestionItem[];
+      answers?: AnswerItem[];
+      handoff?: string | null;
+      deadlineAtMs: number;
+      /** 提问被记录下来的时刻；与消息页脚同款时间标记，缺值时整行不渲染。 */
+      atMs?: number | null;
+    };
+
+/** 用户消息携带的附件。 */
+export interface AttachmentRef {
+  /** 本地绝对路径。 */
+  path: string;
+  /** 展示用文件名。 */
+  name: string;
+  /** 是否为可预览的图片。 */
+  image: boolean;
+  /** 字节数；历史消息只带路径时为空。 */
+  bytes: number | null;
+}
+
+/**
+ * 运行中追加的用户消息标识前缀。
+ *
+ * durable 的用户消息事件到达前，这一条只是本地乐观气泡；事件按正文认领它并换成
+ * 服务端标识，标记随之消失。因此「是否仍在排队等安全边界插入」由这个前缀判定，
+ * 不额外维护第二份队列状态。
+ */
+export const LOCAL_STEER_PREFIX = 'local-steer:';
+
+/**
+ * 索引骨架立起的用户消息标识前缀。
+ *
+ * 与上一项同为本地占位：durable 用户帧到达时按可见正文认领，两者都要一并收掉，
+ * 否则同一条消息会在时间线上留下两格气泡。
+ */
+export const LOCAL_USER_PREFIX = 'local-user:';
+
+/** 子代理活动行；字段口径与 TUI 的子代理活动区一致。 */
+export interface SubagentRow {
+  agentId: string;
+  label: string;
+  status: 'starting' | 'running' | 'waiting' | 'completed' | 'interrupted' | 'failed';
+  activity: string;
+  elapsedMs: number;
+  lastSeenAtMs: number;
+  order: number;
+  usage: number | null;
+  cacheHitRateBasisPoints: number | null;
+  model: string | null;
+  summary: string | null;
+  /** 名册给出的运行态会话标识；转录行本身不带，对账后补上。 */
+  sessionId?: string | null;
+  /** 该子代理的生命周期轨迹，用于在主区域回看它这一轮到底做了什么。 */
+  events: SubagentEvent[];
+}
+
+/** 子代理轨迹上的一条事实。 */
+export interface SubagentEvent {
+  /** 事件记录时间。 */
+  atMs: number;
+  /** 运行阶段，取值来自后端 uiPhase。 */
+  phase: string;
+  /** 阶段状态。 */
+  status: string;
+  /** 展示标题。 */
+  title: string;
+  /** 阶段摘要；无则为 null。 */
+  summary: string | null;
+}
+
+/** 单个子代理保留的轨迹条数上限，避免长任务把内存拖垮。 */
+export const MAX_SUBAGENT_EVENTS = 200;
+
+/** 后台作业行；事实源是订阅流上的 shell 与作业工具事件。 */
+export interface JobRow {
+  id: string;
+  command: string;
+  status: string;
+  output: string;
+  durationMs: number | null;
+  /** 这一行第一次被看到的服务端记录时间；运行中的耗时由它按秒起算。 */
+  startedAtMs: number | null;
+  exitCode: number | null;
+  jobId: string | null;
+  /** 作业自身状态；工具调用状态在 `status`，两者不混用。 */
+  jobStatus: string | null;
+  fullOutputAvailable: boolean;
+}
+
+/**
+ * 令牌累计口径，与 TUI 的 AgentTuiTokenUsage 同字段。
+ *
+ * 末尾三项是**上下文构成估算**：它们是「最近一次请求」的快照，不参与 `totalTokens`
+ * 累加（构成是总量的分解，不是额外消耗），口径与 Provider 报出的上下文总量天然有差。
+ */
+export interface TokenUsage {
+  inputTokens: number;
+  cacheReadInputTokens: number;
+  cacheWriteInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+  currentContextTokens: number;
+  systemPromptTokens: number;
+  toolDefinitionTokens: number;
+  conversationTokens: number;
+}
+
+/** 空用量。 */
+export const EMPTY_USAGE: TokenUsage = {
+  inputTokens: 0,
+  cacheReadInputTokens: 0,
+  cacheWriteInputTokens: 0,
+  outputTokens: 0,
+  reasoningOutputTokens: 0,
+  currentContextTokens: 0,
+  systemPromptTokens: 0,
+  toolDefinitionTokens: 0,
+  conversationTokens: 0,
+};
+
+/** 上下文构成估算总量；没有构成观测时为 0。 */
+export function compositionTokens(usage: TokenUsage): number {
+  return usage.systemPromptTokens + usage.toolDefinitionTokens + usage.conversationTokens;
+}
+
+/** 总 token。 */
+export function totalTokens(usage: TokenUsage): number {
+  return (
+    usage.inputTokens +
+    usage.cacheReadInputTokens +
+    usage.cacheWriteInputTokens +
+    usage.outputTokens +
+    usage.reasoningOutputTokens
+  );
+}
+
+/**
+ * 当前上下文 token；provider 没有给出该读数时返回 0（未知）。
+ *
+ * 不回落到 `totalTokens`：一轮的累计量跨请求相加、缓存命中被重复计入，
+ * 会是真实上下文的好几倍，拿它顶替会让换窗后的会话再次显示成「已满」。
+ */
+export function currentContextTokens(usage: TokenUsage): number {
+  return usage.currentContextTokens > 0 ? usage.currentContextTokens : 0;
+}
+
+/** 完整输入 token。 */
+export function completeInputTokens(usage: TokenUsage): number {
+  return usage.inputTokens + usage.cacheReadInputTokens + usage.cacheWriteInputTokens;
+}
+
+/** 缓存读取占完整输入的万分比。 */
+export function cacheHitRateBasisPoints(usage: TokenUsage): number {
+  const denominator = completeInputTokens(usage);
+  if (denominator === 0) return 0;
+  return Math.min(10_000, Math.floor((usage.cacheReadInputTokens * 10_000) / denominator));
+}
+
+/** 一个轮次的投影。 */
+export interface TurnState {
+  /** 投影内部标识：绑定交互前是本地临时标识，绑定后即 Interaction 标识。 */
+  id: string;
+  /** 网关 Interaction 标识；提交回执到达前为空。 */
+  interactionId: string | null;
+  cells: TranscriptCell[];
+  /** part_id 到单元下标的索引，增量归并只查这里。 */
+  index: Record<string, number>;
+  status: 'pending' | 'streaming' | 'completed' | 'failed' | 'rejected' | 'interrupted' | 'undelivered';
+  /**
+   * 本轮用量读数：已收口流的累计加上在跑流的快照，供界面直接读。
+   *
+   * 读取方只看这一个字段；它由 `usageFolded` 与 `usageStream` 派生，不单独维护。
+   */
+  usage: TokenUsage;
+  /** 本轮已收口 provider 流的用量累计。 */
+  usageFolded: TokenUsage;
+  /**
+   * 在跑 provider 流最近一次用量快照。
+   *
+   * 用量帧是该条流的累计快照而不是增量，同一条流的快照还会被重复投递，
+   * 因此流内按覆盖处理、收口时并入累计，跨流才是相加。
+   */
+  usageStream: TokenUsage | null;
+  startedAtMs: number | null;
+  elapsedMs: number | null;
+  firstTokenAvgMs: number | null;
+  generationTpsX10: number | null;
+  /** 本轮解码窗口：各条 provider 流的实测流式耗时之和减去首字；会话级速率按各轮窗口加权求和。 */
+  decodeMs: number | null;
+  /** 本轮 Provider 实测的输出 token 累计；未观测到用量时为 null。 */
+  generationOutputTokens: number | null;
+  /** 本轮 Provider 实测的推理输出 token 累计；未观测到用量时为 null。 */
+  generationReasoningTokens: number | null;
+  /** 生成中的实时状态行，来自 provider 状态事件。 */
+  activity: string | null;
+  /** 本轮第一条 durable 事件的记录时间；回放时用来还原真实耗时。 */
+  firstEventAtMs: number | null;
+  /** 本轮最后一条 durable 事件的记录时间。 */
+  lastEventAtMs: number | null;
+  /**
+   * 服务端收口这一轮的时刻（Unix 毫秒）；尚未收口时为 null。
+   *
+   * 它是「过程不会再变」的直接事实，也是整轮折叠的第一判据：状态字段只说明这一轮
+   * 停在哪个终态，收口事实缺失的轮次会一直写着运行中，光看状态永远折不起来。
+   */
+  settledAt: number | null;
+  /** 本轮的文件改动事实，按 part_id 归并；卡片与改动对比都读这一份。 */
+  changes: TurnChanges;
+  /**
+   * 等待贴到用户消息上的历史附件。
+   *
+   * 回放时附件先于会话事件到达（历史索引是附件的唯一事实源），而用户消息要等
+   * durable 事件重放才出现，因此这里先暂存，等第一条用户消息落地时再贴上。
+   */
+  pendingAttachments: AttachmentRef[];
+  /**
+   * 等待贴到用户消息上的逐轮来源。
+   *
+   * 与上一条同源同寿命：来源只有历史索引知道，用户消息要等 durable 事件重放才出现。
+   */
+  pendingChannel: string | null;
+  /**
+   * 已折叠：正文单元已经**丢弃**，只剩一行摘要。
+   *
+   * 折叠不是「藏起来」而是「释放」：`cells` 被替换成单个折叠单元后，工具输出与推理
+   * 正文在投影里不再有任何引用，内存立即回收。展开时按标识重新回放该 Interaction，
+   * 把算好的单元整段换回来。
+   */
+  folded: boolean;
+  /** 折叠时保留的那一行摘要（工具动作串）。 */
+  summary: string;
+  /** 用户显式展开过：不再自动折叠，避免刚点开就被收回去。 */
+  keepExpanded: boolean;
+  /** 展开态：过程控件仍在，正文已经摆出来，可以再收起（收起即释放正文）。 */
+  expanded: boolean;
+}
+
+/** 订阅连接状态。 */
+export type ConnectionState = 'idle' | 'connecting' | 'subscribed' | 'failed';
+
+/** 对话投影的完整状态。 */
+export interface ConversationState {
+  turns: TurnState[];
+  connection: ConnectionState;
+  failure: { message: string; retryable: boolean } | null;
+  /**
+   * 残缺历史的提示文案（如「历史仅显示到第 6230 帧」）。
+   *
+   * 由订阅确认帧的截断事实得出：为空表示这次回放已经读到 durable 尾。
+   * 它是会话级事实，不是某一轮的单元，因此挂在投影上而不是某个轮次里。
+   */
+  replayNotice: string | null;
+  /** 断点续订游标。 */
+  cursor: string | null;
+  /** 最近一帧运行指标。 */
+  observation: RuntimeObservationFrame | null;
+  lastObservationAtMs: number;
+  subagents: SubagentRow[];
+  /**
+   * 会话级计划投影。
+   *
+   * 指标条的完成度与输入坞上方的固定计划坞读的是同一份投影；时间线里的计划单元
+   * 只是那一刻的快照，因此「当前计划」必须在这里留全量步骤，而不是只留计数。
+   */
+  plan: PlanProjection | null;
+  lspActiveCount: number;
+  activeTurnCount: number;
+  /** 当前车道待决/已结算提问映射（按 callId 索引），O(1) 增量维护。 */
+  pendingQuestions: Record<string, PendingQuestion>;
+  /**
+   * 已结算提问的权威结论（按 callId 索引）。
+   *
+   * 待答位只留还需要回答的那几条，因此结算过的条目会从 `pendingQuestions` 里离场；
+   * 但它的结论必须留住：进入车道时对账与历史回放是两条异步路径，对账先到（此时
+   * 单元还没被回放出来），随后到达的挂起帧就会在时间线上重新长出一张「已挂起」的
+   * 单元，并给出注定被服务端拒绝的回入口。这里只留状态与作答内容，不留问题正文。
+   * 因此它的体量随「答过的题」增长，而不是随问答载荷增长。
+   */
+  resolvedQuestions: Record<string, ResolvedQuestion>;
+  /**
+   * 会话累计的后台作业台账。
+   *
+   * 与轮次单元分开存：折叠会把过程单元整段释放，而「这条会话跑过哪些后台作业」是
+   * 会话事实，不能随单元的释放一起消失（否则标题栏的后台任务清单会在折叠或回放之后
+   * 变空）。行只在发起作业的那一次调用处新增，后续回执原位更新。
+   */
+  jobs: JobRow[];
+}
+
+export interface ResolvedQuestion {
+  /** 已作答内容；对账未下发时留空。 */
+  answers?: AnswerItem[];
+}
+
+/** 会话级计划投影。 */
+export interface PlanProjection {
+  /** 计划标题；后端未给出时为空串。 */
+  title: string;
+  /** 已完成步数。 */
+  completed: number;
+  /** 总步数。 */
+  total: number;
+  /** 步骤明细，顺序与后端下发一致。 */
+  steps: { step: string; status: string }[];
+}
+
+/** 初始状态。 */
+export const INITIAL_CONVERSATION: ConversationState = {
+  turns: [],
+  connection: 'idle',
+  failure: null,
+  replayNotice: null,
+  cursor: null,
+  observation: null,
+  lastObservationAtMs: 0,
+  subagents: [],
+  plan: null,
+  lspActiveCount: 0,
+  activeTurnCount: 0,
+  pendingQuestions: {},
+  resolvedQuestions: {},
+  jobs: [],
+};
+
+/** 归约动作。 */
+export type ConversationAction =
+  | { type: 'reset' }
+  /**
+   * 会话级计划快照：打开会话时随索引带回，供计划坞在首屏立起当前进度。
+   *
+   * 只在投影还没有计划时落地：回放帧与实时帧都比这份快照新，快照绝不能反向覆盖它们。
+   */
+  | { type: 'plan-seed'; plan: PlanProjection }
+  | { type: 'open-turn'; turnId: string; nowMs: number }
+  | { type: 'submit'; turnId: string; text: string; nowMs: number; attachments: AttachmentRef[] }
+  | { type: 'steer'; text: string; nowMs: number; attachments: AttachmentRef[]; structuredInput: string }
+  /**
+   * 把还没被注入的排队消息从这一轮摘下。
+   *
+   * 中断时用：这些消息被调用方收进转投队列，等本轮真正收口后按原样重发。
+   * 与 TUI 的 `requeue_pending_steers_for_next_turn` 同语义，因此它们既不算
+   * 「已送达」，也不能被收口逻辑标成未送达。
+   */
+  | { type: 'detach-steers'; cellIds: string[] }
+  /**
+   * 把这些排队消息标成「已交给转投队列」。
+   *
+   * 与摘下不同：气泡原地留着，只是不再算「等待注入」、也不会被收口逻辑标成未送达；
+   * 真正离开本轮是在下一条消息提交的那一帧（见 detach-steers）。
+   */
+  | { type: 'mark-steers-carried'; cellIds: string[] }
+  /**
+   * 提交失败：撤销这一轮的乐观状态。
+   *
+   * `turnId` 是本地那一轮的标识（运行中排队时为空，因为排队不新开轮次）；
+   * `text` 用来定位排队时追加的那一格。
+   */
+  | { type: 'submit-failed'; turnId: string | null; text: string; message: string; nowMs: number }
+  | { type: 'bind'; turnId: string; interactionId: string }
+  /**
+   * 把历史索引里的附件与来源贴到已回放出来的一轮上。
+   *
+   * 会话事件流只承载正文，附件与逐轮来源不在 wire 帧里；索引是这两件事的唯一事实源。
+   * 用户消息还没落地时先把附件记在轮次上，等它到达再贴。
+   */
+  | { type: 'attach-history'; interactionId: string; attachments: AttachmentRef[]; channel?: string }
+  /**
+   * 把更早的一页轮次整段接到时间线头部。
+   *
+   * 「加载更早」逐条向前翻页时，更早那一页会先在独立投影里回放完，再作为已算好的
+   * 轮次数组前置进来；这样主投影不必为了插入头部而重放整条会话。作业台账随页一起
+   * 带过来：它是会话事实，不能只活在单元里。
+   */
+  | { type: 'prepend-turns'; turns: TurnState[]; jobs?: JobRow[] }
+  /**
+   * 把一页新增的轮次整段接到时间线末尾。
+   *
+   * 外部发起的新一轮（后台作业唤醒、定时投递、目标推进）只追加，不重置投影：
+   * 重置会让整屏正文塌一次，读起来就是每来一条外部事件闪一下。
+   */
+  | { type: 'append-turns'; turns: TurnState[]; jobs?: JobRow[] }
+  /**
+   * 用会话级作业清单补齐台账。
+   *
+   * 作业属于整条会话而不是某一轮：打开历史会话时，早先几轮跑过的作业不在本轮帧里，
+   * 只能由索引页的会话级清单补进来。已有同标识的行保持原样（帧里的行更完整）。
+   */
+  | { type: 'seed-jobs'; jobs: JobRow[] }
+  /**
+   * 折叠一轮：撤下过程单元，在开场输入之后留一根过程控件。
+   *
+   * 摘要由折叠自身从过程单元里算出来，调用方只说要折哪一轮。
+   */
+  | { type: 'fold-turn'; turnId: string }
+  /**
+   * 用回放算出来的一轮整体替换投影里的那一轮。
+   *
+   * 必须整体替换而不是只换单元：用量、耗时、终态与折叠摘要都长在轮次上，只搬运
+   * `cells` 会让标题栏的会话读数与轮次分割线一起丢掉。`mode` 决定落成哪种形态：
+   * `as-is` 保持展开（最新一轮）、`folded` 折成一根控制行（更早的轮次）、
+   * `expanded` 带控制行展开（用户点开折叠行）。
+   */
+  | {
+      type: 'replace-turn';
+      turn: TurnState;
+      mode?: 'as-is' | 'folded' | 'expanded';
+      /** 这一轮回放出来的作业台账；折叠会释放单元，台账不能跟着丢。 */
+      jobs?: JobRow[];
+    }
+  | { type: 'collapse-turn'; turnId: string }
+  | { type: 'connecting' }
+  | { type: 'frames'; frames: import('../wire').ConversationStreamEvent[]; nowMs: number }
+  /**
+   * 用服务端权威记录对账本地待答状态。
+   *
+   * `authoritative` 为真表示这一批就是服务端当前的全部问答记录：本地还在等回答、
+   * 而这里没有出现的条目已经不再等用户了，按已结算收敛。
+   */
+  | { type: 'reconcile-questions'; questions: PendingQuestion[]; authoritative?: boolean }
+  | { type: 'tick'; nowMs: number }
+  /**
+   * 把这些追加消息标成「已交给下一轮」。
+   *
+   * 与摘下不同：气泡原地留着，只是不再算「等待注入」、也不会被收口逻辑标成未送达；
+   * 真正离开本轮是在下一条消息提交的那一帧（见 detach-steers）。
+   */
+  | { type: 'mark-steers-requeued'; cellIds: string[] };

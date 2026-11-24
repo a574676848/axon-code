@@ -1,0 +1,596 @@
+import React from 'react';
+import * as ipc from '../../ipc';
+import { AgentIcon, ChevronDownIcon, ChevronRightIcon, TerminalIcon } from '../../icons';
+import {
+  formatBasisPointsPercent,
+  formatDecimalCount,
+  formatDurationPadded,
+} from '../../conversation/format';
+import type { JobRow, SubagentRow } from '../../conversation/transcript';
+import { canonicalAgentId, mergeSubagentRoster, reconciledSubagentStatus, shouldPollSubagentRoster } from '../../conversation/subagentRoster';
+import type { SessionSubagentSummary } from '../../types';
+import { isActiveJob, JOB_ROSTER_REFRESH_MS } from '../../conversation/runtimeFacts';
+import { Dropdown } from '../ui/overlays';
+import { StateDot, type StateDotState } from '../ui/surfaces';
+import { JobLine, SectionHeader } from './JobPanel';
+
+/*
+ * 会话 header 里的运行时控件：子代理与后台任务。
+ *
+ * 状态属于「随会话走的过程信息」，不是常驻面板：两个入口只在真的存在对应事实时
+ * 才出现，普通对话不会为没用到的能力长出控件。详情收进下拉层，需要细看时才展开。
+ *
+ * 两个列表的行骨架由各自的模块承担：子代理行在本文件，后台任务列表在 JobPanel，
+ * 后者与既有工作台产品的作业列表同一套排版。
+ */
+
+/** 停止确认窗口：首击武装，窗口内再击一次才真的停。 */
+const STOP_CONFIRM_MS = 3000;
+
+/** 子代理会话状态的对账间隔。 */
+const SUBAGENT_ROSTER_REFRESH_MS = 10000;
+
+/**
+ * 已结束作业的行数上限。
+ *
+ * 清单是一条会话的累计事实，跑到几十次后台作业的会话并不罕见；逐行铺开会把下拉撑成
+ * 一页长列表。只列最近这些行，其余用一句「还有 N 个已结束作业未列出」交代，读数不丢。
+ */
+const FINISHED_JOB_LIMIT = 20;
+
+/** 行内状态到状态点的映射；表与参考实现的作业状态一一对应。 */
+function statusDotState(status: string): StateDotState {
+  if (
+    status === 'running' ||
+    status === 'starting' ||
+    status === 'stopping' ||
+    status === 'pending'
+  ) {
+    return 'ongoing';
+  }
+  if (status === 'completed') return 'done';
+  if (status === 'failed') return 'error';
+  // 被停、被杀与中断同属「按人的意思结束」，与参考实现共用警示色。
+  if (status === 'killed' || status === 'interrupted' || status === 'stopped') return 'warning';
+  // 既没在跑也没结果是中间态：排队等待与未知状态都落在这一档。
+  return 'idle';
+}
+
+/** 子代理一行：状态图标打头，点开进入它的运行轨迹。 */
+const SubagentLine: React.FC<{
+  row: SubagentRow;
+  /**
+   * 后端对账后的真实状态。
+   *
+   * 主轮事件流里的生命周期事件在轮次结束后就不再产生，只靠它会让已结束的子代理
+   * 永远停在运行中；对账到终态时以这里为准。
+   */
+  effectiveStatus: SubagentRow['status'];
+  onOpen: () => void;
+}> = ({ row, effectiveStatus, onOpen }) => {
+  const active =
+    effectiveStatus === 'running' || effectiveStatus === 'starting' || effectiveStatus === 'waiting';
+  const statusLabel =
+    effectiveStatus === 'starting'
+      ? '启动中'
+      : effectiveStatus === 'running'
+        ? '运行中'
+        : effectiveStatus === 'waiting'
+          ? '等待中'
+          : effectiveStatus === 'completed'
+            ? '已完成'
+            : effectiveStatus === 'interrupted'
+              ? '已中断'
+              : '执行失败';
+  // 两行合计与参考实现的行高一致：标题一行、说明一行，都是 16px。
+  const tokenMetric = row.usage === null ? null : `${formatDecimalCount(row.usage)} tok`;
+  const durationMetric = row.elapsedMs > 0 ? formatDurationPadded(row.elapsedMs) : null;
+  /*
+   * 次行与参考实现同一套拼法：任务说明、状态，运行中再追加当前阶段。
+   * 只有真正在跑的行才带阶段后缀：终态行再挂「生成中」会自相矛盾。
+   */
+  const secondary = [
+    row.summary,
+    statusLabel,
+    active && row.activity.length > 0 ? row.activity : null,
+  ]
+    .filter((value): value is string => value !== null && value.length > 0)
+    .join(' · ');
+  /** 第三行：模型与缓存命中率；两项都缺时这一行不占位。 */
+  const extra = [
+    row.model,
+    row.cacheHitRateBasisPoints === null
+      ? null
+      : `命中 ${formatBasisPointsPercent(row.cacheHitRateBasisPoints)}`,
+  ].filter((value): value is string => value !== null && value.length > 0);
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={onOpen}
+      title={`查看 ${row.label} 的运行轨迹`}
+      className="group w-full flex items-start gap-1.5 rounded-sm px-1.5 py-1.5 text-left text-meta transition-colors duration-100 hover:bg-hover"
+    >
+      <span className="shrink-0 w-3.5 inline-flex items-center justify-center self-start h-4">
+        <StateDot state={statusDotState(effectiveStatus)} />
+      </span>
+      <span className="flex-1 min-w-0 flex flex-col">
+        <span className="min-w-0 truncate text-row text-text-primary">{row.label}</span>
+        <span className="min-w-0 truncate text-meta text-text-tertiary">
+          {secondary}
+        </span>
+        {/*
+         * 模型与缓存命中率不进指标列：它们不是右对齐的数字，跟在说明下面一行
+         * 才读得成「这一行是谁在跑、命中多少」。
+         */}
+        {extra.length > 0 && (
+          <span className="min-w-0 truncate text-meta tabular-nums text-text-tertiary">
+            {extra.join(' · ')}
+          </span>
+        )}
+      </span>
+      {/*
+       * 指标列与参考实现同构：令牌数在第一行、耗时在第二行，右对齐且等宽，
+       * 因此数字变化不会带着标题一起抖。
+       */}
+      <span className="shrink-0 flex flex-col items-end text-meta text-text-tertiary tabular-nums whitespace-nowrap">
+        <span>{tokenMetric ?? ''}</span>
+        <span>{durationMetric ?? ''}</span>
+      </span>
+      <span className="shrink-0 w-6 h-6 inline-flex items-center justify-center rounded-sm text-text-tertiary transition-colors duration-100 group-hover:text-text-primary">
+        <ChevronRightIcon size={14} />
+      </span>
+    </button>
+  );
+};
+
+export interface RuntimeActionsProps {
+  subagents: SubagentRow[];
+  jobs: JobRow[];
+  /** 当前会话车道；停止作业时作为归属参数。 */
+  sessionId: string | null;
+  /** 本视图是否有正在跑的轮次：名册只在这段窗口里按间隔对账。 */
+  working: boolean;
+  /** 打开某个子代理的运行轨迹。 */
+  /** 打开一条子代理的运行详情：整行一起给出，名册补出来的行同样可点。 */
+  onOpenSubagent: (row: SubagentRow) => void;
+}
+
+export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
+  subagents,
+  jobs,
+  sessionId,
+  working,
+  onOpenSubagent,
+}) => {
+  /** 已被用户停止的作业：行标识到终态原因。 */
+  const [stopped, setStopped] = React.useState<Record<string, string>>({});
+  /** 已武装等待确认的作业：按**行标识**记，不按作业 ID，因为重启后 ID 会撞。 */
+  const [armed, setArmed] = React.useState<string | null>(null);
+  /** 正在停止的作业：同样按行标识。 */
+  const [stopping, setStopping] = React.useState<string | null>(null);
+  const [stopError, setStopError] = React.useState<string | null>(null);
+  /** 被用户在本地清掉的已结束作业。 */
+  const [dismissed, setDismissed] = React.useState<Record<string, true>>({});
+  /** 展开输出面板的作业行；一次只展开一行，与参考实现一致。 */
+  const [expandedId, setExpandedId] = React.useState<string | null>(null);
+  /** 已结束分组的折叠态：用户点过就以点击为准，没点过则在有进行中作业时折起。 */
+  const [settledOpen, setSettledOpen] = React.useState<boolean | null>(null);
+  /** 作业列表是否展开；在跑的行只在列表看得见时才走秒。 */
+  const [jobsOpen, setJobsOpen] = React.useState(false);
+  /** 本秒的采样时刻：在跑的行按秒起算耗时，因此这个值每秒更新一次。 */
+  const [nowMs, setNowMs] = React.useState(() => Date.now());
+  /**
+   * 后端此刻真正持有的作业标识。
+   *
+   * `null` 表示还没对过账（例如刚打开面板）：此时不把任何行判成失效，
+   * 免得网络慢一拍就把正在跑的作业显示成已结束。
+   */
+  const [liveJobIds, setLiveJobIds] = React.useState<Set<string> | null>(null);
+  const armTimer = React.useRef<number | null>(null);
+
+  // 作业行的对账：transcript 投影是历史事实，进程重启后旧行不会自己消失，
+  // 因此定期向后端要一次活作业名册，不在这份名册里的行不再算「运行中」。
+  React.useEffect(() => {
+    if (sessionId === null || jobs.length === 0) {
+      setLiveJobIds(null);
+      return undefined;
+    }
+    let cancelled = false;
+    const refresh = () => {
+      void ipc
+        .conversationSessionJobs(sessionId)
+        .then((roster) => {
+          if (!cancelled) setLiveJobIds(new Set(roster.jobIds));
+        })
+        .catch(() => {
+          // 对账失败保持上一次结论：宁可短暂显示旧状态，也不要误判成已结束。
+        });
+    };
+    refresh();
+    const timer = window.setInterval(refresh, JOB_ROSTER_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [sessionId, jobs.length]);
+
+  /**
+   * 同一个作业标识可能对应多行：作业 ID 在进程内单调，但**重启后会从 1 重新计数**，
+   * 于是「上一代的死作业」和「这一代的活作业」可以撞同一个 ID。
+   * 按出现顺序只认最后一行，旧行一律按失效处理，停止键因此永远指向活的那个。
+   */
+  const lastRowByJobId = React.useMemo(() => {
+    const last = new Map<string, string>();
+    for (const job of jobs) {
+      if (job.jobId !== null) last.set(job.jobId, job.id);
+    }
+    return last;
+  }, [jobs]);
+
+  /** 这一行是否仍是后端持有的活作业。 */
+  const isLive = React.useCallback(
+    (job: JobRow): boolean => {
+      if (job.jobId === null) return false;
+      if (lastRowByJobId.get(job.jobId) !== job.id) return false;
+      if (liveJobIds === null) return true;
+      return liveJobIds.has(job.jobId);
+    },
+    [lastRowByJobId, liveJobIds],
+  );
+
+  React.useEffect(
+    () => () => {
+      if (armTimer.current !== null) window.clearTimeout(armTimer.current);
+    },
+    [],
+  );
+
+  const reasonOf = React.useCallback(
+    (job: JobRow) => stopped[job.id] ?? null,
+    [stopped],
+  );
+
+  /** 两击式停止：首击武装并起表，窗口内再击一次才发请求。 */
+  const requestStop = React.useCallback(
+    (job: JobRow) => {
+      const jobId = job.jobId;
+      if (jobId === null || sessionId === null) return;
+      if (armTimer.current !== null) window.clearTimeout(armTimer.current);
+      if (armed !== job.id) {
+        setStopError(null);
+        setArmed(job.id);
+        armTimer.current = window.setTimeout(() => setArmed(null), STOP_CONFIRM_MS);
+        return;
+      }
+      setArmed(null);
+      setStopping(job.id);
+      void ipc
+        .conversationStopJob(sessionId, jobId)
+        .then((receipt) => {
+          setStopped((current) => ({ ...current, [job.id]: receipt.reason ?? '已停止' }));
+        })
+        .catch((failure: unknown) => {
+          // IPC 拒绝既可能是 Error，也可能是宿主直接抛出的字符串；
+          // 两种都要原样呈现，否则服务端给出的拒绝原因会被一句兜底文案吃掉。
+          setStopError(
+            failure instanceof Error
+              ? failure.message
+              : typeof failure === 'string' && failure.length > 0
+                ? failure
+                : '停止作业失败',
+          );
+        })
+        .finally(() => setStopping(null));
+    },
+    [armed, sessionId],
+  );
+
+  // 已结束的作业在有进行中作业时折叠到分组之后，避免长列表盖住当前进展。
+  const active = React.useMemo(
+    () => jobs.filter((job) => isActiveJob(job.status) && isLive(job) && reasonOf(job) === null),
+    [jobs, isLive, reasonOf],
+  );
+  const finished = React.useMemo(
+    () =>
+      jobs.filter(
+        (job) =>
+          (!isActiveJob(job.status) || !isLive(job) || reasonOf(job) !== null) &&
+          dismissed[job.id] !== true,
+      ),
+    [jobs, isLive, reasonOf, dismissed],
+  );
+  const finishedOpen = settledOpen ?? active.length === 0;
+
+  /*
+   * 走秒的时钟只服务于看得见的在跑作业：列表没开或没有在跑的作业时不起表，
+   * 因此静止的界面上一秒一个的定时器也不存在。开表那一刻先取一次时刻，
+   * 否则第一帧会拿挂载时的旧值，长任务会先显示一个偏小的耗时。
+   */
+  React.useEffect(() => {
+    if (!jobsOpen || active.length === 0) return undefined;
+    setNowMs(Date.now());
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [jobsOpen, active.length]);
+
+  // 展开中的行离开列表（换了一批事实）时收起面板：不留一个没有行的展开态。
+  React.useEffect(() => {
+    if (expandedId === null || jobs.some((job) => job.id === expandedId)) return;
+    setExpandedId(null);
+  }, [jobs, expandedId]);
+
+  /** 车道子代理名册；`null` 表示还没对过账。 */
+  const [roster, setRoster] = React.useState<SessionSubagentSummary[] | null>(null);
+  /** 拉一次名册的最新入口；轮询与收口补齐都经它，避免两处各写一份请求。 */
+  const loadRosterRef = React.useRef<() => void>(() => undefined);
+
+  /*
+   * 名册的首次读取。
+   *
+   * 转录里的阶段来自轮次事件流，轮次结束后不再产生；名册来自线程存储，是持久事实。
+   * 名册不能只在转录已经有行时才拉：历史轮折叠之后转录没有行，入口会整块消失，
+   * 而这时名册里恰好还记着那些跑过的子代理。
+   */
+  React.useEffect(() => {
+    if (sessionId === null) {
+      setRoster(null);
+      loadRosterRef.current = () => undefined;
+      return undefined;
+    }
+    let cancelled = false;
+    loadRosterRef.current = () => {
+      void ipc
+        .conversationSessionSubagents(sessionId)
+        .then((list) => {
+          if (cancelled) return;
+          setRoster(list.subagents);
+        })
+        .catch(() => {
+          // 对账失败保留上一次结论：宁可短暂显示旧状态，也不要误判成已结束。
+        });
+    };
+    // 名册是一次索引查询，打开车道就读，不做本地缓存：缓存只会掩盖后端的成本。
+    loadRosterRef.current();
+    return () => {
+      cancelled = true;
+      loadRosterRef.current = () => undefined;
+    };
+  }, [sessionId]);
+
+  /** 名册按规范代理标识索引的实时状态。 */
+  const liveSubagents = React.useMemo(() => {
+    if (roster === null) return null;
+    const map = new Map<string, { status: string; lastTurnStatus: string | null }>();
+    for (const item of roster) {
+      const agentId = canonicalAgentId(item.agentId);
+      if (agentId.length === 0) continue;
+      map.set(agentId, {
+        status: item.status ?? 'notLoaded',
+        lastTurnStatus: item.lastTurnStatus ?? null,
+      });
+    }
+    return map;
+  }, [roster]);
+
+  /**
+   * 后端对账后的真实状态。
+   *
+   * 名册只提供 `active / idle` 线索，最终状态以运行态为准：本视图还有在跑的轮次时
+   * 才沿用行内状态，转录已经收口时名册的 `active` 不得把行留在运行中（否则计数与
+   * 状态点永远不会回落）。判定本身在 `conversation/subagentRoster` 里，便于单测。
+   */
+  const statusOf = React.useCallback(
+    (row: SubagentRow): SubagentRow['status'] =>
+      reconciledSubagentStatus(row, liveSubagents?.get(canonicalAgentId(row.agentId)), !working),
+    [liveSubagents, working],
+  );
+
+  /*
+   * 入口里的子代理行：转录行加名册补齐的历史行。
+   *
+   * 历史轮折叠后转录不再有那些行，名册仍然记着它们，因此入口在会话重开后照常
+   * 数得出来（判定见 conversation/subagentRoster）。
+   */
+  const ordered = React.useMemo(
+    () =>
+      mergeSubagentRoster(subagents, roster).sort(
+        (left, right) => right.lastSeenAtMs - left.lastSeenAtMs || left.order - right.order,
+      ),
+    [subagents, roster],
+  );
+
+  /** 仍在运行中的子代理数：触发标签上的计数必须与行内状态同源。 */
+  const runningCount = React.useMemo(
+    () =>
+      ordered.filter((row) => {
+        const status = statusOf(row);
+        return status === 'running' || status === 'starting' || status === 'waiting';
+      }).length,
+    [ordered, statusOf],
+  );
+
+  /*
+   * 名册轮询只在「还会变」的时候开：一轮在跑，或行里还挂着未结束。收口且全部
+   * 终态之后不再请求，历史行是持久事实，不会自己变（判定见 subagentRoster）。
+   */
+  const rosterPolling = shouldPollSubagentRoster(working, ordered);
+  React.useEffect(() => {
+    if (sessionId === null || !rosterPolling) return undefined;
+    const timer = window.setInterval(() => loadRosterRef.current(), SUBAGENT_ROSTER_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [sessionId, rosterPolling]);
+
+  /** 一轮收口的这一刻补一次：终态只能由名册给出，等下一次轮询会多挂十秒。 */
+  const previousWorkingRef = React.useRef(working);
+  React.useEffect(() => {
+    if (previousWorkingRef.current && !working) loadRosterRef.current();
+    previousWorkingRef.current = working;
+  }, [working]);
+
+  if (ordered.length === 0 && jobs.length === 0) return null;
+
+  const totalVisibleJobs = jobs.length - Object.keys(dismissed).length;
+  const hasActiveJobs = active.length > 0;
+  const hasActiveSubagents = runningCount > 0;
+
+  const baseTriggerClass =
+    'h-7 px-2 inline-flex items-center gap-1.5 rounded-sm text-meta tabular-nums transition-colors duration-100';
+
+  return (
+    <>
+      {ordered.length > 0 && (
+        <Dropdown
+          align="end"
+          menuClassName="w-[336px] max-w-[min(400px,100vw-32px)] p-1 flex flex-col gap-px max-h-[min(560px,100vh-140px)] overflow-y-auto scroll-visible"
+          trigger={({ open, toggle }) => (
+            <button
+              type="button"
+              onClick={toggle}
+              title="子代理"
+              className={`${baseTriggerClass} ${
+                hasActiveSubagents
+                  ? 'bg-focus-soft text-text-link font-medium hover:bg-active'
+                  : 'text-text-tertiary hover:bg-hover hover:text-text-primary'
+              }`}
+            >
+              {hasActiveSubagents ? (
+                <span className="relative inline-flex w-2 h-2 items-center justify-center shrink-0">
+                  <span aria-hidden="true" className="live-beacon-ring absolute inset-0 rounded-full bg-text-link" />
+                  <span className="relative w-1.5 h-1.5 rounded-full bg-text-link" />
+                </span>
+              ) : (
+                <AgentIcon size={14} className="shrink-0" />
+              )}
+              <span>子代理</span>
+              <span>
+                {hasActiveSubagents ? `${runningCount}/${ordered.length}` : ordered.length}
+              </span>
+              <ChevronDownIcon
+                size={12}
+                className={`shrink-0 transition-transform duration-150 ease-out ${open ? 'rotate-180' : ''}`}
+              />
+            </button>
+          )}
+        >
+          {ordered.map((row) => (
+            <SubagentLine
+              key={row.agentId}
+              row={row}
+              effectiveStatus={statusOf(row)}
+              onOpen={() => onOpenSubagent(row)}
+            />
+          ))}
+        </Dropdown>
+      )}
+
+      {jobs.length > 0 && (
+        <Dropdown
+          align="end"
+          menuClassName="w-[500px] max-w-[min(560px,100vw-32px)] p-1 flex flex-col gap-px max-h-[min(480px,100vh-140px)] overflow-auto scroll-visible"
+          onOpenChange={(open) => {
+            setJobsOpen(open);
+            if (!open) setExpandedId(null);
+          }}
+          trigger={({ open, toggle }) => (
+            <button
+              type="button"
+              onClick={() => {
+                setNowMs(Date.now());
+                toggle();
+              }}
+              title={hasActiveJobs ? `后台任务：${active.length} 个正在运行` : '后台任务'}
+              className={`${baseTriggerClass} ${
+                hasActiveJobs
+                  ? 'bg-ok-soft text-ok-ink font-medium hover:bg-active'
+                  : 'text-text-tertiary hover:bg-hover hover:text-text-primary'
+              }`}
+            >
+              {hasActiveJobs ? (
+                <span className="relative inline-flex w-2 h-2 items-center justify-center shrink-0">
+                  <span aria-hidden="true" className="live-beacon-ring absolute inset-0 rounded-full bg-ok" />
+                  <span className="relative w-1.5 h-1.5 rounded-full bg-ok" />
+                </span>
+              ) : (
+                <TerminalIcon size={14} className="shrink-0" />
+              )}
+              <span>后台任务</span>
+              <span>
+                {hasActiveJobs ? `${active.length}/${totalVisibleJobs}` : totalVisibleJobs}
+              </span>
+              <ChevronDownIcon
+                size={12}
+                className={`shrink-0 transition-transform duration-150 ease-out ${open ? 'rotate-180' : ''}`}
+              />
+            </button>
+          )}
+        >
+          {active.length > 0 && <SectionHeader first label="进行中" />}
+          {active.map((job) => (
+            <JobLine
+              key={job.id}
+              job={job}
+              sessionId={sessionId}
+              stoppedReason={null}
+              live={isLive(job)}
+              expanded={expandedId === job.id}
+              armed={armed === job.id}
+              stopping={stopping === job.id}
+              nowMs={nowMs}
+              onToggle={() => setExpandedId((current) => (current === job.id ? null : job.id))}
+              onStop={requestStop}
+            />
+          ))}
+          {stopError !== null && (
+            <span className="block px-2 py-1 text-meta text-danger">{stopError}</span>
+          )}
+          {finished.length > 0 && (
+            <>
+              <SectionHeader
+                first={active.length === 0}
+                label={`已结束 ${finished.length}`}
+                fold={{
+                  expanded: finishedOpen,
+                  onToggle: () => setSettledOpen(!finishedOpen),
+                }}
+                action={{
+                  label: '清空',
+                  onClick: () => {
+                    setDismissed((current) => {
+                      const next = { ...current };
+                      for (const job of finished) next[job.id] = true;
+                      return next;
+                    });
+                    // 正在被清掉的那一行若开着面板，面板一起收起。
+                    if (finished.some((job) => job.id === expandedId)) setExpandedId(null);
+                  },
+                }}
+              />
+              {finishedOpen &&
+                finished.slice(0, FINISHED_JOB_LIMIT).map((job) => (
+                  <JobLine
+                    key={job.id}
+                    job={job}
+                    sessionId={sessionId}
+                    stoppedReason={reasonOf(job)}
+                    live={isLive(job)}
+                    expanded={expandedId === job.id}
+                    armed={false}
+                    stopping={false}
+                    nowMs={nowMs}
+                    onToggle={() => setExpandedId((current) => (current === job.id ? null : job.id))}
+                    onStop={requestStop}
+                  />
+                ))}
+              {finishedOpen && finished.length > FINISHED_JOB_LIMIT && (
+                <span className="block px-2 py-1 text-meta text-text-tertiary">
+                  还有 {finished.length - FINISHED_JOB_LIMIT} 个已结束作业未列出
+                </span>
+              )}
+            </>
+          )}
+        </Dropdown>
+      )}
+    </>
+  );
+};

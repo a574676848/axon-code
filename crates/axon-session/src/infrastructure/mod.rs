@@ -1,0 +1,122 @@
+//! Session 基础设施实现。
+
+use std::path::{Path, PathBuf};
+
+mod jsonl_store;
+mod session_event_body_archive;
+mod sqlite_runtime_store;
+
+#[cfg(test)]
+#[path = "sqlite_runtime_store_activity_tests.rs"]
+mod sqlite_runtime_store_activity_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_agent_continuation_tests.rs"]
+mod sqlite_runtime_store_agent_continuation_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_agent_mailbox_tests.rs"]
+mod sqlite_runtime_store_agent_mailbox_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_channel_origin_tests.rs"]
+mod sqlite_runtime_store_channel_origin_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_dispatch_tests.rs"]
+mod sqlite_runtime_store_dispatch_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_event_body_tests.rs"]
+mod sqlite_runtime_store_event_body_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_execution_lease_tests.rs"]
+mod sqlite_runtime_store_execution_lease_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_execution_session_tests.rs"]
+mod sqlite_runtime_store_execution_session_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_goal_activity_tests.rs"]
+mod sqlite_runtime_store_goal_activity_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_goal_less_tests.rs"]
+mod sqlite_runtime_store_goal_less_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_health_tests.rs"]
+mod sqlite_runtime_store_health_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_interaction_dispatch_tests.rs"]
+mod sqlite_runtime_store_interaction_dispatch_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_interaction_fixtures.rs"]
+pub(super) mod sqlite_runtime_store_interaction_fixtures;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_interaction_idempotency_tests.rs"]
+mod sqlite_runtime_store_interaction_idempotency_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_interaction_status_tests.rs"]
+mod sqlite_runtime_store_interaction_status_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_interaction_tail_tests.rs"]
+mod sqlite_runtime_store_interaction_tail_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_interaction_tests.rs"]
+mod sqlite_runtime_store_interaction_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_recovering_tests.rs"]
+mod sqlite_runtime_store_recovering_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_result_tests.rs"]
+mod sqlite_runtime_store_result_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_schema_tests.rs"]
+mod sqlite_runtime_store_schema_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_session_model_tests.rs"]
+mod sqlite_runtime_store_session_model_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_session_resolution_tests.rs"]
+mod sqlite_runtime_store_session_resolution_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_session_tests.rs"]
+mod sqlite_runtime_store_session_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_tests.rs"]
+mod sqlite_runtime_store_tests;
+#[cfg(test)]
+#[path = "sqlite_runtime_store_user_question_tests.rs"]
+mod sqlite_runtime_store_user_question_tests;
+
+/// Axon 运行数据目录名。
+pub const AXON_RUNTIME_DATA_DIR: &str = "data";
+/// Session 持久化目录名。
+pub const SESSION_STORE_DIR: &str = "sessions";
+
+/// 解析 Axon 根目录下统一的 Session 持久化目录。
+#[must_use]
+pub fn session_store_path(root: &Path) -> PathBuf {
+    root.join(AXON_RUNTIME_DATA_DIR).join(SESSION_STORE_DIR)
+}
+
+mod thread_event_body;
+#[cfg(test)]
+pub(crate) use thread_event_body::THREAD_EVENT_INLINE_BODY_LIMIT_BYTES;
+mod thread_index;
+mod thread_tail;
+pub use jsonl_store::{
+    JsonlThreadEventStore, THREAD_EVENTS_FILE, ThreadEventReadIssue, ThreadEventScan,
+};
+pub use session_event_body_archive::{
+    SESSION_EVENT_BODY_ARCHIVED_TYPE, body_archive_path, body_archive_ref, read_body_archive,
+};
+pub use sqlite_runtime_store::{
+    CONTROL_DATABASE_FILE_NAME, EventBodyTieringPlan, EventBodyTieringReport,
+    SESSION_EVENT_ARCHIVE_SUBDIR, SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES,
+    SESSION_EVENT_MISSING_ARCHIVE_TYPE, SqliteRuntimeStore, ThreadTurnFacts, TurnActivity,
+    WalCheckpoint, conclusive_work_items_without_terminal_kind_sql,
+};
+pub use sqlite_runtime_store::{
+    action_repository::ActionRepository, lease_repository::LeaseRepository,
+    runtime_repository::RuntimeRepository, schedule_repository::ScheduleRepository,
+    transaction::TransactionBoundary,
+};
+pub use thread_index::{THREAD_INDEX_FILE, ThreadIndexEntry, ThreadIndexSnapshot};
+pub use thread_tail::ThreadTailRead;
+#[cfg(test)]
+#[path = "thread_index_tests.rs"]
+mod thread_index_tests;

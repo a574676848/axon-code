@@ -1,0 +1,30 @@
+[package]
+name = "axon-process"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+libc = { workspace = true }
+tokio = { workspace = true, features = ["process"] }
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+# 本 crate 是资源围栏的唯一宿主：Unix 侧的 `setrlimit` 只能经 `pre_exec`
+# （`unsafe fn`）在 fork 后、exec 前设置，Windows 侧的 Job Object 亦无安全封装。
+# 因此这里显式放开 `unsafe_code`，其余 workspace lint 逐项保持一致。
+# unsafe 的许可范围被测试约束在 `src/resource_fence.rs` 单文件内。
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "allow"

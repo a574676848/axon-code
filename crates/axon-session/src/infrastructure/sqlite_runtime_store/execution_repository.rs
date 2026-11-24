@@ -1,0 +1,695 @@
+//! `work_items` 的 SQLite repository。
+
+use super::decode::decode_error;
+use super::{
+    SqliteRuntimeStore,
+    helpers::{i64_value, u64_value},
+};
+use crate::domain::interaction_status;
+use crate::ports::ExecutionTrigger;
+use crate::ports::{ExecutionStore, ExecutionStoreError, RuntimeStore};
+use axon_domain::{
+    DaemonSessionId, ExecutionId, ExecutionLease, ExecutionRecord, ExecutionStatus, GoalId,
+};
+use rusqlite::{OptionalExtension, Row, TransactionBehavior, params};
+use uuid::Uuid;
+
+const RETRY_BACKOFF_BASE_MS: u64 = 1_000;
+const RETRY_BACKOFF_MAX_EXPONENT: u32 = 6;
+const MAX_EXECUTION_CLAIM_BATCH: u32 = 64;
+const EXECUTION_COLUMNS: &str = "execution_id,goal_id,session_id,attempt,priority,dedupe_key,status,lease_json,retry_at_ms,checkpoint_json,created_at_ms,updated_at_ms,payload_json";
+
+impl ExecutionStore for SqliteRuntimeStore {
+    fn enqueue_execution_trigger(
+        &self,
+        trigger: &ExecutionTrigger,
+        now_ms: u64,
+    ) -> Result<bool, ExecutionStoreError> {
+        self.initialize().map_err(runtime_error)?;
+        let connection = self.connection().map_err(runtime_error)?;
+        if trigger.dedupe_key.trim().is_empty() || trigger.priority < 0 {
+            return Err(ExecutionStoreError::Conflict(
+                "Execution trigger 幂等键或优先级无效".to_owned(),
+            ));
+        }
+        let inserted = connection
+            .execute(
+                "INSERT INTO work_items(execution_id,goal_id,session_id,kind,payload_json,attempt,priority,dedupe_key,status,created_at_ms,updated_at_ms) VALUES(?1,?1,?2,?3,?4,0,?5,?6,'queued',?7,?7) ON CONFLICT(execution_id) DO NOTHING",
+                params![
+                    trigger.execution_id.as_str(),
+                    trigger.session_id.as_str(),
+                    trigger.kind,
+                    trigger.payload_json,
+                    trigger.priority,
+                    trigger.dedupe_key,
+                    i64_value(now_ms).map_err(runtime_error)?,
+                ],
+            )
+            .map_err(enqueue_error)?;
+        Ok(inserted == 1)
+    }
+
+    fn enqueue_execution(&self, execution: &ExecutionRecord) -> Result<bool, ExecutionStoreError> {
+        self.initialize().map_err(runtime_error)?;
+        if execution.priority < 0
+            || execution
+                .dedupe_key
+                .as_deref()
+                .is_some_and(|key| key.trim().is_empty())
+        {
+            return Err(ExecutionStoreError::Conflict(
+                "Execution priority 或业务幂等键无效".to_owned(),
+            ));
+        }
+        let inserted = {
+            let connection = self.connection().map_err(runtime_error)?;
+            connection
+            .execute(
+                "INSERT INTO work_items(execution_id,goal_id,session_id,attempt,priority,dedupe_key,status,lease_json,retry_at_ms,checkpoint_json,payload_json,created_at_ms,updated_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,NULL,NULL,?8,?9,?10,?11) ON CONFLICT(execution_id) DO NOTHING",
+                params![
+                    execution.execution_id.as_str(),
+                    execution.goal_id.as_str(),
+                    execution.session_id.as_ref().map(|s| s.as_str()),
+                    i64::from(execution.attempt),
+                    execution.priority,
+                    execution.dedupe_key.as_deref(),
+                    status_code(execution.status),
+                    execution.checkpoint.as_ref().map(serde_json::to_string).transpose().map_err(serialize_error)?,
+                    execution.payload_json,
+                    i64_value(execution.created_at_ms).map_err(runtime_error)?,
+                    i64_value(execution.updated_at_ms).map_err(runtime_error)?,
+                ],
+            )
+            .map_err(enqueue_error)?
+        };
+        if inserted == 1 {
+            return Ok(true);
+        }
+        let existing = self
+            .get_execution(&execution.execution_id)?
+            .ok_or_else(|| {
+                ExecutionStoreError::Conflict("Execution 并发写入后无法读取".to_owned())
+            })?;
+        if existing.goal_id == execution.goal_id
+            && existing.attempt == execution.attempt
+            && existing.priority == execution.priority
+            && existing.dedupe_key == execution.dedupe_key
+        {
+            Ok(false)
+        } else {
+            Err(ExecutionStoreError::Conflict(
+                "execution_id 已绑定不同 Goal 或 attempt".to_owned(),
+            ))
+        }
+    }
+
+    /// 把排队中的执行推进为正在执行；重复推进只刷新时间戳。
+    fn begin_execution(
+        &self,
+        execution_id: &ExecutionId,
+        now_ms: u64,
+    ) -> Result<Option<ExecutionRecord>, ExecutionStoreError> {
+        self.initialize().map_err(runtime_error)?;
+        let connection = self.connection().map_err(runtime_error)?;
+        connection
+            .execute(
+                "UPDATE work_items SET status='running',retry_at_ms=NULL,updated_at_ms=?2 \
+                 WHERE execution_id=?1 AND status IN ('queued','waiting')",
+                params![
+                    execution_id.as_str(),
+                    i64_value(now_ms).map_err(runtime_error)?
+                ],
+            )
+            .map_err(storage_error)?;
+        self.get_execution(execution_id)
+    }
+
+    /// 结算执行终态；只前移未终结的执行。
+    ///
+    /// 走存储层的终态唯一出口：状态、终态类别与归档同时落定。缺了 `terminal_kind`
+    /// 这一步，行会既留在在途表里读不到结论，又违反 INV-2。
+    fn finish_execution(
+        &self,
+        execution_id: &ExecutionId,
+        status: ExecutionStatus,
+        now_ms: u64,
+    ) -> Result<(), ExecutionStoreError> {
+        let terminal_kind =
+            interaction_status::derived_from_conclusive(status).ok_or_else(|| {
+                ExecutionStoreError::Conflict("只能结算已形成结论的执行状态".to_owned())
+            })?;
+        self.initialize().map_err(runtime_error)?;
+        let mut connection = self.connection().map_err(runtime_error)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        super::work_item_settlement::settle_work_item(
+            &transaction,
+            super::work_item_settlement::WorkItemLocator::InFlightExecution(execution_id.as_str()),
+            &super::work_item_settlement::Settlement::concluded(
+                status,
+                interaction_status::token(terminal_kind),
+            ),
+            i64_value(now_ms).map_err(runtime_error)?,
+        )
+        .map_err(|error| ExecutionStoreError::Storage(error.to_string()))?;
+        transaction.commit().map_err(storage_error)
+    }
+
+    /// 读取退避已到期、等待重新投递的执行。
+    fn due_execution_retries(
+        &self,
+        now_ms: u64,
+        limit: u32,
+    ) -> Result<Vec<ExecutionRecord>, ExecutionStoreError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        self.initialize().map_err(runtime_error)?;
+        let connection = self.connection().map_err(runtime_error)?;
+        let mut statement = connection
+            .prepare(&format!(
+                "SELECT {EXECUTION_COLUMNS} FROM work_items_all \
+                 WHERE status='queued' AND retry_at_ms IS NOT NULL AND retry_at_ms<=?1 \
+                 ORDER BY retry_at_ms ASC, execution_id ASC LIMIT ?2"
+            ))
+            .map_err(storage_error)?;
+        statement
+            .query_map(
+                params![i64_value(now_ms).map_err(runtime_error)?, i64::from(limit)],
+                read_execution,
+            )
+            .map_err(storage_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage_error)
+    }
+
+    /// 记录一次可重试失败：未达上限进退避队列，达到上限落 failed。
+    fn retry_execution(
+        &self,
+        execution_id: &ExecutionId,
+        retry_at_ms: u64,
+        max_attempts: u32,
+        now_ms: u64,
+    ) -> Result<bool, ExecutionStoreError> {
+        if max_attempts == 0 {
+            return Err(ExecutionStoreError::Conflict(
+                "最大尝试次数必须大于 0".to_owned(),
+            ));
+        }
+        self.initialize().map_err(runtime_error)?;
+        let connection = self.connection().map_err(runtime_error)?;
+        let attempt: Option<u32> = connection
+            .query_row(
+                "SELECT attempt FROM work_items WHERE execution_id=?1 \
+                 AND status IN ('queued','running','waiting')",
+                params![execution_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        let Some(attempt) = attempt else {
+            return Ok(false);
+        };
+        let next = attempt.saturating_add(1);
+        let retrying = next < max_attempts;
+        let retry_at = if retrying {
+            Some(i64_value(retry_at_ms).map_err(runtime_error)?)
+        } else {
+            None
+        };
+        connection
+            .execute(
+                "UPDATE work_items SET attempt=?2,status=?3,retry_at_ms=?4,updated_at_ms=?5 \
+                 WHERE execution_id=?1 AND status IN ('queued','running','waiting')",
+                params![
+                    execution_id.as_str(),
+                    i64::from(next),
+                    if retrying { "queued" } else { "failed" },
+                    retry_at,
+                    i64_value(now_ms).map_err(runtime_error)?
+                ],
+            )
+            .map_err(storage_error)?;
+        Ok(retrying)
+    }
+
+    fn get_execution(
+        &self,
+        execution_id: &ExecutionId,
+    ) -> Result<Option<ExecutionRecord>, ExecutionStoreError> {
+        let connection = self.connection().map_err(runtime_error)?;
+        connection
+            .query_row(
+                &format!("SELECT {EXECUTION_COLUMNS} FROM work_items_all WHERE execution_id=?1"),
+                params![execution_id.as_str()],
+                read_execution,
+            )
+            .optional()
+            .map_err(storage_error)
+    }
+
+    fn list_executions_for_goal(
+        &self,
+        goal_id: &GoalId,
+        limit: u32,
+    ) -> Result<Vec<ExecutionRecord>, ExecutionStoreError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let connection = self.connection().map_err(runtime_error)?;
+        let mut statement = connection
+            .prepare("SELECT execution_id,goal_id,session_id,attempt,priority,dedupe_key,status,lease_json,retry_at_ms,checkpoint_json,created_at_ms,updated_at_ms,payload_json FROM work_items_all WHERE goal_id=?1 ORDER BY created_at_ms DESC, execution_id DESC LIMIT ?2")
+            .map_err(storage_error)?;
+        statement
+            .query_map(
+                rusqlite::params![goal_id.as_str(), i64::from(limit)],
+                read_execution,
+            )
+            .map_err(storage_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage_error)
+    }
+
+    fn execution_for_session(
+        &self,
+        session_id: &DaemonSessionId,
+    ) -> Result<Option<ExecutionRecord>, ExecutionStoreError> {
+        self.initialize().map_err(runtime_error)?;
+        let connection = self.connection().map_err(runtime_error)?;
+        // 索引 `work_items_session_claim` 首列即 session_id；排序用临时 B 树，
+        // 单会话执行数极少（同一目标跨阶段复用同一会话标识），代价可忽略。
+        connection
+            .query_row(
+                &format!(
+                    "SELECT {EXECUTION_COLUMNS} FROM work_items_all WHERE session_id=?1 \
+                     ORDER BY created_at_ms DESC, execution_id DESC LIMIT 1"
+                ),
+                params![session_id.as_str()],
+                read_execution,
+            )
+            .optional()
+            .map_err(storage_error)
+    }
+
+    fn claim_executions(
+        &self,
+        limit: u32,
+        owner: &str,
+        now_ms: u64,
+        lease_duration_ms: u64,
+    ) -> Result<Vec<ExecutionRecord>, ExecutionStoreError> {
+        if limit == 0 || owner.trim().is_empty() || lease_duration_ms == 0 {
+            return Err(ExecutionStoreError::Conflict("claim 参数无效".to_owned()));
+        }
+        self.initialize().map_err(runtime_error)?;
+        let mut connection = self.connection().map_err(runtime_error)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let now = i64_value(now_ms).map_err(runtime_error)?;
+        let expires = i64_value(now_ms.saturating_add(lease_duration_ms)).map_err(runtime_error)?;
+        let batch_limit = i64::from(limit.min(MAX_EXECUTION_CLAIM_BATCH));
+        let mut queued_stmt = transaction
+            .prepare(&format!("SELECT {EXECUTION_COLUMNS} FROM work_items WHERE status='queued' AND (retry_at_ms IS NULL OR retry_at_ms<=?1) AND EXISTS (SELECT 1 FROM goals WHERE goals.goal_id=work_items.goal_id AND goals.status <> 'cancelled') ORDER BY priority DESC, created_at_ms ASC, execution_id ASC LIMIT ?2"))
+            .map_err(storage_error)?;
+        let queued_executions = queued_stmt
+            .query_map(params![now, batch_limit], read_execution)
+            .map_err(storage_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage_error)?;
+        drop(queued_stmt);
+
+        // 租约失效的 running Execution 不在此处重新领取，由中断隔离路径收敛为 uncertain。
+        let mut all = Vec::with_capacity(queued_executions.len());
+        all.extend(queued_executions);
+        all.sort_by(|a, b| {
+            b.priority
+                .cmp(&a.priority)
+                .then_with(|| a.created_at_ms.cmp(&b.created_at_ms))
+                .then_with(|| a.execution_id.as_str().cmp(b.execution_id.as_str()))
+        });
+        all.truncate(limit.min(MAX_EXECUTION_CLAIM_BATCH) as usize);
+        let mut executions = all;
+        if executions.is_empty() {
+            transaction.commit().map_err(storage_error)?;
+            return Ok(executions);
+        }
+
+        let lease_token = Uuid::new_v4().to_string();
+        let lease = ExecutionLease {
+            owner: owner.to_owned(),
+            token: lease_token.clone(),
+            expires_at_ms: u64::try_from(expires)
+                .map_err(|_| ExecutionStoreError::Conflict("lease 到期时间无效".to_owned()))?,
+        };
+        let lease_json = serde_json::to_string(&lease).map_err(serialize_error)?;
+        let ids = executions
+            .iter()
+            .map(|execution| execution.execution_id.as_str().to_owned())
+            .collect::<Vec<_>>();
+        let changed = super::work_item_claim::claim_execution_rows(
+            &transaction,
+            &ids,
+            &lease_json,
+            owner,
+            &lease_token,
+            expires,
+            now,
+        )
+        .map_err(storage_error)?;
+        if changed != executions.len() {
+            return Err(ExecutionStoreError::Conflict(
+                "Execution claim 在事务内发生并发变化".to_owned(),
+            ));
+        }
+        for execution in &mut executions {
+            execution.status = ExecutionStatus::Running;
+            execution.lease = Some(lease.clone());
+            execution.retry_at_ms = None;
+            execution.updated_at_ms = now_ms;
+        }
+        transaction.commit().map_err(storage_error)?;
+        Ok(executions)
+    }
+
+    fn renew_execution(
+        &self,
+        execution_id: &ExecutionId,
+        owner: &str,
+        lease_token: &str,
+        now_ms: u64,
+        lease_duration_ms: u64,
+    ) -> Result<(), ExecutionStoreError> {
+        if lease_duration_ms == 0 {
+            return Err(ExecutionStoreError::Conflict(
+                "lease 时长必须大于 0".to_owned(),
+            ));
+        }
+        let connection = self.connection().map_err(runtime_error)?;
+        let lease = ExecutionLease {
+            owner: owner.to_owned(),
+            token: lease_token.to_owned(),
+            expires_at_ms: now_ms.saturating_add(lease_duration_ms),
+        };
+        let changed = connection
+            .execute(
+                "UPDATE work_items SET lease_json=?1,lease_expires_at_ms=?2,updated_at_ms=?3 WHERE execution_id=?4 AND status='running' AND cancellation_requested_at_ms IS NULL AND claimed_by=?5 AND claimed_generation=?6 AND lease_expires_at_ms>?3",
+                params![
+                    serde_json::to_string(&lease).map_err(serialize_error)?,
+                    i64_value(lease.expires_at_ms).map_err(runtime_error)?,
+                    i64_value(now_ms).map_err(runtime_error)?,
+                    execution_id.as_str(),
+                    owner,
+                    lease_token
+                ],
+            )
+            .map_err(storage_error)?;
+        if changed == 1 {
+            Ok(())
+        } else {
+            Err(ExecutionStoreError::Conflict(
+                "Execution lease 已失效".to_owned(),
+            ))
+        }
+    }
+
+    fn fail_execution(
+        &self,
+        execution_id: &ExecutionId,
+        owner: &str,
+        lease_token: &str,
+        max_attempts: u32,
+        now_ms: u64,
+    ) -> Result<(), ExecutionStoreError> {
+        if max_attempts == 0 {
+            return Err(ExecutionStoreError::Conflict(
+                "最大尝试次数必须大于 0".to_owned(),
+            ));
+        }
+        let connection = self.connection().map_err(runtime_error)?;
+        let current_attempt: Option<u32> = connection
+            .query_row(
+                "SELECT attempt FROM work_items WHERE execution_id=?1 AND status='running' AND claimed_by=?2 AND claimed_generation=?3",
+                params![execution_id.as_str(), owner, lease_token],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(storage_error)?
+            .map(|attempt| u32::try_from(attempt).map_err(|_| ExecutionStoreError::Conflict("Execution attempt 超出范围".to_owned())))
+            .transpose()?;
+        let attempt = current_attempt
+            .ok_or_else(|| ExecutionStoreError::Conflict("Execution lease 已失效".to_owned()))?;
+        let terminal = attempt >= max_attempts;
+        let retry_at_ms = (!terminal).then(|| {
+            let exponent = attempt.saturating_sub(1).min(RETRY_BACKOFF_MAX_EXPONENT);
+            let backoff_ms = RETRY_BACKOFF_BASE_MS.saturating_mul(1_u64 << exponent);
+            now_ms.saturating_add(backoff_ms)
+        });
+        let next_attempt = attempt.saturating_add(1);
+        let changed = connection
+            .execute(
+                "UPDATE work_items SET status=?1,attempt=CASE WHEN ?1='queued' THEN ?2 ELSE attempt END,lease_json=NULL,claimed_by=NULL,claimed_generation=NULL,lease_expires_at_ms=NULL,retry_at_ms=?3,updated_at_ms=?4 WHERE execution_id=?5 AND status='running' AND claimed_by=?6 AND claimed_generation=?7",
+                params![
+                    if terminal { "failed" } else { "queued" },
+                    i64::from(next_attempt),
+                    retry_at_ms.map(i64_value).transpose().map_err(runtime_error)?,
+                    i64_value(now_ms).map_err(runtime_error)?,
+                    execution_id.as_str(),
+                    owner,
+                    lease_token
+                ],
+            )
+            .map_err(enqueue_error)?;
+        if changed == 1 {
+            if terminal {
+                // 终态行搬进历史表：在途表只留排队与运行中的行。
+                super::work_item_archive::archive_work_item(
+                    &connection,
+                    execution_id.as_str(),
+                    i64_value(now_ms).map_err(runtime_error)?,
+                )
+                .map_err(storage_error)?;
+            }
+            Ok(())
+        } else {
+            Err(ExecutionStoreError::Conflict(
+                "Execution lease 已失效".to_owned(),
+            ))
+        }
+    }
+
+    fn cancel_execution(
+        &self,
+        execution_id: &ExecutionId,
+        owner: &str,
+        lease_token: &str,
+        now_ms: u64,
+    ) -> Result<(), ExecutionStoreError> {
+        self.settle_execution(
+            execution_id,
+            owner,
+            lease_token,
+            ExecutionStatus::Cancelled,
+            now_ms,
+        )
+    }
+
+    fn settle_execution(
+        &self,
+        execution_id: &ExecutionId,
+        owner: &str,
+        lease_token: &str,
+        status: ExecutionStatus,
+        now_ms: u64,
+    ) -> Result<(), ExecutionStoreError> {
+        if !status.is_terminal()
+            && !matches!(
+                status,
+                ExecutionStatus::Waiting | ExecutionStatus::Uncertain
+            )
+        {
+            return Err(ExecutionStoreError::Conflict(
+                "只能提交等待、uncertain 或终态".to_owned(),
+            ));
+        }
+        let changed = {
+            let connection = self.connection().map_err(runtime_error)?;
+            connection
+                .execute(
+                    "UPDATE work_items SET status=?1,lease_json=NULL,claimed_by=NULL,claimed_generation=NULL,lease_expires_at_ms=NULL,cancelled_at_ms=CASE WHEN ?1='cancelled' THEN ?2 ELSE cancelled_at_ms END,updated_at_ms=?2 WHERE execution_id=?3 AND status='running' AND (cancellation_requested_at_ms IS NULL OR ?1='cancelled') AND claimed_by=?4 AND claimed_generation=?5",
+                    params![status_code(status), i64_value(now_ms).map_err(runtime_error)?, execution_id.as_str(), owner, lease_token],
+                )
+                .map_err(storage_error)?
+        };
+        if changed == 1 {
+            if status.is_terminal() {
+                // 终态行搬进历史表：在途表只留排队与运行中的行。
+                let connection = self.connection().map_err(runtime_error)?;
+                super::work_item_archive::archive_work_item(
+                    &connection,
+                    execution_id.as_str(),
+                    i64_value(now_ms).map_err(runtime_error)?,
+                )
+                .map_err(storage_error)?;
+            }
+            Ok(())
+        } else if self.get_execution(execution_id)?.is_none() {
+            Err(ExecutionStoreError::NotFound(execution_id.clone()))
+        } else {
+            Err(ExecutionStoreError::Conflict(
+                "Execution lease 已失效".to_owned(),
+            ))
+        }
+    }
+
+    fn execution_for_goal_dedupe(
+        &self,
+        goal_id: &GoalId,
+        dedupe_key: &str,
+    ) -> Result<Option<ExecutionRecord>, ExecutionStoreError> {
+        let connection = self.connection().map_err(runtime_error)?;
+        connection.query_row(
+            &format!("SELECT {EXECUTION_COLUMNS} FROM work_items_all WHERE goal_id=?1 AND dedupe_key=?2 ORDER BY created_at_ms,execution_id LIMIT 1"),
+            params![goal_id.as_str(), dedupe_key],
+            read_execution,
+        ).optional().map_err(storage_error)
+    }
+}
+
+fn read_execution(row: &Row<'_>) -> rusqlite::Result<ExecutionRecord> {
+    let execution_id = ExecutionId::new(row.get::<_, String>(0)?)
+        .map_err(|error| decode_error("executions", error))?;
+    // `work_items.goal_id` 对无目标执行（入站领取的会话轮次）是 NULL。写入侧对这类执行
+    // 一律填自身 id，读取侧必须按同一口径还原：目标是「无」，归属标识就是执行自己。
+    let goal_id = match row.get::<_, Option<String>>(1)? {
+        Some(value) => GoalId::new(value).map_err(|error| decode_error("executions", error))?,
+        None => {
+            GoalId::new(execution_id.as_str()).map_err(|error| decode_error("executions", error))?
+        }
+    };
+    Ok(ExecutionRecord {
+        execution_id,
+        goal_id,
+        session_id: row
+            .get::<_, Option<String>>(2)?
+            .map(|value| {
+                DaemonSessionId::new(value).map_err(|error| decode_error("executions", error))
+            })
+            .transpose()?,
+        attempt: u32::try_from(row.get::<_, i64>(3)?)
+            .map_err(|error| decode_error("executions", error))?,
+        priority: row.get(4)?,
+        dedupe_key: row.get(5)?,
+        status: parse_status(&row.get::<_, String>(6)?)?,
+        lease: row
+            .get::<_, Option<String>>(7)?
+            .map(|value| serde_json::from_str(&value))
+            .transpose()
+            .map_err(|error| decode_error("executions", error))?,
+        retry_at_ms: row.get::<_, Option<i64>>(8)?.map(u64_value).transpose()?,
+        checkpoint: row
+            .get::<_, Option<String>>(9)?
+            .map(|value| serde_json::from_str(&value))
+            .transpose()
+            .map_err(|error| decode_error("executions", error))?,
+        created_at_ms: u64_value(row.get(10)?)?,
+        updated_at_ms: u64_value(row.get(11)?)?,
+        payload_json: row.get(12)?,
+    })
+}
+
+fn parse_status(value: &str) -> rusqlite::Result<ExecutionStatus> {
+    match value {
+        "queued" => Ok(ExecutionStatus::Queued),
+        "running" => Ok(ExecutionStatus::Running),
+        "waiting" => Ok(ExecutionStatus::Waiting),
+        "uncertain" => Ok(ExecutionStatus::Uncertain),
+        "completed" => Ok(ExecutionStatus::Completed),
+        "failed" => Ok(ExecutionStatus::Failed),
+        "cancelled" => Ok(ExecutionStatus::Cancelled),
+        _ => Err(decode_error("executions.status", value)),
+    }
+}
+
+/// 执行状态的落库取值：终态集合的 SQL 词表也由它生成，只此一处。
+pub(super) fn status_code(status: ExecutionStatus) -> &'static str {
+    match status {
+        ExecutionStatus::Queued => "queued",
+        ExecutionStatus::Running => "running",
+        ExecutionStatus::Waiting => "waiting",
+        ExecutionStatus::Uncertain => "uncertain",
+        ExecutionStatus::Completed => "completed",
+        ExecutionStatus::Failed => "failed",
+        ExecutionStatus::Cancelled => "cancelled",
+    }
+}
+
+fn runtime_error(error: impl std::fmt::Display) -> ExecutionStoreError {
+    ExecutionStoreError::Storage(error.to_string())
+}
+
+fn storage_error(error: rusqlite::Error) -> ExecutionStoreError {
+    ExecutionStoreError::Storage(error.to_string())
+}
+
+fn serialize_error(error: serde_json::Error) -> ExecutionStoreError {
+    ExecutionStoreError::Storage(error.to_string())
+}
+
+fn enqueue_error(error: rusqlite::Error) -> ExecutionStoreError {
+    if error
+        .to_string()
+        .contains("work_items.goal_id, work_items.dedupe_key")
+    {
+        ExecutionStoreError::Conflict("同一 Goal 的业务幂等键已有 active Execution".to_owned())
+    } else {
+        storage_error(error)
+    }
+}
+
+impl SqliteRuntimeStore {
+    /// 该会话是否有正在运行且已被请求取消的执行轮次。
+    ///
+    /// 走 `(session_id, status)` 索引前缀，只判存在性，代价与在途轮次数无关。
+    pub(super) fn session_cancellation_requested_impl(
+        &self,
+        session_id: &DaemonSessionId,
+    ) -> Result<bool, crate::ports::RuntimeStoreError> {
+        let connection = self.connection()?;
+        let found = connection
+            .query_row(
+                "SELECT 1 FROM work_items WHERE session_id=?1 AND status='running' \
+                 AND cancellation_requested_at_ms IS NOT NULL LIMIT 1",
+                params![session_id.as_str()],
+                |_row| Ok(()),
+            )
+            .optional()
+            .map_err(super::helpers::storage)?;
+        Ok(found.is_some())
+    }
+
+    /// 请求取消该会话正在跑的轮次：只写取消标记，不动执行终态。
+    ///
+    /// 终态必须由运行侧收口写入（它才知道本轮到底产出了什么）。这里写标记的语义与目标
+    /// 取消完全一致，因此运行侧同一条看门狗就能消费两条来源。
+    pub(super) fn request_session_cancellation_impl(
+        &self,
+        session_id: &DaemonSessionId,
+        reason: &str,
+        now_ms: u64,
+    ) -> Result<u64, crate::ports::RuntimeStoreError> {
+        let now = super::helpers::i64_value(now_ms)?;
+        let updated = self
+            .connection()?
+            .execute(
+                "UPDATE work_items SET cancellation_requested_at_ms=?1, \
+                 cancellation_reason=?2, updated_at_ms=?1 \
+                 WHERE session_id=?3 AND status='running' \
+                 AND cancellation_requested_at_ms IS NULL",
+                params![now, reason, session_id.as_str()],
+            )
+            .map_err(super::helpers::storage)?;
+        Ok(u64::try_from(updated).unwrap_or(0))
+    }
+}

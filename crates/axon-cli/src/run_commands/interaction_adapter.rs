@@ -1,0 +1,413 @@
+//! CLI/TUI 统一 Interaction envelope 适配器。
+
+use std::path::Path;
+
+use axon_domain::{
+    AudienceContext, AudienceKind, DaemonSessionId, DisclosurePolicy, InteractionRecord,
+    InteractionSource, ReplyRoute, ScopeRef, WorkspaceId,
+};
+use axon_session::{
+    NewSessionRequest, RuntimeStore, SqliteRuntimeStore, WorkspaceRecord, WorkspaceResolver,
+    WorkspaceStore,
+};
+use uuid::Uuid;
+
+/// 已完成 Workspace 解析的 Interaction 提交输入。
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedInteraction {
+    pub(crate) interaction: InteractionRecord,
+    pub(crate) workspace: WorkspaceRecord,
+}
+
+/// 带客户端来源的构造函数。
+///
+/// `session` 是调用方显式给出的会话标识：给出时必须是已登记的主会话，未登记直接报错、
+/// 不隐式新建；为 `None` 时**新建一条主会话**，归属与工作目录取当前目录解析出的
+/// Workspace。会话身份不按「该 Workspace 最近活跃的会话」推断：那会让两个终端、两次
+/// 独立调用悄悄写进同一条会话历史。
+/// `client` 是按下发送的那一端（cli / desktop / tui / cron）。
+pub(crate) fn prepare_interaction_from_prompt_as(
+    session: Option<&DaemonSessionId>,
+    cwd: &Path,
+    config_path: Option<&Path>,
+    channel: &str,
+    destination: &str,
+    prompt: &str,
+    now_ms: u64,
+    client: Option<&str>,
+) -> Result<PreparedInteraction, String> {
+    prepare_interaction_with(
+        SessionKindPolicy::PrimaryOnly,
+        session,
+        cwd,
+        config_path,
+        channel,
+        destination,
+        prompt,
+        now_ms,
+        client,
+    )
+}
+
+/// 显式会话的会话类型约束。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionKindPolicy {
+    /// 用户入口只续接主会话（CLI / TUI 的对话）。
+    PrimaryOnly,
+    /// 后台任务落它自己的会话：会话类型由调用方在创建时定死，这里只校验存在与归属。
+    AnyKind,
+}
+
+/// 后台任务（Cron / 目标执行）提交一轮的入口。
+///
+/// 与用户入口同一条构造逻辑，唯一差别是不把会话类型限死为 `primary`：后台任务本来
+/// 就落在自己那条 `kind='cron'` / `kind='goal'` 会话上。
+pub(crate) fn prepare_background_interaction(
+    session: &DaemonSessionId,
+    cwd: &Path,
+    config_path: Option<&Path>,
+    channel: &str,
+    destination: &str,
+    prompt: &str,
+    now_ms: u64,
+    client: Option<&str>,
+) -> Result<PreparedInteraction, String> {
+    prepare_interaction_with(
+        SessionKindPolicy::AnyKind,
+        Some(session),
+        cwd,
+        config_path,
+        channel,
+        destination,
+        prompt,
+        now_ms,
+        client,
+    )
+}
+
+fn prepare_interaction_with(
+    kind_policy: SessionKindPolicy,
+    session: Option<&DaemonSessionId>,
+    cwd: &Path,
+    config_path: Option<&Path>,
+    channel: &str,
+    destination: &str,
+    prompt: &str,
+    now_ms: u64,
+    client: Option<&str>,
+) -> Result<PreparedInteraction, String> {
+    let cwd_workspace = WorkspaceResolver
+        .resolve(cwd, now_ms)
+        .map_err(|error| error.to_string())?;
+    // 交互标识由服务端生成（ULID）；来源幂等键仍是一次性的消息标识。
+    let message_id = Uuid::new_v4().to_string();
+    let interaction_id = axon_session::new_interaction_id();
+    let mut source =
+        InteractionSource::new(channel, message_id).map_err(|error| error.to_string())?;
+    if let Some(client) = client {
+        source = source
+            .with_client(client)
+            .map_err(|error| error.to_string())?;
+    }
+    let store = interaction_store(config_path)?;
+    // 进程所在目录始终登记一次：桌面与目标看板按 Workspace 筛选时要用到它。
+    store
+        .register_workspace(&cwd_workspace)
+        .map_err(|error| error.to_string())?;
+    let (session_id, workspace) = match session {
+        Some(session_id) => {
+            let record = store
+                .get_session(session_id)
+                .map_err(|error| format!("会话不可用：{error}"))?;
+            // 用户入口只续接主会话：定时任务、目标看板与子代理会话不对外提供入口。
+            // 后台任务（Cron / 目标执行）自带会话类型，只校验存在与归属。
+            if kind_policy == SessionKindPolicy::PrimaryOnly
+                && record.kind != axon_session::SessionKind::Primary
+            {
+                return Err(format!(
+                    "无法续接会话 {}：只有主会话可以续聊",
+                    session_id.as_str()
+                ));
+            }
+            // 会话带 Workspace 就以它为事实源；未绑定（历史行）时才回落到当前目录。
+            let workspace = match record.workspace_id.as_deref() {
+                Some(owner) => {
+                    let workspace_id =
+                        WorkspaceId::new(owner.to_owned()).map_err(|error| error.to_string())?;
+                    store
+                        .get_workspace(&workspace_id)
+                        .map_err(|error| error.to_string())?
+                        .ok_or_else(|| {
+                            format!(
+                                "无法续接会话 {}：其工作区 {owner} 未登记",
+                                session_id.as_str()
+                            )
+                        })?
+                }
+                None => cwd_workspace.clone(),
+            };
+            (record.session_id, workspace)
+        }
+        None => {
+            let mut created = NewSessionRequest::primary(
+                axon_session::new_session_id(),
+                cwd_workspace.workspace_root.as_str(),
+                now_ms,
+            );
+            created.workspace_id = Some(cwd_workspace.workspace_id.as_str().to_owned());
+            let record = store
+                .create_session_with(&created)
+                .map_err(|error| error.to_string())?;
+            (record.session_id, cwd_workspace.clone())
+        }
+    };
+    // 会话可能属于别的工作区：把那个工作区也确认登记，事件 scope 与它保持一致。
+    store
+        .register_workspace(&workspace)
+        .map_err(|error| error.to_string())?;
+    let scope =
+        ScopeRef::workspace(workspace.workspace_id.clone()).map_err(|error| error.to_string())?;
+    let interaction = InteractionRecord::new(
+        session_id,
+        interaction_id,
+        source,
+        scope,
+        AudienceContext::new(AudienceKind::Private, DisclosurePolicy::PrivateOnly),
+        ReplyRoute::new(channel, destination).map_err(|error| error.to_string())?,
+        prompt,
+        now_ms,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(PreparedInteraction {
+        interaction,
+        workspace,
+    })
+}
+
+pub(crate) fn register_workspace(
+    cwd: &Path,
+    now_ms: u64,
+    config_path: Option<&Path>,
+) -> Result<WorkspaceRecord, String> {
+    let workspace = WorkspaceResolver
+        .resolve(cwd, now_ms)
+        .map_err(|error| error.to_string())?;
+    register_workspace_record(&workspace, config_path)?;
+    Ok(workspace)
+}
+
+pub(crate) fn register_workspace_record(
+    workspace: &WorkspaceRecord,
+    config_path: Option<&Path>,
+) -> Result<(), String> {
+    interaction_store(config_path)?
+        .register_workspace(workspace)
+        .map_err(|error| error.to_string())
+}
+
+/// 在指定 Workspace 下新建一条主会话，返回它的会话身份与运行窗口。
+///
+/// 返回的是同一行会话的两个标识：会话身份（ULID）与会话行上的 `current_run_id`。
+/// 渠道与投递目标只决定投递，不参与会话身份。
+pub(crate) fn conversation_session_identities(
+    cwd: &Path,
+    config_path: Option<&Path>,
+    now_ms: u64,
+    _channel: &str,
+    _destination: &str,
+) -> Result<(String, String), String> {
+    let workspace = WorkspaceResolver
+        .resolve(cwd, now_ms)
+        .map_err(|error| error.to_string())?;
+    let store = interaction_store(config_path)?;
+    // Daemon 主 turn 要求 Interaction 对应 Workspace 已注册，这里与 Session 一并落库。
+    store
+        .register_workspace(&workspace)
+        .map_err(|error| error.to_string())?;
+    let mut created = NewSessionRequest::primary(
+        axon_session::new_session_id(),
+        workspace.workspace_root.as_str(),
+        now_ms,
+    );
+    created.workspace_id = Some(workspace.workspace_id.as_str().to_owned());
+    store
+        .create_session_with(&created)
+        .map(|runtime| {
+            (
+                runtime.session_id.as_str().to_owned(),
+                runtime.current_run_id,
+            )
+        })
+        .map_err(|error| error.to_string())
+}
+
+pub(crate) fn interaction_store(config_path: Option<&Path>) -> Result<SqliteRuntimeStore, String> {
+    let data_root = match config_path {
+        Some(path) => {
+            crate::runtime_paths::runtime_axon_data_path_static(path).map_err(str::to_owned)?
+        }
+        None => {
+            let path = axon_config::ConfigLoader::default_user_config_path()
+                .map_err(|_| "无法解析用户配置路径".to_owned())?;
+            crate::runtime_paths::runtime_axon_data_path_static(&path).map_err(str::to_owned)?
+        }
+    };
+    Ok(SqliteRuntimeStore::from_root(data_root))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        conversation_session_identities, interaction_store, prepare_interaction_from_prompt_as,
+    };
+
+    use crate::run_commands::{CLI_INTERACTION_CHANNEL, cli_reply_destination};
+    use axon_session::RuntimeStore;
+
+    fn interaction_from_prompt(
+        config_path: Option<&std::path::Path>,
+        channel: &str,
+        destination: &str,
+        prompt: &str,
+        cwd: &std::path::Path,
+        now_ms: u64,
+    ) -> Result<axon_domain::InteractionRecord, String> {
+        prepare_interaction_from_prompt_as(
+            None,
+            cwd,
+            config_path,
+            channel,
+            destination,
+            prompt,
+            now_ms,
+            None,
+        )
+        .map(|prepared| prepared.interaction)
+    }
+
+    #[test]
+    fn cli_envelope_uses_a_process_scoped_terminal_route() {
+        let cwd = axon_test_support::test_temp_dir();
+        // 运行库必须落在临时根：测试绝不能写进真实用户的运行态库。
+        let config_path = cwd.path().join("isolated-config.toml");
+        std::fs::write(&config_path, "[agent]\ndefault_model = \"balanced\"\n").expect("写入配置");
+        let destination = cli_reply_destination();
+        let interaction = interaction_from_prompt(
+            Some(&config_path),
+            CLI_INTERACTION_CHANNEL,
+            destination,
+            "检查仓库",
+            cwd.path(),
+            42,
+        )
+        .expect("构造 CLI Interaction");
+
+        assert_eq!(interaction.source.channel(), "cli");
+        assert_eq!(interaction.reply_route.channel(), "cli");
+        assert_eq!(interaction.reply_route.destination(), destination);
+        assert!(
+            destination.starts_with("terminal-"),
+            "CLI 会话表面 ID 必须带 terminal- 前缀：{destination}"
+        );
+        // 提交路径与车道解析路径必须落到同一条车道，因此同一进程内取值必须稳定。
+        assert_eq!(cli_reply_destination(), destination);
+        assert!(interaction.scope.workspace_id().is_some());
+        assert_eq!(interaction.content, "检查仓库");
+        assert_eq!(interaction.received_at_ms, 42);
+    }
+
+    #[test]
+    fn concurrent_cli_surfaces_get_distinct_run_windows() {
+        let root = axon_test_support::test_temp_dir();
+        let config_path = root.path().join("isolated-config.toml");
+        std::fs::write(&config_path, "[agent]\ndefault_model = \"balanced\"\n").expect("写入配置");
+
+        // 模拟两个独立 CLI 进程：各自持有不同的会话表面 ID。
+        let (first_session, first) = conversation_session_identities(
+            root.path(),
+            Some(&config_path),
+            1,
+            CLI_INTERACTION_CHANNEL,
+            "terminal-a",
+        )
+        .expect("首个 CLI 进程");
+        let (second_session, second) = conversation_session_identities(
+            root.path(),
+            Some(&config_path),
+            2,
+            CLI_INTERACTION_CHANNEL,
+            "terminal-b",
+        )
+        .expect("第二个 CLI 进程");
+
+        assert_ne!(
+            first, second,
+            "两次独立入口必须各自新建会话，不得悄悄写进同一段历史"
+        );
+        assert_ne!(
+            first_session, second_session,
+            "两次独立入口不得共用会话身份"
+        );
+    }
+
+    #[test]
+    fn workspace_session_creates_a_new_session_on_every_call() {
+        let root = axon_test_support::test_temp_dir();
+        let config_path = root.path().join("isolated-config.toml");
+        std::fs::write(&config_path, "[agent]\ndefault_model = \"balanced\"\n").expect("写入配置");
+
+        let (first_session, first) = conversation_session_identities(
+            root.path(),
+            Some(&config_path),
+            1,
+            CLI_INTERACTION_CHANNEL,
+            cli_reply_destination(),
+        )
+        .expect("首次进入 Workspace");
+        let (second_session, second) = conversation_session_identities(
+            root.path(),
+            Some(&config_path),
+            2,
+            CLI_INTERACTION_CHANNEL,
+            cli_reply_destination(),
+        )
+        .expect("再次进入 Workspace");
+
+        assert_ne!(second, first, "每次进入都必须新建一条会话的运行窗口");
+        assert_ne!(second_session, first_session, "两次入口不得共用会话");
+        let store = interaction_store(Some(&config_path)).expect("打开运行库");
+        // 两个标识必须来自同一行会话：反查窗口能命中本次新建的会话身份。
+        let first_owner = store
+            .session_id_for_run(&first)
+            .expect("反查首次窗口")
+            .expect("首次窗口已有归属会话");
+        let second_owner = store
+            .session_id_for_run(&second)
+            .expect("反查第二次窗口")
+            .expect("第二次窗口已有归属会话");
+        assert_eq!(first_owner.as_str(), first_session);
+        assert_eq!(second_owner.as_str(), second_session);
+    }
+
+    #[test]
+    fn distinct_workspaces_do_not_share_run_window() {
+        let root = axon_test_support::test_temp_dir();
+        let other = axon_test_support::test_temp_dir();
+        let config_path = root.path().join("isolated-config.toml");
+        std::fs::write(&config_path, "[agent]\ndefault_model = \"balanced\"\n").expect("写入配置");
+
+        let (first_session, first) = conversation_session_identities(
+            root.path(),
+            Some(&config_path),
+            1,
+            CLI_INTERACTION_CHANNEL,
+            cli_reply_destination(),
+        )
+        .expect("首个 Workspace");
+        let (second_session, second) =
+            conversation_session_identities(other.path(), Some(&config_path), 2, "cli", "terminal")
+                .expect("另一个 Workspace");
+        assert_ne!(first, second, "不同 Workspace 不得共用运行窗口");
+        assert_ne!(first_session, second_session, "不同 Workspace 不得共用会话");
+    }
+}
