@@ -20,6 +20,11 @@ use axum::Router;
 use axum::extract::{DefaultBodyLimit, Path, Request, State};
 use axum::http::{HeaderMap, Method, Uri};
 use axum::middleware::{self, Next};
+
+/// 读数之间饱和（读池排队超时）的累计次数。
+static READ_SATURATION_TOTAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// 提交侧饱和（提交池排队超时）的累计次数。
+static SUBMIT_SATURATION_TOTAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 use axum::response::Response;
 use axum::routing::any;
 use std::sync::Arc;
@@ -476,7 +481,23 @@ where
     {
         Ok(Ok(permit)) => permit,
         Ok(Err(_)) => return json_error(503, "gateway_unavailable"),
-        Err(_) => return json_error(429, "gateway_busy"),
+        Err(_) => {
+            /*
+             * 闸门排队超时：读数与提交各自计数，每满一百次留一条 WARNING。
+             *
+             * 饱和原本只有访问日志里的一行 429，看不出「哪个池」、也看不出趋势；
+             * 这两个计数器让「读数把自己挤满」与「提交被堵」在事后可区分。
+             */
+            let counter = match class {
+                BlockingClass::Read => &READ_SATURATION_TOTAL,
+                BlockingClass::Submit => &SUBMIT_SATURATION_TOTAL,
+            };
+            let total = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            if total % 100 == 1 {
+                axon_logger::warning(&format!("网关闸门饱和：class={:?} 累计={}", class, total));
+            }
+            return json_error(429, "gateway_busy");
+        }
     };
     let response = tokio::task::spawn_blocking(job)
         .await

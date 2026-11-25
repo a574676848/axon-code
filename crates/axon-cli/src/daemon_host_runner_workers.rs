@@ -43,6 +43,11 @@ pub(super) fn start_background_workers(
         host_fenced,
         maintenance_signal,
     );
+    /*
+     * WAL 回写单独占一条线程：它要做一次真正的磁盘回写，挂在监督循环里会让每秒一次的
+     * 租约续期与维护 tick 一起排到回写后面。独立之后，回写慢只影响自己那一轮。
+     */
+    start_checkpoint_worker(host.clone(), Arc::clone(&workers_running));
     start_cron_worker(cron_adapter, workers_running);
 }
 
@@ -178,12 +183,10 @@ fn run_supervisor_loop(
 ) {
     let mut last_release_gc = Instant::now();
     let mut last_lsp_sample = Instant::now();
-    let mut last_wal_checkpoint = Instant::now();
     let mut last_lsp_active = None;
     let mut last_active_turns = None;
     while running.load(Ordering::Acquire) {
         cleanup_releases_if_due(&mut last_release_gc);
-        checkpoint_wal_if_due(&host, &mut last_wal_checkpoint);
         sample_and_broadcast_lsp_if_due(
             &host,
             &active_primary_turns,
@@ -225,6 +228,20 @@ fn run_cron_loop(cron_adapter: crate::cron_commands::CronDaemonAdapter, running:
         thread::sleep(Duration::from_millis(CRON_TICK_INTERVAL_MS));
     }
 }
+
+/// WAL 回写独立线程：按固定周期做一次 `PASSIVE` 回写。
+fn start_checkpoint_worker(host: CliDaemonHost, running: Arc<AtomicBool>) {
+    thread::spawn(move || {
+        let mut last_checkpoint_at = Instant::now();
+        while running.load(Ordering::Acquire) {
+            checkpoint_wal_if_due(&host, &mut last_checkpoint_at);
+            thread::sleep(Duration::from_millis(CHECKPOINT_WORKER_TICK_MS));
+        }
+    });
+}
+
+/// 回写线程的唤醒粒度：比回写周期短得多，因此只做一次比较就回去睡。
+const CHECKPOINT_WORKER_TICK_MS: u64 = 30_000;
 
 fn cleanup_releases_if_due(last_release_gc: &mut Instant) {
     if last_release_gc.elapsed() < Duration::from_millis(RELEASE_GC_INTERVAL_MS) {

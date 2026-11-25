@@ -24,6 +24,9 @@ use append_index::{ensure as ensure_index, restore_metadata};
 /// 随日志增长变成 O(文件大小)。
 const TAIL_SCAN_WINDOW_BYTES: u64 = 1 << 20;
 
+/// 单次追加的慢阈值：超过即按 WARNING 留一条分段记录，供事后归因。
+const SLOW_APPEND_MS: u128 = 100;
+
 /// 事件日志的追加写句柄。
 ///
 /// 持有期间对同一日志保持跨进程独占。每次 `append_batch` 只做一次顺序写与一次
@@ -407,10 +410,33 @@ impl EventLogWriter {
             return Err(EventLogError::StaleHandle);
         }
         if self.lock.is_none() {
+            let started = std::time::Instant::now();
             self.lock = Some(ExclusiveLock::acquire(&self.path.with_extension("lock"))?);
+            let lock_wait_ms = started.elapsed().as_millis();
+            if lock_wait_ms >= SLOW_APPEND_MS {
+                axon_logger::warning(&format!(
+                    "事件日志抢锁偏慢：log={} 等锁={}ms",
+                    self.path.display(),
+                    lock_wait_ms
+                ));
+            }
         }
+        let started = std::time::Instant::now();
         let outcome = self.append_locked(expected_next, events);
         self.release_lock();
+        let elapsed_ms = started.elapsed().as_millis();
+        if elapsed_ms >= SLOW_APPEND_MS {
+            /*
+             * 分段口径只说清楚「慢在多长时间、写了几帧」：等锁已在上一条里单独留痕，
+             * 这里再给出持锁内的总耗时，两者相减即写帧与对齐的净成本。
+             */
+            axon_logger::warning(&format!(
+                "事件日志追加偏慢：log={} 持锁耗时={}ms 帧数={}",
+                self.path.display(),
+                elapsed_ms,
+                events.len()
+            ));
+        }
         outcome
     }
 
