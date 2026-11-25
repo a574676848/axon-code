@@ -106,11 +106,7 @@ pub(crate) fn forget_session_log(path: &Path) {
 /// 淘汰空闲太久的句柄；返回被丢弃的条数。
 ///
 /// 只在新增句柄时调用一次：新增路径本来就少，顺手做一次全表清理比每次追加都扫一遍便宜。
-fn evict_idle(
-    registry: &mut Registry,
-    now: std::time::Instant,
-    ttl: std::time::Duration,
-) -> usize {
+fn evict_idle(registry: &mut Registry, now: std::time::Instant, ttl: std::time::Duration) -> usize {
     let idle: Vec<PathBuf> = registry
         .last_used
         .iter()

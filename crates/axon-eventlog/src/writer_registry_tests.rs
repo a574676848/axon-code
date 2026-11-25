@@ -172,8 +172,8 @@ fn an_idle_writer_is_evicted_when_another_session_registers() {
     assert!(super::has_resident_writer(&path));
 
     // 进程刚启动时可能还不满一个 TTL，此时无法构造「过期」的时刻，跳过即可。
-    let Some(stale) = std::time::Instant::now()
-        .checked_sub(super::IDLE_TTL + std::time::Duration::from_secs(1))
+    let Some(stale) =
+        std::time::Instant::now().checked_sub(super::IDLE_TTL + std::time::Duration::from_secs(1))
     else {
         return;
     };
