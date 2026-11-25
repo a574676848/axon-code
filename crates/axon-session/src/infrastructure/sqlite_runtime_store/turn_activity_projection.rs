@@ -1,16 +1,16 @@
 //! 逐轮事实投影：收口那一批里把答案、读数与工具名落成一行。
 //!
-//! 索引页原本每次都要扫事件日志尾部才凑出这三样；这里在收口时付一次成本，之后翻页是
-//! 一次按会话的区间查询。工具名由事件 sink 在投递每一帧时累积、收口时挂到终态帧上，
-//! 因此投影路径不再解压任何事件日志帧：缺 `toolNames` 的老帧按「没有工具调用」落库。
-//!
-//! 老记录（升级前收口的轮次）本来就已经投影过，不受这条影响。
+//! 索引页原本每次都要扫事件日志尾部才凑出这三样；这里在收口时付一次成本（只扫这一轮
+//! 自己的帧，且有帧数上限），之后翻页是一次按会话的区间查询。
 
 use axon_domain::DaemonSessionId;
 
 use super::SqliteRuntimeStore;
 use super::turn_activity_repository::{TurnActivity, upsert_activity};
 use crate::ports::RuntimeStoreError;
+
+/// 工具名扫描的帧上限：一轮的工具调用远小于这个数，超出只取前面的部分。
+const TOOL_SCAN_FRAME_LIMIT: u32 = 4_000;
 
 /// 从收口批次里投影一行逐轮事实。
 ///
@@ -70,9 +70,9 @@ pub(super) fn project_turn_activity(
     let Some((interaction_id, answer_text)) = terminal else {
         return Ok(());
     };
-    // 老帧没有 toolNames 字段：按没有工具调用落库。写路径不再回扫这一轮的帧，
-    // 投影路径的日志解压次数因此是 0；升级前收口的轮次早已投影过，不受影响。
-    let tool_names = terminal_tool_names.unwrap_or_default();
+    // 老记录没有 toolNames 字段：退回按这一次交互的有界扫描，语义与改造前一致。
+    let tool_names =
+        terminal_tool_names.unwrap_or_else(|| tool_names_for(store, session_id, &interaction_id));
     let activity = TurnActivity {
         session_id: session_id.as_str().to_owned(),
         interaction_id,
@@ -83,4 +83,49 @@ pub(super) fn project_turn_activity(
         metrics_json,
     };
     upsert_activity(store, &activity, now_ms)
+}
+
+/// 这一轮用过哪些工具：只扫它自己的帧，且有帧数上限。
+fn tool_names_for(
+    store: &SqliteRuntimeStore,
+    session_id: &DaemonSessionId,
+    interaction_id: &str,
+) -> Vec<String> {
+    let path = store.event_log(session_id).path();
+    if !path.exists() {
+        return Vec::new();
+    }
+    let Ok(records) = axon_eventlog::read_interaction_after(
+        &path,
+        interaction_id,
+        0,
+        TOOL_SCAN_FRAME_LIMIT as usize,
+    ) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = Vec::new();
+    for record in records {
+        let Some(name) = record
+            .payload
+            .get("kind")
+            .and_then(|kind| kind.get("payload"))
+            .filter(|_| {
+                record
+                    .payload
+                    .get("kind")
+                    .and_then(|kind| kind.get("type"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("toolCall")
+            })
+            .and_then(|call| call.get("toolName"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        if !names.iter().any(|known| known == name) {
+            names.push(name.to_owned());
+        }
+    }
+    names
 }
