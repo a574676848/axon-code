@@ -70,7 +70,7 @@ impl VoiceTurnDetectionArg {
 }
 
 /// `axon setup voice` 参数，可读写独立 `[voice]` 段。
-#[derive(Debug, Clone, Args, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Args, PartialEq, Eq)]
 pub struct VoiceSetupCommand {
     /// 输出格式；省略时继承上层 setup 设置。
     #[arg(long, value_enum)]

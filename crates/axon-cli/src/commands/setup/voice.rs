@@ -13,7 +13,7 @@ use crate::management_commands::json_result;
 use crate::{OutputFormat, VoiceSetupCommand};
 
 /// 把参数意图落到候选配置上，并返回变更摘要。
-fn apply_voice_mutation(
+pub(super) fn apply_voice_mutation(
     config: &mut AxonConfig,
     command: &VoiceSetupCommand,
 ) -> Result<Vec<String>, String> {

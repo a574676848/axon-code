@@ -19,6 +19,8 @@ mod setup_interactive_provider_catalog;
 mod setup_interactive_provider_model;
 #[path = "setup/interactive_style.rs"]
 mod setup_interactive_style;
+#[path = "setup/interactive_voice.rs"]
+mod setup_interactive_voice;
 #[path = "setup/interactive_views.rs"]
 mod setup_interactive_views;
 #[path = "setup/option_help.rs"]
@@ -119,6 +121,16 @@ pub(crate) fn run_setup(
                 return format_error_result(out_format, &e, Vec::new());
             }
         };
+        // TUI 语音页收集的参数并入同一份候选配置，走同一条确认与事务链路。
+        if let Some(voice) = &interactive_input.voice {
+            match setup_voice::apply_voice_mutation(&mut plan_result.candidate_config, voice) {
+                Ok(changes) => plan_result.changed_summary.extend(changes),
+                Err(e) => {
+                    transaction.cleanup();
+                    return format_error_result(out_format, &e, Vec::new());
+                }
+            }
+        }
         let gateway_token_env = plan_result
             .candidate_config
             .remote
