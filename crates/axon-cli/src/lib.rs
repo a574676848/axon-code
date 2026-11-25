@@ -110,6 +110,8 @@ mod setup_args;
 mod setup_check;
 #[path = "commands/setup.rs"]
 mod setup_commands;
+#[path = "args/setup_voice_args.rs"]
+mod setup_voice_args;
 #[path = "commands/skills.rs"]
 mod skills_commands;
 pub mod skills_http_adapter;
@@ -228,9 +230,10 @@ use serve_commands::run_serve;
 pub use session_commands::{SessionCommand, SessionSubcommand};
 pub use setup_args::{
     AuthCommand, AuthStatusCommand, AuthSubcommand, SetupCommand, SetupProviderProtocol,
-    SetupWireTransport,
+    SetupSubcommand, SetupWireTransport,
 };
 use setup_commands::{run_auth, run_setup};
+pub use setup_voice_args::{VoiceLaneArg, VoiceRoleArg, VoiceSetupCommand, VoiceTurnDetectionArg};
 pub use skills_commands::SkillsCommand;
 use skills_commands::run_skills;
 use upgrade_commands::run_upgrade;

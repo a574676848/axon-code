@@ -32,7 +32,10 @@ mod setup_plan_entries;
 mod setup_plan_tests;
 #[path = "setup/report.rs"]
 mod setup_report;
+#[path = "setup/voice.rs"]
+mod setup_voice;
 
+use crate::SetupSubcommand;
 use crate::management_commands::json_result;
 use axon_config::AxonConfig;
 use axon_config::setup::{render_env_from, secret_status};
@@ -60,6 +63,10 @@ pub(crate) fn run_setup(
     config_path: Option<&Path>,
 ) -> CliRunResult {
     let out_format = command.format.unwrap_or(format);
+
+    if let Some(SetupSubcommand::Voice(voice)) = &command.command {
+        return setup_voice::run_voice_setup(voice, out_format, config_path);
+    }
 
     let path = match resolved_setup_config_path(config_path) {
         Ok(p) => p,

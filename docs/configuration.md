@@ -113,6 +113,8 @@ Axon 使用以下用户级目录布局：
 
 完整可复制样例见 [`config.example.toml`](../config.example.toml) 的 `[voice]` 段。
 
+也可用 `axon setup voice` 读写该段：省略写入参数时读取当前配置，指定 `--channel`、`--model`、`--enable` 等参数时写入；写入经语音段校验后由受锁事务落盘。详见 [`cli.md`](./cli.md)。
+
 ### 渠道负载均衡
 
 | 配置项 | 类型 | 可选值/范围 | 默认值 |

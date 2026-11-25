@@ -23,6 +23,7 @@ axon providers add|remove|test <NAME>       # add: --name --protocol --base-url 
 axon models [--provider <name>] [--format text|json]
 axon auth status [--provider <name>]
 axon setup ...
+axon setup voice [--enable[ true|false]] [--lane cascade|realtime|auto] [--channel <name> [--base-url <url>] [--protocol <p>] [--api-key-env <env>] [--wire-transport http|websocket] [--websocket-url <url>]] [--model <name> [--id <id>] [--role asr|tts|realtime] [--speaker <voice>] [--rate <-50..100>] [--turn-detection server-vad|smart-turn|manual]] [--reset] [--format text|json]    # 读写独立 [voice] 段；不带写入参数时读取当前配置
 axon skills [--summary]
 axon mcp list [--limit <n>] | get <SERVER_ID> | add --url <url> [--bearer-token-env-var <ENV>] [--working-dir <dir>] | remove <SERVER_ID> | login [--browser] [--scope <scope>] [--client-id <id>] [--resource <uri>] <SERVER_ID> | logout <SERVER_ID>
 
@@ -108,7 +109,7 @@ axon upgrade [--manifest-url <url>] [--download] [--apply] [--rollback] [--outpu
 - 终态载荷带本轮真实取值：`provider`、`model`（upstream id）与 `reasoningEffort`（本轮实际请求的思考强度）；显示与排障以这三个字段为准，不要回读配置去猜。
 - 需要限制一次任务的工具范围时重复传 `--tool <tool-name>`；只传当前可见工具列表中的完整名称。
 - 使用 `--cwd <path>` 让 Agent 在指定工作区开始；单条 shell 命令的 cwd 则由 `builtin.shell_command` 的 `workdir` 提供。
-- `--format` 既可作为顶层参数（`axon --format json <command> ...`），也可由支持它的子命令自己接收（如 `axon usage`、`axon models`、`axon pricing`、`axon skills`、`axon setup`、`axon providers`、`axon auth`、`axon upgrade`、`axon package`）。子命令帮助里没有 `--format` 的命令（如 `axon config get`、`axon debug session read`）必须用顶层写法。
+- `--format` 既可作为顶层参数（`axon --format json <command> ...`），也可由支持它的子命令自己接收（如 `axon usage`、`axon models`、`axon pricing`、`axon skills`、`axon setup`、`axon setup voice`、`axon providers`、`axon auth`、`axon upgrade`、`axon package`）。子命令帮助里没有 `--format` 的命令（如 `axon config get`、`axon debug session read`）必须用顶层写法。
 - 会话清单有两个入口：`axon sessions list` 列运行态会话（标题、最近活动、轮次），`axon debug session list` 列 Thread。两个入口的标识不可互换：`axon sessions` 只收会话 ID（ULID），`axon debug session` 只收 Thread ID；传错直接报错并提示对应清单命令，不互相回落。
 - `axon run --session <id>` 只追加到**已存在**的会话：ID 不存在时直接报错并提示先 `axon sessions list`，不会隐式新建空会话。
 - `axon sessions resume <id>` 只设置 `--continue` 的默认目标，不改变会话内容，输出 `已恢复 Thread: <thread-id>` 与 `- session: <id>`。随后 `axon run --continue` 接续该 Thread 并带入历史；指针为空时接续最近一段有内容的主会话（没有归属 Thread 的零轮会话会被跳过）。未给 `--session` 与 `--continue` 的 `axon run` 新建一条主会话，不受该默认目标影响。带 `--session` 的 run 结束后该默认目标保持运行前的值。
