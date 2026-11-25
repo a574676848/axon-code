@@ -18,9 +18,9 @@ Axon 的语音把「说话」当作输入方式，把「朗读」当作输出方
 
 **语音界面入口已全部开放**：桌面端的麦克风按钮、录音条、自动朗读开关、消息朗读按钮、设置里的语音输入设备与语音播报、人设页的音色选择都正常显示。
 
-云端提供方尚未接入，接口会明确回报「提供方不可用」：语音会话一建立即收到 `provider_unavailable` 并关闭连接；三个合成接口（`/tts`、`/cue`、`/preview`）统一返回 409 `provider_unavailable`，不产出音频；音色清单与运行态读数照常可读。此时点任意语音入口会得到上述结论，不会建立连接空等。
+**端到端 realtime 车道已接入**：daemon 用一条 WebSocket 直连阿里百炼 realtime 服务，上行 16 kHz PCM，下行 24 kHz PCM 在 daemon 内降到 16 kHz 后交给桌面端播放。配好 `AXON_VOICE_REALTIME_API_KEY`（或 `DASHSCOPE_API_KEY`）即自动启用；缺凭据时如实回落，不假装就绪。
 
-这是接入云端提供方前的预期行为，接入动作见开发者文档。
+**级联车道尚未接入**：没有 realtime 凭据时，语音会话一建立即收到 `provider_unavailable` 并关闭连接；三个合成接口（`/tts`、`/cue`、`/preview`）统一返回 409 `provider_unavailable`，不产出音频；音色清单与运行态读数照常可读。
 
 ---
 
@@ -79,15 +79,32 @@ Axon 的语音把「说话」当作输入方式，把「朗读」当作输出方
 
 ## 6. 配置面
 
-当前**没有** `[voice]` 配置段：采样率、帧长与超时都是协议常量，不开放给用户调整。提供方凭据与模型标识属于接入工作的一部分，接入后会随配置文档一起定义。
+`[voice]` 段与桌面设置页负责用户层配置，字段与校验见[配置参考指南](./configuration.md)。
 
-`AXON_RUNTIME_ROOT` 不再影响语音：本机没有模型、运行时与下载目录需要安置。
+daemon 侧的 realtime 车道由环境变量驱动，缺凭据时整条车道不启用：
+
+| 变量 | 作用 | 默认值 |
+| --- | --- | --- |
+| `AXON_VOICE_REALTIME_API_KEY` | 百炼凭据；缺省时回退 `DASHSCOPE_API_KEY` | 无 |
+| `AXON_VOICE_REALTIME_URL` | WS 端点，可自带 `model` 参数 | 百炼北京区 realtime 地址 |
+| `AXON_VOICE_REALTIME_MODEL` | 模型标识 | `qwen-audio-3.1-realtime-flash` |
+| `AXON_VOICE_REALTIME_VOICE` | 音色，只在会话首个配置里生效 | `longanlingxin_v3.1` |
+| `AXON_VOICE_REALTIME_INSTRUCTIONS` | 系统提示词 | 内置的「回答简短口语化」 |
+| `AXON_VOICE_REALTIME_SPEECH_RATE` | 语速 `0.5..=2.0`，越界忽略 | 服务端默认 |
+| `AXON_VOICE_REALTIME_LANGUAGE` | 转写语言 | `zh` |
+| `AXON_VOICE_REALTIME_MAX_HISTORY_TURNS` | 会话历史轮数 `1..=50` | 服务端默认 |
+| `AXON_VOICE_REALTIME_SILENCE_MS` | VAD 静音判定 `200..=6000` | `800` |
+| `AXON_VOICE_REALTIME_VAD_THRESHOLD` | VAD 阈值 `-1..=1` | `0.5` |
+| `AXON_VOICE_REALTIME_TURN_DETECTION` | 轮次检测策略：`manual` 为按键说话，其余为服务端 VAD | `server_vad` |
+
+采样率、帧长与超时仍是协议常量，不开放给用户调整；`AXON_RUNTIME_ROOT` 不影响语音。
 
 ---
 
 ## 7. 已知限制
 
-- 目前没有任何真机端到端语音证据：转写与合成只在进程内的脚本提供方用例中验证过编排，真实音频链路尚未验证。
+- 级联车道没有真机证据：转写与合成只在进程内的脚本提供方用例中验证过编排。realtime 车道有 M0-R 探针实测证据（握手、VAD、转写、回复音频、延迟都已核对）。
+- realtime 的助手文字目前只下发 `assistant` 帧，界面接线在后续增量里。
 - `metrics.rtfP50` 当前恒为 `null`。
 - 试听接口的超时（30 秒）与协议参考值（3 秒）尚未对齐。
 - 部分音频设备不接受 16 kHz，前端会重采样后再上行。

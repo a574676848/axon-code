@@ -5,7 +5,7 @@
 
 use super::gateway_voice_metrics::VoiceMetrics;
 use super::gateway_voice_out_frames::{error_json, error_json_with_family, state_json};
-use super::gateway_voice_provider::{ProviderSession, open};
+use super::gateway_voice_provider::{Lane, ProviderSession, open};
 use axon_voice_bridge::{BridgeError, HostTransport, VoiceBridge};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -26,7 +26,7 @@ const OVERLOAD_RECOVERY_GAP: Duration = Duration::from_secs(2);
 
 /// 会话开始后要处理的命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Command {
+pub(super) enum Command {
     /// 上行音频。
     Audio(Vec<u8>),
     /// 结束当前句。
@@ -93,7 +93,7 @@ pub(super) enum PushOutcome {
 
 /// 有界命令队列。
 #[derive(Debug)]
-struct CommandQueue {
+pub(super) struct CommandQueue {
     state: Mutex<QueueState>,
     capacity: usize,
     dropped_frames: AtomicU64,
@@ -110,7 +110,7 @@ struct QueueState {
 }
 
 impl CommandQueue {
-    fn new(capacity: usize) -> Self {
+    pub(super) fn new(capacity: usize) -> Self {
         Self {
             state: Mutex::new(QueueState::default()),
             capacity: capacity.max(1),
@@ -126,7 +126,7 @@ impl CommandQueue {
     }
 
     /// 推入一帧音频；满则丢最旧的一帧（不关连接）。
-    fn push_audio(&self, bytes: Vec<u8>) -> PushOutcome {
+    pub(super) fn push_audio(&self, bytes: Vec<u8>) -> PushOutcome {
         let mut state = self.guard();
         let mut dropped = PushOutcome::Queued;
         // 容量只约束音频帧：控制命令必须能进来，绝不因为音频挤占而被丢弃。
@@ -163,7 +163,7 @@ impl CommandQueue {
         dropped
     }
 
-    fn push_control(&self, command: Command) {
+    pub(super) fn push_control(&self, command: Command) {
         let mut state = self.guard();
         state.commands.push_back(command);
     }
@@ -172,16 +172,16 @@ impl CommandQueue {
     ///
     /// 注意：排空不等于恢复。持续超限时每轮都会排空，若在这里清计时，
     /// 「连续 10 s 超限才断连」永远不可达，因此恢复判定按丢帧间隔做。
-    fn drain(&self) -> Vec<Command> {
+    pub(super) fn drain(&self) -> Vec<Command> {
         self.guard().commands.drain(..).collect()
     }
 
-    fn depth(&self) -> u64 {
+    pub(super) fn depth(&self) -> u64 {
         self.guard().commands.len() as u64
     }
 
     /// 连续超限时长；未超限时为 `None`。
-    fn overload_for(&self) -> Option<Duration> {
+    pub(super) fn overload_for(&self) -> Option<Duration> {
         let mut state = self.guard();
         let last_drop = state.last_drop?;
         if last_drop.elapsed() >= OVERLOAD_RECOVERY_GAP {
@@ -193,7 +193,7 @@ impl CommandQueue {
         state.overload_since.map(|since| since.elapsed())
     }
 
-    fn totals(&self) -> (u64, u64) {
+    pub(super) fn totals(&self) -> (u64, u64) {
         (
             self.dropped_frames.load(Ordering::Relaxed),
             self.dropped_bytes.load(Ordering::Relaxed),
@@ -206,9 +206,25 @@ pub(super) struct VoiceWorker {
     queue: Arc<CommandQueue>,
     metrics: Arc<VoiceMetrics>,
     last_backpressure_at: Mutex<Option<Instant>>,
+    lane: Lane,
 }
 
 impl VoiceWorker {
+    /// 按车道构造句柄；队列与指标由两条车道共享。
+    pub(super) fn new(queue: Arc<CommandQueue>, metrics: Arc<VoiceMetrics>, lane: Lane) -> Self {
+        Self {
+            queue,
+            metrics,
+            last_backpressure_at: Mutex::new(None),
+            lane,
+        }
+    }
+
+    /// 本会话是否走端到端 realtime；会话循环据此跳过 epoch 过滤。
+    pub(super) fn is_realtime(&self) -> bool {
+        self.lane == Lane::Realtime
+    }
+
     /// 推入一帧音频。
     pub(super) fn push_audio(&self, bytes: Vec<u8>) -> PushOutcome {
         let outcome = self.queue.push_audio(bytes);
@@ -303,11 +319,11 @@ pub(super) fn spawn_worker_with(
     metrics: Arc<VoiceMetrics>,
 ) -> Arc<VoiceWorker> {
     let queue = Arc::new(CommandQueue::new(AUDIO_QUEUE_CAPACITY));
-    let worker = Arc::new(VoiceWorker {
-        queue: Arc::clone(&queue),
-        metrics: Arc::clone(&metrics),
-        last_backpressure_at: Mutex::new(None),
-    });
+    let worker = Arc::new(VoiceWorker::new(
+        Arc::clone(&queue),
+        Arc::clone(&metrics),
+        Lane::Cascade,
+    ));
     std::thread::spawn(move || {
         run_worker(
             WorkerConfig {
@@ -348,7 +364,16 @@ impl super::GatewayHttpState {
                 metrics,
             ));
         }
-        spawn_worker(session_id, out, warmup, metrics)
+        #[cfg(test)]
+        {
+            // 测试恒走级联脚本宿主：真实 realtime 连接只在生产运行，用例不依赖网络与凭据。
+            spawn_worker(session_id, out, warmup, metrics)
+        }
+        #[cfg(not(test))]
+        match super::gateway_voice_provider::lane() {
+            Lane::Realtime => super::gateway_voice_realtime::spawn_realtime(out, warmup, metrics),
+            Lane::Cascade => spawn_worker(session_id, out, warmup, metrics),
+        }
     }
 }
 

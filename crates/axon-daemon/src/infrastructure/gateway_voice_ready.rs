@@ -6,9 +6,19 @@
 
 /// 当前提供方的识别与合成模型名。
 ///
-/// 接入云端提供方后，此处改为读取提供方配置；返回 `None` 表示尚未接入。
-fn provider_models() -> Option<(&'static str, &'static str)> {
-    None
+/// realtime 车道由一个模型同时承担识别与合成，因此两个位置报同一个标识；
+/// 没有可用车道时返回 `None`，如实表示尚未接入。
+fn provider_models() -> Option<(String, String)> {
+    #[cfg(test)]
+    {
+        // 与 `spawn_voice_worker` 一致：测试恒走级联脚本宿主，不把真实凭据卷进用例。
+        None
+    }
+    #[cfg(not(test))]
+    {
+        let model = super::gateway_voice_provider::realtime_model()?;
+        Some((model.clone(), model))
+    }
 }
 
 /// 提供方是否可用。
@@ -33,8 +43,12 @@ pub(super) fn ready_json() -> String {
     // 当前没有系统音色兜底，两族一律 null，具体原因统一进 `detail`（中文）。
     serde_json::json!({
         "type": "ready",
-        "asrModel": models.map_or("unavailable", |models| models.0),
-        "ttsModel": models.map_or("none", |models| models.1),
+        "asrModel": models
+            .as_ref()
+            .map_or_else(|| "unavailable".to_owned(), |models| models.0.clone()),
+        "ttsModel": models
+            .as_ref()
+            .map_or_else(|| "none".to_owned(), |models| models.1.clone()),
         "sampleRate": 16_000,
         "workspaceId": "",
         "replyDestination": "",

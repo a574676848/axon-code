@@ -18,8 +18,10 @@ axon-session = { path = "../axon-session" }
 axon-session-runtime = { path = "../axon-session-runtime" }
 axon-voice = { path = "../axon-voice" }
 axon-voice-bridge = { path = "../axon-voice-bridge" }
+axon-rustls-provider = { path = "../axon-rustls-provider" }
 serde.workspace = true
 axum.workspace = true
+base64.workspace = true
 chrono.workspace = true
 hmac.workspace = true
 interprocess.workspace = true
