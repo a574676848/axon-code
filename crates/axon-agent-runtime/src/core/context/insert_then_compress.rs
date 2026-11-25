@@ -111,6 +111,8 @@ pub struct WindowRolloverPolicyRuntime {
     fallback_emitted: bool,
     /// 模型单步上下文消耗的滚动采样。
     step_pace: StepPace,
+    /// 最近一次 Provider 实测的当前上下文 token；没有实测时为 `None`。
+    last_provider_context_tokens: Option<u64>,
     /// 距上一次便签写入的 assistant 步数。
     steps_since_notes: usize,
     /// 连续失败的自动换窗次数。
@@ -136,6 +138,7 @@ impl WindowRolloverPolicyRuntime {
             midway_emitted: false,
             fallback_emitted: false,
             step_pace: StepPace::default(),
+            last_provider_context_tokens: None,
             steps_since_notes: 0,
             auto_rollover_failure_streak: 0,
             last_auto_rollover_failure_tokens: None,
@@ -447,6 +450,15 @@ pub struct WindowRolloverRuntime<'a> {
 }
 
 impl WindowRolloverRuntime<'_> {
+    /// 记录一次 Provider 实测读数：步均采样与预算提醒只认这一口径。
+    ///
+    /// 与 `record_token_budget_snapshot` 使用同一条规则（非实测即重置采样），
+    /// 因此运行时提醒里的剩余步数与 `builtin.get_context_remaining` 一致。
+    pub(crate) fn observe_provider_measurement(&mut self, provider_context_tokens: Option<u64>) {
+        self.runtime
+            .observe_provider_measurement(provider_context_tokens);
+    }
+
     /// 创建循环内压缩适配器。
     #[must_use]
     pub fn new(
@@ -491,13 +503,15 @@ impl WindowRolloverRuntime<'_> {
         turn_id: TurnId,
         turn_events: &mut Vec<AgentTurnEvent>,
     ) -> CompressionOutcome {
-        if let Some(current) = current_context_tokens {
-            self.runtime.observe_context(current);
-        }
+        // 提醒与步均同源：本窗口拿到过 Provider 实测就用实测，估算只在没有实测时兜底。
+        let notice_reading = self
+            .runtime
+            .last_provider_context_tokens
+            .or(current_context_tokens);
         if !force_rollover
             && self
                 .runtime
-                .maybe_emit_budget_notice(messages, current_context_tokens)
+                .maybe_emit_budget_notice(messages, notice_reading)
         {
             return CompressionOutcome::Idle;
         }

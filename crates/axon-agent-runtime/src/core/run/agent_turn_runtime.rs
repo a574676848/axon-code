@@ -324,6 +324,11 @@ impl AgentTurnRuntime {
             if let Some(token_usage) = report.runner_report.token_usage {
                 token_usage_total.add_assign(token_usage);
             }
+            // 步均采样与预算提醒只吃 Provider 实测：本地估算（含尾部未计入消息）只用于
+            // 触发判定，混进采样会让提醒和 builtin.get_context_remaining 给出两套步数。
+            if let Some(active) = compression.as_mut() {
+                active.observe_provider_measurement(current_context_tokens);
+            }
             if request_input
                 .capabilities
                 .supports_server_conversation_state

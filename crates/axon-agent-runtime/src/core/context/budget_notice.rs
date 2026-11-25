@@ -66,12 +66,32 @@ impl super::WindowRolloverPolicyRuntime {
         self.steps_since_notes = assistant_steps.saturating_sub(notes_step_mark);
     }
 
-    /// 观察一次当前上下文用量，维护步均采样。
-    pub(super) fn observe_context(&mut self, current_context_tokens: u64) {
-        self.step_pace.observe(current_context_tokens);
+    /// 观察一次 Provider 实测的上下文用量，维护步均采样。
+    ///
+    /// 只有 Provider 实测才产生采样：本地估算（Provider 未报 usage 时的兜底）与实测
+    /// 量纲不同，混算会把中位数污染成既不代表真实步幅、也不代表估算误差的中间值。
+    /// 这条规则与 `record_token_budget_snapshot` 完全一致，保证「运行时提醒」与
+    /// `builtin.get_context_remaining` 对同一步给出同一个步均。
+    pub(super) fn observe_provider_measurement(&mut self, provider_context_tokens: Option<u64>) {
+        match provider_context_tokens.filter(|tokens| *tokens > 0) {
+            Some(tokens) => {
+                self.last_provider_context_tokens = Some(tokens);
+                self.step_pace.observe(tokens);
+            }
+            None => {
+                // 读数回落到估算时不能沿用上一份实测基线，否则下一步的增量会把
+                // 「估算高度 - 实测高度」当成一次真实步幅。
+                self.last_provider_context_tokens = None;
+                self.step_pace.reset();
+            }
+        }
     }
 
     /// 按预算水位决定这一轮是否追加一条运行时提示。
+    ///
+    /// `current_context_tokens` 由调用方给出，必须与步均采样同源：本窗口拿到过
+    /// Provider 实测就传实测，只有在完全没有实测时才退回估算。两侧口径不一致时
+    /// 提醒里的剩余量会和 `builtin.get_context_remaining` 打架。
     ///
     /// 顺序固定为收尾预警优先于中段保值：两者都是每窗口一次，
     /// 一旦水位直接跳过预警线，保值提示就没有意义了。
@@ -80,11 +100,11 @@ impl super::WindowRolloverPolicyRuntime {
         messages: &mut AgentModelHistorySnapshot,
         current_context_tokens: Option<u64>,
     ) -> bool {
-        let Some(current) = current_context_tokens else {
+        let Some(observed) = current_context_tokens.filter(|tokens| *tokens > 0) else {
             return false;
         };
         let trigger = self.policy.trigger_tokens;
-        if current >= trigger {
+        if observed >= trigger {
             return false;
         }
         let tokens_per_step = self.step_pace.tokens_per_step();
@@ -94,18 +114,20 @@ impl super::WindowRolloverPolicyRuntime {
                 self.policy.context_window,
                 tokens_per_step,
             );
-            if TokenBudgetRuntimePolicy::should_emit_warn(trigger, current, headroom) {
+            if TokenBudgetRuntimePolicy::should_emit_warn(trigger, observed, headroom) {
                 let remaining =
-                    TokenBudgetRuntimePolicy::remaining_before_rollover(trigger, current);
+                    TokenBudgetRuntimePolicy::remaining_before_rollover(trigger, observed);
                 let forced = self
                     .token_budget
                     .forced_rollover_tokens(trigger, self.policy.context_window);
                 let forced_remaining =
-                    TokenBudgetRuntimePolicy::remaining_before_rollover(forced, current);
+                    TokenBudgetRuntimePolicy::remaining_before_rollover(forced, observed);
+                // 取整与 `builtin.get_context_remaining` 对齐：同为向下取整，
+                // 同一读数在两侧不会差出一步。
                 let steps_of = |tokens: u64| {
                     tokens_per_step
                         .filter(|step| *step > 0)
-                        .map(|step| tokens.saturating_add(step.saturating_sub(1)) / step)
+                        .map(|step| tokens / step)
                 };
                 messages.push(AgentModelMessage::runtime_note(
                     AgentRuntimeNoteKind::PayloadBudgetGate,
@@ -125,7 +147,7 @@ impl super::WindowRolloverPolicyRuntime {
         if !self.midway_emitted
             && TokenBudgetRuntimePolicy::should_emit_midway(
                 trigger,
-                current,
+                observed,
                 self.steps_since_notes,
             )
         {
@@ -186,7 +208,7 @@ pub(crate) fn warn_note(
 ) -> String {
     let pace_clause = match (tokens_per_step, steps_to_rollover, steps_to_forced) {
         (Some(step), Some(steps), Some(forced_steps)) => format!(
-            "；按最近 {sample_count} 步平均（约 {step} tokens/步）大约还能跑 {steps} 步就到自动换窗，到强制换窗约 {forced_steps} 步"
+            "；这是收尾预警线本身，不是余量见底：预警线按最近 {sample_count} 步实测均值（约 {step} tokens/步）折算，只覆盖 {steps} 步（到强制换窗约 {forced_steps} 步）。步幅变小就能多跑几步，要精确余量就用 builtin.get_context_remaining 复核"
         ),
         _ => "（步均样本不足，暂不折算步数）".to_owned(),
     };

@@ -167,7 +167,7 @@ pub(super) fn execute_get_context_remaining(
         .map(|step| tokens_left / step);
     let pace_summary = match (tokens_per_step, steps_left) {
         (Some(step), Some(steps)) => format!(
-            "，按最近 {} 步平均（约 {step} tokens/步）大约还能跑 {steps} 步",
+            "，按最近 {} 步实测平均（约 {step} tokens/步）大约还能跑 {steps} 步",
             snapshot.step_pace.sample_count()
         ),
         _ => "（步均样本不足，暂不折算步数）".to_owned(),

@@ -66,7 +66,7 @@ fn step_pace_uses_median_and_resets_when_usage_shrinks() {
 fn warn_fires_by_step_pace_and_only_once_per_window() {
     let mut runtime = runtime(1_000_000);
     for current in [100_000, 112_000, 124_000] {
-        runtime.observe_context(current);
+        runtime.observe_provider_measurement(Some(current));
     }
     assert_eq!(runtime.step_pace.tokens_per_step(), Some(12_000));
 
@@ -165,7 +165,7 @@ fn midway_marker_is_restored_from_window_history() {
 fn warn_takes_priority_when_both_tiers_are_due_in_one_turn() {
     let mut runtime = runtime(1_000_000);
     for current in [100_000, 112_000, 124_000] {
-        runtime.observe_context(current);
+        runtime.observe_provider_measurement(Some(current));
     }
     let mut messages: AgentModelHistorySnapshot =
         vec![AgentModelMessage::text("user", "task")].into();
@@ -204,6 +204,60 @@ fn handoff_prompt_requires_the_checklist_and_names_the_history_tools() {
     ] {
         assert!(note.contains(tool), "提示要指出回读工具 {tool}：{note}");
     }
+}
+
+#[test]
+fn step_pace_only_samples_provider_measurements() {
+    let mut runtime = runtime(1_000_000);
+    runtime.observe_provider_measurement(Some(500_000));
+    runtime.observe_provider_measurement(Some(510_000));
+    // 第一次实测只建立基线，第二次才产生一条样本。
+    assert_eq!(runtime.step_pace.sample_count(), 1);
+
+    // 估算读数不是实测：既不能采样，也必须作废已有的实测基线，
+    // 否则下一步的增量会把「估算高度 - 实测高度」当成一次真实步幅。
+    runtime.observe_provider_measurement(None);
+    assert_eq!(runtime.step_pace.sample_count(), 0);
+    assert_eq!(runtime.step_pace.tokens_per_step(), None);
+
+    runtime.observe_provider_measurement(Some(600_000));
+    runtime.observe_provider_measurement(Some(603_000));
+    assert_eq!(
+        runtime.step_pace.tokens_per_step(),
+        Some(3_000),
+        "重置后只能按新的实测序列折算"
+    );
+}
+
+#[test]
+fn warn_note_names_the_warning_line_instead_of_a_depleted_budget() {
+    let note = super::notice::warn_note(226_781, Some(73), Some(79), Some(3_076), 3);
+    assert!(note.contains("预警线本身"), "必须点明这是预警线：{note}");
+    assert!(note.contains("不是余量见底"), "必须否掉误读：{note}");
+    assert!(
+        note.contains("builtin.get_context_remaining"),
+        "要给出复核入口，避免模型把预警线当成资源枯竭：{note}"
+    );
+}
+
+#[test]
+fn step_pace_matches_the_tool_snapshot_rule_for_the_same_sequence() {
+    // 与 `record_token_budget_snapshot` 同一规则：只有连续实测才产生采样。
+    let sequence = [100_000_u64, 103_000, 306_000, 306_500, 307_000];
+    let mut runtime = runtime(1_000_000);
+    for tokens in sequence {
+        runtime.observe_provider_measurement(Some(tokens));
+    }
+    let mut expected = StepPace::default();
+    for tokens in sequence {
+        expected.observe(tokens);
+    }
+    assert_eq!(
+        runtime.step_pace.tokens_per_step(),
+        expected.tokens_per_step(),
+        "同一实测序列在运行时与工具快照两侧必须给出同一步均"
+    );
+    assert_eq!(runtime.step_pace.sample_count(), expected.sample_count());
 }
 
 #[test]
