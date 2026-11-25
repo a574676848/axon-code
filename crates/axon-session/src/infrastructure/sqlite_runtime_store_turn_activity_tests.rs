@@ -60,7 +60,8 @@ fn terminal_batch_projects_answer_and_metrics_into_one_row() {
         terminal(interaction_id.as_str(), "  收口答案  "),
         metrics(interaction_id.as_str()),
     ];
-    super::turn_activity_projection::project_turn_activity(&store, &session_id, &events, 42);
+    super::turn_activity_projection::project_turn_activity(&store, &session_id, &events, 42)
+        .expect("投影必须成功");
 
     let found = store
         .turn_activities_for(session_id.as_str(), &[interaction_id.as_str()])
@@ -82,9 +83,11 @@ fn repeated_projection_updates_in_place_and_missing_reads_as_absent() {
         terminal(interaction_id.as_str(), "第一次"),
         metrics(interaction_id.as_str()),
     ];
-    super::turn_activity_projection::project_turn_activity(&store, &session_id, &events, 43);
+    super::turn_activity_projection::project_turn_activity(&store, &session_id, &events, 43)
+        .expect("投影必须成功");
     // 同一轮再投影一次（重放、重试）：只更新，不新增行。
-    super::turn_activity_projection::project_turn_activity(&store, &session_id, &events, 44);
+    super::turn_activity_projection::project_turn_activity(&store, &session_id, &events, 44)
+        .expect("重放必须成功");
 
     let found = store
         .turn_activities_for(session_id.as_str(), &[interaction_id.as_str(), "01UNKNOWN"])

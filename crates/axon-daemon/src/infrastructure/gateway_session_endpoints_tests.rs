@@ -160,6 +160,8 @@ fn context_snapshot_route_projects_reading_with_gateway_field_names() {
         .store
         .append_attributed_events(&session_id, &host, &interaction_id, &[frame], NOW_MS + 1)
         .expect("写入用量帧");
+    // 投影在进程内队列里异步执行：读投影前先等队列排空，避免用例与 worker 抢跑。
+    fixture.store.drain_for_tests();
 
     let (status, payload) = fixture.get_json(&format!(
         "/api/v1/sessions/{}/context-snapshot",
@@ -200,6 +202,7 @@ fn context_snapshot_route_projects_reading_with_gateway_field_names() {
             NOW_MS + 6,
         )
         .expect("写入不带窗口的用量帧");
+    fixture.store.drain_for_tests();
     let (_, payload) = fixture.get_json(&format!(
         "/api/v1/sessions/{}/context-snapshot",
         session_id.as_str()

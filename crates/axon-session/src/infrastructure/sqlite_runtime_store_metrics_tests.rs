@@ -143,6 +143,7 @@ fn replayed_metrics_batch_is_projected_only_once() {
             &events,
             Some("desktop"),
             now_ms,
+            false,
         );
     };
 

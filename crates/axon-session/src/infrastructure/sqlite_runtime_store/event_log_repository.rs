@@ -23,6 +23,10 @@ mod write_failure;
 #[path = "projection_watermark.rs"]
 mod projection_watermark;
 
+/// 派生投影的进程内单线程队列。
+#[path = "projection_worker.rs"]
+mod projection_worker;
+
 pub(super) fn log_error(error: axon_eventlog::EventLogError) -> RuntimeStoreError {
     RuntimeStoreError::Storage(error.to_string())
 }
@@ -134,9 +138,15 @@ fn append_events_with(
     // 重排会改掉分配时的序号：投影水位跟落盘的真实批首序号走，才与日志里的帧对得上。
     let projected_from = records.first().map_or(start, |record| record.sequence);
     /*
-     * 派生表投影持锁做：投影水位按「批首序号」单调推进，投影顺序必须与序号顺序一致，
-     * 否则后一批先把水位推高，前一批随后会被整批跳过，那批投影就悄无声息地丢了。
-     * 代价是下一条事件多等几个小写入。
+     * 落盘序号小于分配序号，说明事件日志尾被清空或按更短的尾重排过：水位仍停在旧的高
+     * 序号上，闸门会把这一批以及之后每一批都当成已投影而整批跳过。标记随批投递，由
+     * worker 在执行前重置水位。
+     */
+    let log_rewound = projected_from < start;
+    /*
+     * 派生表投影在锁内投递、锁外执行。同一会话的批在写锁内按序号顺序入队，单 worker 按
+     * 投递顺序消费，水位因此单调推进；投影若不在锁内投递，后一批可能先进队列，先跑完并
+     * 把水位推高，前一批随后整批被跳过。
      */
     apply_projections(
         store,
@@ -145,6 +155,7 @@ fn append_events_with(
         events,
         origin_channel.as_deref(),
         now_ms,
+        log_rewound,
     );
     drop(write_guard);
     Ok(records)
@@ -475,6 +486,7 @@ pub(super) fn write_events_at_locked(
     }
     // 重排会改掉分配时的序号：投影水位跟落盘的真实批首序号走。
     let projected_from = records.first().map_or(start, |record| record.sequence);
+    let log_rewound = projected_from < start;
     apply_projections(
         store,
         session_id,
@@ -482,6 +494,7 @@ pub(super) fn write_events_at_locked(
         events,
         origin_channel.as_deref(),
         now_ms,
+        log_rewound,
     );
     Ok(records)
 }
@@ -524,14 +537,19 @@ pub(super) fn write_records_locked(
     }
     Ok(())
 }
-/// 把本批事件投射到派生表：逐轮事实、会话累计指标与上下文快照。
+/// 把本批事件交给投影队列：逐轮事实、会话累计指标与上下文快照。
 ///
-/// 投影是可重建的派生数据，失败不阻断主流程；但失败必须上报，否则「累计耗时恒 null」
-/// 这类问题只能等界面报错才发现。需要兜底时用 `rebuild_session_metrics` 整体重放。
-/// 上下文快照不走第二条写路径：这一处是它唯一的写入点。
+/// 投影是可重建的派生数据，失败不阻断主流程；执行在进程内单线程 worker 里，写路径只投递
+/// 拥有所有权的副本，见 `projection_worker`。上下文快照不走第二条写路径：这一处是它唯一
+/// 的写入点。
 ///
 /// `start_sequence` 是本批首条事件的序号，同时是本批在投影水位里的身份：同一批被重放
-/// （重试、补投）时整批跳过，累加型投影因此不会翻倍。水位只在整个投影跑完后推进。
+/// （重试、补投）时整批跳过，累加型投影因此不会翻倍。水位闸门在 worker 内判定，投递时
+/// 不判定：投递时刻与执行时刻的水位可能不同。水位只在三个投影全部成功后推进，失败批次
+/// 不推进水位（否则失败批次会被永久越过），失败事实由 worker 计数并写进日志。
+///
+/// 调用方必须持有该会话的事件面写入锁：同一会话的投递顺序就是投影顺序。
+/// 需要兜底时用 `rebuild_session_metrics` 整体重放。
 pub(super) fn apply_projections(
     store: &SqliteRuntimeStore,
     session_id: &DaemonSessionId,
@@ -539,36 +557,17 @@ pub(super) fn apply_projections(
     events: &[(String, String)],
     origin_channel: Option<&str>,
     now_ms: u64,
+    log_rewound: bool,
 ) {
-    if projection_watermark::already_projected(store, session_id, start_sequence) {
-        return;
-    }
-    // 逐轮事实：收口批次里同时带着终态与它派生的指标，一次投影就够。
-    super::turn_activity_projection::project_turn_activity(store, session_id, events, now_ms);
-    // 会话级上下文快照：界面占用读数与剩余量现在读同一份。
-    super::context_snapshot_projection::project_context_snapshot(store, session_id, events, now_ms);
-    for (event_type, payload_json) in events {
-        if event_type != "turn_metrics" {
-            continue;
-        }
-        let Ok(metrics) = serde_json::from_str::<axon_eventlog::TurnMetrics>(payload_json) else {
-            continue;
-        };
-        if let Err(error) = super::session_metrics_repository::apply_turn_metrics(
-            store,
-            session_id,
-            &metrics,
-            origin_channel,
-            now_ms,
-        ) {
-            eprintln!(
-                "会话累计指标投影写入失败，可重建: session={} error={error}",
-                session_id.as_str()
-            );
-        }
-    }
-    // 三个投影都跑完后才推进水位：中途失败就不推进，下一批仍走完整投影。
-    projection_watermark::advance(store, session_id, start_sequence, now_ms);
+    projection_worker::submit(
+        store,
+        session_id,
+        start_sequence,
+        events,
+        origin_channel,
+        now_ms,
+        log_rewound,
+    );
 }
 
 #[cfg(test)]

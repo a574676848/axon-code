@@ -377,6 +377,51 @@ fn text_output_reports_what_was_deleted() {
     );
 }
 
+/// 删会话必须清掉投影水位：残留水位会让同 id 重建的会话首批序号落在旧水位之下，
+/// 闸门据此把整批判成重复，新会话的逐轮答案与读数全部静默不生成。
+#[test]
+fn deleting_a_session_clears_its_projection_watermark() {
+    let fixture = fixture("session-delete-watermark");
+    seed_thread(&fixture);
+    seed_session_family(&fixture, "水位清理", "completed");
+    fixture
+        .store
+        .with_read_connection(|connection| {
+            connection
+                .execute(
+                    "INSERT OR REPLACE INTO projection_state
+                        (session_id, last_projected_seq, updated_at_ms)
+                     VALUES (?1, 42, 0)",
+                    [fixture.session_id.as_str()],
+                )
+                .map(|_| ())
+        })
+        .expect("写入投影水位");
+
+    let result = delete(
+        OutputFormat::Json,
+        &fixture,
+        fixture.session_id.as_str(),
+        TargetKind::Session,
+    );
+    assert_eq!(result.exit_code, 0, "{}", result.stderr);
+
+    let remaining: i64 = fixture
+        .store
+        .with_read_connection(|connection| {
+            connection.query_row(
+                "SELECT COUNT(*) FROM projection_state WHERE session_id = ?1",
+                [fixture.session_id.as_str()],
+                |row| row.get(0),
+            )
+        })
+        .expect("读取投影水位");
+    assert_eq!(
+        remaining, 0,
+        "删会话必须一并清掉投影水位，否则同 id 重建后投影会整批被跳过"
+    );
+}
+
 /// 会话数据根只是 `<root>/data`：用例里显式断言一次，避免路径解析漂移后测试变成空跑。
 #[test]
 fn fixture_keeps_the_runtime_roots_apart() {

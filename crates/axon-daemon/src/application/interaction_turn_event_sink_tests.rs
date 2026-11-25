@@ -268,6 +268,8 @@ fn terminal_event_and_turn_metrics_land_in_one_batch() {
     assert_eq!(metrics.turn_id, interaction_id.as_str());
 
     // 指标同时进入会话累计投影：派生读数不必回放事件也能读到。
+    // 投影在进程内队列里异步执行：读投影前先等队列排空，避免用例与 worker 抢跑。
+    store.drain_for_tests();
     let projected: i64 = store
         .with_read_connection(|connection| {
             connection.query_row(

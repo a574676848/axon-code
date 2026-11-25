@@ -7,6 +7,7 @@ use axon_domain::DaemonSessionId;
 
 use super::SqliteRuntimeStore;
 use super::turn_activity_repository::{TurnActivity, upsert_activity};
+use crate::ports::RuntimeStoreError;
 
 /// 工具名扫描的帧上限：一轮的工具调用远小于这个数，超出只取前面的部分。
 const TOOL_SCAN_FRAME_LIMIT: u32 = 4_000;
@@ -15,12 +16,14 @@ const TOOL_SCAN_FRAME_LIMIT: u32 = 4_000;
 ///
 /// 只认 `turn_completed` 与 `turn_metrics`：这两条保证同批落盘（终态与它派生的指标），
 /// 因此一次调用就能把答案与读数一起写进同一行。
+///
+/// 写入失败原样返回错误：水位只在三个投影都成功后推进，失败批次留给重放或重建入口。
 pub(super) fn project_turn_activity(
     store: &SqliteRuntimeStore,
     session_id: &DaemonSessionId,
     events: &[(String, String)],
     now_ms: u64,
-) {
+) -> Result<(), RuntimeStoreError> {
     let mut terminal: Option<(String, Option<String>)> = None;
     let mut terminal_tool_names: Option<Vec<String>> = None;
     let mut metrics_json: Option<String> = None;
@@ -65,7 +68,7 @@ pub(super) fn project_turn_activity(
         }
     }
     let Some((interaction_id, answer_text)) = terminal else {
-        return;
+        return Ok(());
     };
     // 老记录没有 toolNames 字段：退回按这一次交互的有界扫描，语义与改造前一致。
     let tool_names =
@@ -79,12 +82,7 @@ pub(super) fn project_turn_activity(
         tool_names,
         metrics_json,
     };
-    if let Err(error) = upsert_activity(store, &activity, now_ms) {
-        eprintln!(
-            "逐轮事实投影写入失败，可回落日志尾扫: session={} error={error}",
-            session_id.as_str()
-        );
-    }
+    upsert_activity(store, &activity, now_ms)
 }
 
 /// 这一轮用过哪些工具：只扫它自己的帧，且有帧数上限。

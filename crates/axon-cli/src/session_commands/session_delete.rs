@@ -57,6 +57,11 @@ pub(super) struct DeletedRows {
     context_snapshots: usize,
     /// 逐轮活动投影。
     turn_activity: usize,
+    /// 投影水位：按会话记录「已投影到哪一帧」，删会话必须一并清掉。
+    ///
+    /// 留着它会让同 id 重建的新会话首批序号落在旧水位之下，投影闸门据此把整批判成
+    /// 重复而静默跳过，新会话的逐轮答案与读数全部不生成。
+    projection_state: usize,
     /// 轮次标量事实投影。
     thread_turn_facts: usize,
     /// 调度意图（属于该会话的定时项）。
@@ -321,6 +326,8 @@ fn delete_session_family(
                     "context_snapshots",
                     session_id,
                 )?,
+                // 投影水位没有外键，不会被 `sessions` 的级联带走；同上，必须显式删。
+                projection_state: delete_by_session(&transaction, "projection_state", session_id)?,
                 sessions: delete_by_session(&transaction, "sessions", session_id)?,
                 ..DeletedRows::default()
             };
@@ -457,7 +464,7 @@ fn render_delete(format: OutputFormat, report: &SessionDeleteReport) -> CliRunRe
         OutputFormat::Text => {
             let rows = report.deleted_rows;
             let mut stdout = format!(
-                "已删除会话: {}\n- sessions: {}\n- inbox: {}\n- work_items: {}\n- work_item_history: {}\n- session_metrics: {}\n- context_snapshots: {}\n- turn_activity: {}\n- thread_turn_facts: {}\n- schedules: {}\n- user_questions: {}\n- thread_shards_removed: {}\n- deleted_thread_events: {}\n- remaining_events: {}\n- event_log_removed: {}\n",
+                "已删除会话: {}\n- sessions: {}\n- inbox: {}\n- work_items: {}\n- work_item_history: {}\n- session_metrics: {}\n- context_snapshots: {}\n- turn_activity: {}\n- projection_state: {}\n- thread_turn_facts: {}\n- schedules: {}\n- user_questions: {}\n- thread_shards_removed: {}\n- deleted_thread_events: {}\n- remaining_events: {}\n- event_log_removed: {}\n",
                 report.session_id,
                 rows.sessions,
                 rows.inbox,
@@ -466,6 +473,7 @@ fn render_delete(format: OutputFormat, report: &SessionDeleteReport) -> CliRunRe
                 rows.session_metrics,
                 rows.context_snapshots,
                 rows.turn_activity,
+                rows.projection_state,
                 rows.thread_turn_facts,
                 rows.schedules,
                 rows.user_questions,

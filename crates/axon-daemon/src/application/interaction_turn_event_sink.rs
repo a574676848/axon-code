@@ -25,6 +25,8 @@ mod frame_class;
 mod replay_copy;
 #[path = "interaction_turn_event_signals.rs"]
 mod signals;
+#[path = "interaction_turn_event_tool_names.rs"]
+mod tool_names;
 #[path = "interaction_turn_event_usage.rs"]
 mod usage;
 
@@ -377,63 +379,14 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
         Ok(())
     }
 
-    /// 记录本帧里的工具名（工具调用帧）。
-    ///
-    /// 只认 `kind.type == "toolCall"` 的 wire 帧：名字在 `kind.payload.toolName`。重复的
-    /// 名字只留第一次，顺序即首次出现顺序，与逐轮事实里的展示口径一致。
+    /// 记录本帧里的工具名；累积与去重逻辑见 `tool_names` 模块。
     fn observe_tool_name(&self, event: &RuntimeEvent) {
-        let Ok(payload) = serde_json::from_str::<serde_json::Value>(&event.payload_json) else {
-            return;
-        };
-        let Some(kind) = payload.get("kind") else {
-            return;
-        };
-        if kind.get("type").and_then(serde_json::Value::as_str) != Some("toolCall") {
-            return;
-        }
-        let Some(name) = kind
-            .get("payload")
-            .and_then(|payload| payload.get("toolName"))
-            .and_then(serde_json::Value::as_str)
-            .filter(|name| !name.is_empty())
-        else {
-            return;
-        };
-        let mut names = self
-            .tool_names
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !names.iter().any(|known| known == name) {
-            names.push(name.to_owned());
-        }
+        tool_names::observe(&self.tool_names, event);
     }
 
-    /// 终态帧带上本轮工具名，供逐轮事实投影直接读取，不必回扫事件日志。
-    ///
-    /// 载荷仍是 JSON 对象，只多一个 `toolNames` 数组；旧读者忽略未知字段，新读者拿它
-    /// 直接写投影，写路径因此不再有「每轮解压自己的帧」这一笔读放大。
+    /// 终态帧带上本轮工具名，供逐轮事实投影直接读取。
     fn terminal_frame_with_tool_names(&self, event: &RuntimeEvent) -> Result<RuntimeEvent, String> {
-        let names = self
-            .tool_names
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        if names.is_empty() {
-            return Ok(event.clone());
-        }
-        let mut payload: serde_json::Value = serde_json::from_str(&event.payload_json)
-            .map_err(|error| format!("解析终态载荷失败：{error}"))?;
-        let serde_json::Value::Object(map) = &mut payload else {
-            return Ok(event.clone());
-        };
-        map.insert(
-            "toolNames".to_owned(),
-            serde_json::Value::Array(names.into_iter().map(serde_json::Value::String).collect()),
-        );
-        let mut annotated = event.clone();
-        annotated.payload_json = serde_json::to_string(&payload)
-            .map_err(|error| format!("序列化终态载荷失败：{error}"))?;
-        Ok(annotated)
+        tool_names::terminal_frame(&self.tool_names, event)
     }
 
     /// 投递一帧实时事件；正文增量同时进入累积缓冲。

@@ -4,9 +4,9 @@
 //! 幂等语义：同一批事件重放一次，轮次数与累计耗时就会翻倍。闸门按「批首序号」判断，
 //! 批首序号不大于水位就整批跳过。
 //!
-//! 闸门放在投影入口（`apply_projections`）这一层，不放进任何一个投影内部：三个投影是
-//! 同一次提交的派生结果，只跳过其中一个会留下彼此矛盾的行；放在入口还能让累加投影保持
-//! 原签名，现有调用点一处都不用改。
+//! 闸门放在投影执行入口（`projection_worker` 里的 `project`）这一层，不放进任何一个投影
+//! 内部：三个投影是同一次提交的派生结果，只跳过其中一个会留下彼此矛盾的行；放在入口还能
+//! 让累加投影保持原签名。
 
 use rusqlite::{OptionalExtension, params};
 
@@ -14,20 +14,22 @@ use super::super::SqliteRuntimeStore;
 use super::super::helpers::{i64_value, storage};
 use axon_domain::DaemonSessionId;
 
-/// 这一批是否已经投影过。
+/// 这一批是否已经投影过；已投影过时返回挡住它的水位。
 ///
 /// 判据是「批首序号不大于水位」：整批是同一次提交，已投影过就整批跳过，不能只跳过累加
-/// 那一个投影。
+/// 那一个投影。把水位一并返回是为了留痕：整批跳过是静默丢投影的高危路径，调用方要能说清
+/// 这一批被哪一档水位挡掉了。
 pub(super) fn already_projected(
     store: &SqliteRuntimeStore,
     session_id: &DaemonSessionId,
     start_sequence: u64,
-) -> bool {
-    read_watermark(store, session_id).is_some_and(|last| start_sequence <= last)
+) -> Option<u64> {
+    watermark(store, session_id).filter(|last| start_sequence <= *last)
 }
 
 /// 投影跑完后把水位推进到本批的批首序号。
 ///
+/// 调用方只在本批三个投影全部成功后才调用：失败批次不推进水位，重放时才不会被整批跳过。
 /// 取 `MAX`：迟到的低序号批次不得把水位倒退回去。写失败只记日志：水位缺失最多让下一批
 /// 多投影一次，投影本身是可重建的派生数据。
 pub(super) fn advance(
@@ -61,11 +63,38 @@ pub(super) fn advance(
     }
 }
 
+/// 事件日志序号回退后清空水位。
+///
+/// 闸门只认「批首序号不大于水位即已投影」，它假设序号单调。事件日志被清空、修复重排或
+/// 截断后，新一批的序号会落回水位之下，闸门会把这一批以及之后每一批都当成重复而整批
+/// 跳过，该会话的投影就此永久停摆。调用方在检测到「落盘序号小于分配序号」时先调用它，
+/// 再交给闸门判定。
+pub(super) fn reset(store: &SqliteRuntimeStore, session_id: &DaemonSessionId) {
+    let deleted = store.connection().and_then(|connection| {
+        connection
+            .execute(
+                "DELETE FROM projection_state WHERE session_id=?1",
+                params![session_id.as_str()],
+            )
+            .map_err(storage)
+    });
+    match deleted {
+        Ok(_) => report(&format!(
+            "事件日志序号回退，已重置投影水位: session={}",
+            session_id.as_str()
+        )),
+        Err(error) => report(&format!(
+            "投影水位重置失败，该会话投影可能整批被跳过: session={} error={error}",
+            session_id.as_str()
+        )),
+    }
+}
+
 /// 读取水位；没有这一行（从未投影过）时返回 `None`。
 ///
 /// 读失败按「未投影」返回 `None`：宁可多算一次，也不能因为一次读失败就静默丢掉一整批
 /// 投影。失败事实同时进日志与 stderr，与事件面写失败同款。
-fn read_watermark(store: &SqliteRuntimeStore, session_id: &DaemonSessionId) -> Option<u64> {
+pub(super) fn watermark(store: &SqliteRuntimeStore, session_id: &DaemonSessionId) -> Option<u64> {
     let read = store.connection().and_then(|connection| {
         connection
             .query_row(
