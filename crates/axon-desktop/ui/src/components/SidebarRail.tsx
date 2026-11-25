@@ -2,7 +2,7 @@ import React from 'react';
 import { AlertCircleIcon, BrainIcon, ChecklistIcon, ClockIcon, FolderIcon, IconPanelLeft, SearchIcon, SettingsIcon } from '../icons';
 import { NavGlide, NewSessionButton, SidebarColumn } from './ui/shell';
 import { Dropdown, MenuItem, MenuLabel, MenuSeparator } from './ui/overlays';
-import { StateDot } from './ui/surfaces';
+import { alignSpinnerPhase, StateDot } from './ui/surfaces';
 import type { RailActivity, RailActivityCue } from './railActivity';
 import type { NavTab } from '../types';
 
@@ -67,6 +67,22 @@ const ActivityMark: React.FC<{ cue: RailActivityCue }> = ({ cue }) =>
     <StateDot state={cue} />
   );
 
+/** 在跑的搜索格：图标居中不动，外圈套一枚环形轨道绕它转。 */
+const OrbitingSearch: React.FC = () => (
+  <span className="relative inline-flex h-7 w-7 items-center justify-center">
+    <SearchIcon size={14} />
+    <svg
+      ref={alignSpinnerPhase}
+      className="state-spinner pointer-events-none absolute inset-0 h-full w-full text-text-link"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+    >
+      <circle className="state-spinner-track" cx="12" cy="12" r="9.5" />
+      <circle className="state-spinner-arc" cx="12" cy="12" r="9.5" />
+    </svg>
+  </span>
+);
+
 /** 收轨态的搜索格：有会话活动时弹出动态卡片，否则维持原来的展开搜索行为。 */
 const SearchRailControl: React.FC<{
   activity: RailActivity;
@@ -82,6 +98,7 @@ const SearchRailControl: React.FC<{
     );
   }
 
+  const orbiting = cue === 'ongoing';
   return (
     <Dropdown
       placement="right"
@@ -92,10 +109,10 @@ const SearchRailControl: React.FC<{
           label={activityLabel(activity)}
           active={open}
           onClick={toggle}
-          badgeKey={cue}
-          badge={<ActivityMark cue={cue} />}
+          badgeKey={orbiting ? undefined : cue}
+          badge={orbiting ? undefined : <ActivityMark cue={cue} />}
         >
-          <SearchIcon size={14} />
+          {orbiting ? <OrbitingSearch /> : <SearchIcon size={14} />}
         </RailButton>
       )}
     >

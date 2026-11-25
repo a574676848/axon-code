@@ -232,7 +232,7 @@ const ONGOING_EDGE = 14;
  * CSS 动画从元素插入时起算，不同时刻挂上来的转圈会各转各的相位；
  * 共用一个起点，同屏可见的转圈就同步转。
  */
-function alignSpinnerPhase(element: SVGSVGElement | null): void {
+export function alignSpinnerPhase(element: SVGSVGElement | null): void {
   if (element === null) return;
   // 无头测试环境（jsdom）没有 Web Animations，取不到就保持未对齐，不影响渲染。
   const spinner = element as { getAnimations?: SVGSVGElement['getAnimations'] };
