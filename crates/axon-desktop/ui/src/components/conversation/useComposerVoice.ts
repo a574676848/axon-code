@@ -15,7 +15,6 @@ import {
 } from '../../speech/voiceProtocol';
 import { listenVoiceSession, startVoiceSession, stopVoiceSession } from '../../speech/voiceSession';
 import { isBlockedBySystem, readMicrophoneAccess, readVoiceRuntime, VOICE_RUNTIME_MISSING_TEXT } from '../../speech/voicePermission';
-import { VOICE_UI_ENABLED } from '../../speech/enabled';
 import { useVoicePermission, type ComposerPermissionPrompt, type VoiceMode } from './useVoicePermission';
 import { useExpiringNotice } from './composerNotice';
 import { useSpaceHold } from './useSpaceHold';
@@ -528,9 +527,9 @@ export function useComposerVoice({
     return ensureSession();
   }, [ensureSession, replyDestination, sessionId, workspaceId]);
 
-  /** 入口可用：语音入口可见、桌面宿主，并且有工作区或能在首屏建一条。 */
+  /** 入口可用：桌面宿主，并且有工作区或能在首屏建一条。 */
   const available = React.useMemo(
-    () => VOICE_UI_ENABLED && enabled && isDesktopHost() && (workspaceId !== null || ensureSession !== undefined),
+    () => enabled && isDesktopHost() && (workspaceId !== null || ensureSession !== undefined),
     [enabled, ensureSession, workspaceId],
   );
 

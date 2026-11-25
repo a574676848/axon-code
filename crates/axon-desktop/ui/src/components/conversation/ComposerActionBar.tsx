@@ -1,7 +1,6 @@
 import React from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { ArrowUpIcon, MicrophoneIcon, PlusIcon, StopIcon } from '../../icons';
-import { VOICE_UI_ENABLED } from '../../speech/enabled';
 import { ComposerPicker } from './ComposerPicker';
 import { VoiceHoldProgress } from './VoiceHoldProgress';
 
@@ -125,7 +124,7 @@ export const ComposerActionBar: React.FC<ComposerActionBarProps> = ({
         />
       )}
 
-      {!compact && VOICE_UI_ENABLED && (
+      {!compact && (
         <span className="relative inline-flex shrink-0">
           <button
             type="button"

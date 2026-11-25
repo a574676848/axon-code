@@ -2,7 +2,6 @@ import React from 'react';
 import { AlertCircleIcon, MicrophoneIcon } from '../../icons';
 import type { ComposerPermissionPrompt, ComposerVoice } from './useComposerVoice';
 import type { VoicePhase } from '../../speech/voiceProtocol';
-import { VOICE_UI_ENABLED } from '../../speech/enabled';
 import { VoiceWave } from './VoiceWave';
 import { Banner, StateDot } from '../ui/surfaces';
 import { Button } from '../ui/controls';
@@ -140,7 +139,6 @@ export const ComposerVoicePermissionDialog: React.FC<{
  * 因为它是坞自身的形态变化，不是挂在坞外的另一条横条。
  */
 export const ComposerVoiceLayer: React.FC<{ voice: ComposerVoice }> = ({ voice }) => {
-  if (!VOICE_UI_ENABLED) return null;
   return (
     <>
       {voice.error !== null && <ComposerVoiceError message={voice.error} />}
