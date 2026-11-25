@@ -20,6 +20,15 @@ use crate::record::RuntimeEventRecord;
 /// 绝不因此挡住历史分页本身。
 const MAX_READING_FRAMES: usize = 4_096;
 
+/// 每条缺失交互预留的帧预算：一页历史补十几轮时，逐轮都要有自己的额度。
+///
+/// 过去的预算是全局共享的固定值，缺失轮次一多，排在后面的轮次就只能拿到「按用时」
+/// 这档降级结果。这里改成按缺失条数放大，并仍用 [`MAX_READING_FRAMES_CEILING`] 封顶。
+const PER_INTERACTION_FRAMES: usize = 256;
+
+/// 一次批量补帧最多解压多少帧：放大后仍要有硬上界，避免一页历史退化成整条日志冷读。
+const MAX_READING_FRAMES_CEILING: usize = 16_384;
+
 /// 按交互取到的一条事件。
 #[derive(Debug, Clone, PartialEq)]
 pub struct InteractionRecord {
@@ -57,6 +66,9 @@ pub fn read_latest_per_interaction(
     let distinct: HashSet<&str> = wanted.iter().copied().collect();
     let mut remaining = distinct.len();
     let mut found: HashMap<&str, RuntimeEventRecord> = HashMap::new();
+    let frame_budget = MAX_READING_FRAMES
+        .max(wanted.len().saturating_mul(PER_INTERACTION_FRAMES))
+        .min(MAX_READING_FRAMES_CEILING);
     let tags: Vec<u32> = wanted
         .iter()
         .map(|id| index::interaction_tag(Some(id)))
@@ -64,7 +76,7 @@ pub fn read_latest_per_interaction(
     if let Some(index) = index::load(path, len) {
         let mut scanned = 0_usize;
         for entry in index.entries().iter().rev() {
-            if remaining == 0 || scanned >= MAX_READING_FRAMES {
+            if remaining == 0 || scanned >= frame_budget {
                 break;
             }
             if !tags.iter().any(|tag| entry.may_hold(*tag)) {
@@ -87,7 +99,7 @@ pub fn read_latest_per_interaction(
             .iter()
             .skip(HEADER_FRAME_INDEX + 1)
             .rev()
-            .take(MAX_READING_FRAMES)
+            .take(frame_budget)
             .cloned()
             .collect();
         for span in spans {
