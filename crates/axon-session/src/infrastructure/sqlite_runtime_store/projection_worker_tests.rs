@@ -182,6 +182,42 @@ fn a_rewound_log_resets_the_watermark_before_the_gate() {
     assert_eq!(metrics.turn_count, 2, "序号回退后的批次必须重新被投影");
 }
 
+/// 重排触发的清水位必须带条件：只有批首序号不大于水位才清。
+///
+/// 事件面写失败后的正常补偿也会重排，那种情形水位仍低于新批首序号；无条件清会让已经
+/// 投影过的历史批被重复累加。
+#[test]
+fn resetting_the_watermark_requires_the_rewind_to_cross_it() {
+    let (store, session_id, _host) = fixture("projection-watermark-rewind-guard");
+    let batch = [metrics_event("turn-1", 100)];
+    submit(&store, &session_id, 10, &batch, Some("desktop"), 1, false);
+    assert_eq!(
+        super::super::projection_watermark::watermark(&store, &session_id),
+        Some(10),
+        "投递后的水位必须落在本批批首序号上"
+    );
+
+    assert!(
+        !super::super::projection_watermark::reset_if_rewound(&store, &session_id, 11),
+        "批首序号高于水位时不得清水位"
+    );
+    assert_eq!(
+        super::super::projection_watermark::watermark(&store, &session_id),
+        Some(10),
+        "未跨过水位时水位必须原样保留"
+    );
+
+    assert!(
+        super::super::projection_watermark::reset_if_rewound(&store, &session_id, 10),
+        "批首序号等于水位说明重排压到了水位上，必须清水位"
+    );
+    assert_eq!(
+        super::super::projection_watermark::watermark(&store, &session_id),
+        None,
+        "清水位之后这一批才不会被闸门整批跳过"
+    );
+}
+
 /// 队列满时本会话的积压必须按投递顺序先跑，本批最后跑。
 #[test]
 fn overflow_runs_the_same_session_backlog_in_delivery_order() {

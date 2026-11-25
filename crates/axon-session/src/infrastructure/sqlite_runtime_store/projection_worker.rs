@@ -344,10 +344,15 @@ impl ProjectionQueue {
     }
 
     /// worker 主循环：按投递顺序消费，单批失败不退出。
+    ///
+    /// 出队与执行都在 `run_lock` 内完成：否则「已出队、尚未取锁」的那一批既不在队列里，
+    /// 溢出兜底也扫不到它，后批就能先跑并推高水位，前批随后被闸门整批跳过。
     fn run_worker(&self) {
         loop {
+            let run_guard = self.lock_run();
             let job = self.next_job();
-            self.execute(job);
+            self.execute_locked(job);
+            drop(run_guard);
             let mut state = self.lock_state();
             state.busy = false;
             self.drained.notify_all();

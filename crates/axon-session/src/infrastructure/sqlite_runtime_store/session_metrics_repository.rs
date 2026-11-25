@@ -1,7 +1,8 @@
 //! 会话累计指标的投影更新。
 //!
 //! `session_metrics` 是投影表：每一行都能由事件流里的 `turn_metrics` 与作业事件重放
-//! 得到。因此这里的写入失败不阻断主流程，下一次重放可以修正。
+//! 得到。因此这里的写入失败只向上返回错误、不阻断主流程；注意失败批次的派生态不会自动
+//! 补齐，需要靠 `rebuild_session_metrics` 整体重放。
 
 use std::collections::BTreeMap;
 

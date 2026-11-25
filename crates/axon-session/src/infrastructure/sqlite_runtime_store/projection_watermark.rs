@@ -90,6 +90,48 @@ pub(super) fn reset(store: &SqliteRuntimeStore, session_id: &DaemonSessionId) {
     }
 }
 
+/// 日志重排把批首序号压到水位以下时清空水位。
+///
+/// 与 [`reset`] 的差别在条件：只有「水位不低于重排后的批首序号」才清。事件面写失败的
+/// 正常补偿（另一个写者已推进文件尾）也会重排，那种情形水位仍低于新批首序号，清水位会
+/// 让已投影的历史批被重复累加。这一条挂在 `realign_sequences` 上，三条事件写路径因此
+/// 共用同一处判定。
+///
+/// 返回是否真的清掉了水位，便于调用方留痕。
+pub(super) fn reset_if_rewound(
+    store: &SqliteRuntimeStore,
+    session_id: &DaemonSessionId,
+    start_sequence: u64,
+) -> bool {
+    let cleared = store.connection().and_then(|connection| {
+        connection
+            .execute(
+                "DELETE FROM projection_state \
+                 WHERE session_id=?1 AND last_projected_seq>=?2",
+                params![session_id.as_str(), i64_value(start_sequence)?],
+            )
+            .map_err(storage)
+    });
+    match cleared {
+        Ok(count) if count > 0 => {
+            report(&format!(
+                "事件日志重排把序号压到水位之下，已重置投影水位: session={} start={start_sequence}",
+                session_id.as_str()
+            ));
+            true
+        }
+        Ok(_) => false,
+        Err(error) => {
+            report(&format!(
+                "投影水位重置失败，该会话投影可能整批被跳过: session={} start={start_sequence} \
+                 error={error}",
+                session_id.as_str()
+            ));
+            false
+        }
+    }
+}
+
 /// 读取水位；没有这一行（从未投影过）时返回 `None`。
 ///
 /// 读失败按「未投影」返回 `None`：宁可多算一次，也不能因为一次读失败就静默丢掉一整批

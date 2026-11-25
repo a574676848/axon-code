@@ -207,6 +207,12 @@ pub(super) fn realign_sequences(
         "事件日志序号与文件尾不符，按落盘尾重排: session_id={} start={start} end={written}",
         session_id.as_str()
     ));
+    /*
+     * 重排可能把批首序号压到投影水位之下（日志被清空、修复重排或截断）。水位这时停在
+     * 旧的高号上，闸门会把这一批以及之后每一批都当成已投影而整批跳过。判定放在这里而不是
+     * 各调用方：三条事件写路径都会经过重排，只有一处能保证不漏。
+     */
+    super::projection_watermark::reset_if_rewound(store, session_id, start);
     for (offset, record) in records.iter_mut().enumerate() {
         record.sequence = start.saturating_add(u64::try_from(offset).unwrap_or(0));
     }
