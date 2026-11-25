@@ -158,9 +158,16 @@ pub fn conversation_stop_job(session_id: String, job_id: String) -> Result<JobSt
 }
 
 /// Tauri IPC 命令：读取一条车道上仍在运行的后台作业名册。
+///
+/// `settled` 是界面点名要收口事实的那些作业：名册给出「还持有谁」，收口事实给出
+/// 「那一条跑了多久、怎么收口的」，两者同源同一次往返。参数可省：不带点名时
+/// 只回名册，旧调用方与调试桥因此不必跟着改。
 #[tauri::command(async)]
-pub fn conversation_session_jobs(session_id: String) -> Result<SessionJobsRoster, String> {
-    session_jobs::session_jobs(&session_id)
+pub fn conversation_session_jobs(
+    session_id: String,
+    settled: Option<Vec<String>>,
+) -> Result<SessionJobsRoster, String> {
+    session_jobs::session_jobs(&session_id, &settled.unwrap_or_default())
 }
 
 /// Tauri IPC 命令：读取一次后台作业的输出增量。

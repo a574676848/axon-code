@@ -1080,6 +1080,27 @@ summary:focus-visible {
 }
 
 /*
+ * 收轨态搜索格活动徽标：状态首次出现或换档时弹入一次，只动 transform 与 opacity。
+ * 全局 prefers-reduced-motion 兜底直接落终态；在跑时由内部的 .state-spinner 转，
+ * 这里不另写循环关键帧，同屏转圈仍只有全站那一份实现。
+ */
+.rail-activity-badge {
+  animation: rail-badge-in 180ms var(--ease-spring-tactile) both;
+}
+
+@keyframes rail-badge-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/*
  * 工作脉搏：输入坞工作状态行的进行标识。
  *
  * 三根依次起伏的细柱，回答的是「正在产出」而不是「在等某个过程结束」，因此不用转圈：

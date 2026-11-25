@@ -653,6 +653,8 @@ export interface SessionJobsRoster {
   epoch: string;
   /** 仍在运行的作业标识。 */
   jobIds: string[];
+  /** 界面点名要的已收口作业事实；网关没点名时为空。 */
+  settled?: SessionJobFact[];
 }
 
 /** 子代理名册的两种视图；定义在 `subagentTypes.ts`，这里原样再导出。 */

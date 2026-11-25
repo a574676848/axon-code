@@ -105,7 +105,10 @@ pub(crate) fn mirror_existing_turn(
 }
 
 /// 下一轮的轮序：除占位轮次之外的最大序号 + 1。
-fn next_sequence(detail: &ThreadDetail, active_turn_id: Option<&str>) -> u64 {
+///
+/// 窗口轮转的边界（`compaction.through_sequence`）复用同一口径：起跑镜像写入的占位轮次
+/// 序号恒为 0，只有本轮收口后才会拿到这里的值，因此边界不能取占位轮对象上的 sequence。
+pub(super) fn next_sequence(detail: &ThreadDetail, active_turn_id: Option<&str>) -> u64 {
     detail
         .turns
         .iter()

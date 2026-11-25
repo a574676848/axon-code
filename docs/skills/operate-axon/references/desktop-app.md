@@ -32,7 +32,7 @@
 | `POST /api/v1/sessions/<sessionId>/interrupt` | 中断该会话当前运行 |
 | `POST /api/v1/sessions/<sessionId>/jobs/<jobId>/stop` | 停止该会话的后台作业 |
 | `POST /api/v1/sessions/<sessionId>/subagents/<agent>/messages` | 给该会话的子代理追加消息 |
-| `GET /api/v1/sessions/<sessionId>/interactions`、`/jobs`、`/jobs/<jobId>/output`、`/subagents` | 会话详情与作业输出增量 |
+| `GET /api/v1/sessions/<sessionId>/interactions`、`/jobs`（`?settled=<id,id>` 取收口事实）、`/jobs/<jobId>/output`、`/subagents` | 会话详情、作业名册与收口事实、作业输出增量 |
 | `ws://<remote.gateway.websocket_bind>/gateway/v1/ws` | 会话事件流，按 `subscribeId` 并存多路订阅 |
 | `GET /api/v1/crons` 系列 | Cron 管理与运行历史 |
 | `GET /api/v1/observability/*` | 指标与审计看板（设置 › 用量统计，按概览、实时、活动、诊断、请求日志分页签） |
@@ -119,7 +119,7 @@
 | 配置 | `config_read`、`config_validate`、`config_validate_values`、`config_write`、`config_apply_values`、`config_reset_key` |
 | Provider 与模型 | `provider_profile_upsert`、`provider_profile_remove`、`discover_models` |
 | 工作区与会话菜单 | `workspace_list`、`workspace_add`、`workspace_remove`、`workspace_list_entries`、`workspace_read_file`、`workspace_read_bytes`、`workspace_stat_path`、`workspace_applications`、`workspace_open_default`、`workspace_open_with`、`workspace_reveal`、`session_create`、`session_rename`、`session_reorder`、`session_set_pinned`、`session_set_archived` |
-| 会话 | `conversation_submit`、`conversation_history`、`conversation_watch`、`conversation_watch_turns`、`conversation_unsubscribe`、`conversation_interrupt`、`conversation_stop_job`、`conversation_send_subagent_message`、`conversation_session_jobs`、`conversation_session_subagents`、`conversation_job_output`（`sessionId`、`jobId`、`offset`；按字节游标读一次作业输出增量，供后台任务卡的实时输出使用） |
+| 会话 | `conversation_submit`、`conversation_history`、`conversation_watch`、`conversation_watch_turns`、`conversation_unsubscribe`、`conversation_interrupt`、`conversation_stop_job`、`conversation_send_subagent_message`、`conversation_session_jobs`（`sessionId`、`settled`：点名要收口事实的作业标识，取回后端实测耗时、终态与退出码）、`conversation_session_subagents`、`conversation_job_output`（`sessionId`、`jobId`、`offset`；按字节游标读一次作业输出增量，供后台任务卡的实时输出使用） |
 | 语音 | `voice_presets`、`voice_preview`、`voice_tts`、`voice_start`、`voice_stop`、`voice_cancel`、`voice_playback_drained`、`voice_microphone_status`、`voice_open_microphone_settings` |
 | Cron | `cron_list`、`cron_config`、`cron_get`、`cron_history`、`cron_create`、`cron_update`、`cron_pause`、`cron_resume`、`cron_run`、`cron_remove` |
 | MCP 与 Skill | `mcp_list`、`mcp_upsert`、`mcp_upsert_raw`、`mcp_remove`、`mcp_runtime_status`、`mcp_runtime_refresh`、`skills_list` |

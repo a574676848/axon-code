@@ -54,8 +54,11 @@ use workbench_http_targets::{
     session_subagents_target,
 };
 
-#[path = "workbench_http_subagents_jobs.rs"]
-mod workbench_http_subagents_jobs;
+#[path = "workbench_http_subagents.rs"]
+mod workbench_http_subagents;
+
+#[path = "workbench_http_session_jobs.rs"]
+mod workbench_http_session_jobs;
 
 #[path = "workbench_http_session_readings.rs"]
 mod session_readings;
@@ -72,10 +75,11 @@ pub use session_interactions::session_interactions_payload;
 mod interaction_events;
 
 use interaction_events::interaction_events_payload;
-use workbench_http_subagents_jobs::{
-    JOB_OUTPUT_DEFAULT_MAX_BYTES, session_job_output_payload, session_jobs_payload,
-    session_subagents_payload, stop_session_job,
+use workbench_http_session_jobs::{
+    JOB_FACT_MAX_IDS, JOB_OUTPUT_DEFAULT_MAX_BYTES, session_job_output_payload,
+    session_jobs_payload, stop_session_job,
 };
+use workbench_http_subagents::session_subagents_payload;
 
 #[cfg(test)]
 #[path = "workbench_http_adapter_tests.rs"]
@@ -236,7 +240,11 @@ impl WorkbenchHttpAdapter {
         }
         let affinity_key = ActivePrimaryTurnRegistry::affinity_key(session_id);
         // 回执语义是「已请求取消」：令牌置位后由本轮在安全检查点收口，不是「已停止」。
-        if let Some(interaction_id) = self.active_primary_turns.interrupt(&affinity_key)? {
+        // 这是用户亲手停的那一条：未注入的追加由客户端转投，服务端不再重投。
+        if let Some(interaction_id) = self
+            .active_primary_turns
+            .interrupt_for_user(&affinity_key)?
+        {
             return Ok(serde_json::json!({
                 "sessionId": session_id,
                 "interrupted": true,
@@ -404,7 +412,23 @@ impl GatewayHttpRouteHandler for WorkbenchHttpAdapter {
                 )
                 .or_else(|| {
                     session_jobs_target(subpath).map(|session_id| {
-                        match session_jobs_payload(&self.axon_root, &session_id) {
+                        /*
+                         * 名册只回答「还持有谁」；界面手上有行、名册已不再持有的那些作业，
+                         * 由它点名问一次收口事实（真实耗时与终态）。点名而不是全量回放：
+                         * 台账很长的会话也只读到最后一次收口为止。
+                         */
+                        let settled = query_param(query, "settled")
+                            .map(|value| {
+                                value
+                                    .split(',')
+                                    .map(str::trim)
+                                    .filter(|id| !id.is_empty())
+                                    .take(JOB_FACT_MAX_IDS)
+                                    .map(str::to_owned)
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default();
+                        match session_jobs_payload(&self.axon_root, &session_id, &settled) {
                             Ok(payload) => GatewayHttpResponse::json(200, &payload),
                             Err(error) => GatewayHttpResponse::json(
                                 500,

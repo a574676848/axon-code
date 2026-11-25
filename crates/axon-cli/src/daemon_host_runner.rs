@@ -36,11 +36,12 @@ pub(super) use support::{
 #[path = "daemon_host_runner_lease.rs"]
 mod lease;
 
-#[path = "daemon_host_runner_workers.rs"]
-mod workers;
-
+#[path = "daemon_host_runner_requeue.rs"]
+pub(crate) mod requeue;
 #[path = "daemon_host_runner_steer_input.rs"]
 mod steer_input;
+#[path = "daemon_host_runner_workers.rs"]
+mod workers;
 use steer_input::steer_message;
 
 /// 把网关访问日志接到 Axon 统一日志上。
@@ -96,8 +97,9 @@ impl ActiveTurnSteerSink for DaemonPrimaryTurnSteerSink {
     fn try_steer(&self, interaction: &InteractionRecord) -> Result<bool, String> {
         let session_id = interaction_session_id(interaction);
         self.active_primary_turns
-            .try_send_message(
+            .try_send_steer(
                 &ActivePrimaryTurnRegistry::affinity_key(&session_id),
+                interaction.interaction_id.clone(),
                 steer_message(interaction),
             )
             .map(|result| result.is_some())
@@ -192,6 +194,7 @@ fn try_run_daemon_host(
     crate::runtime_resource_metrics::spawn_reporter(axon_root.clone());
     // 活跃主 turn 注册表由运行函数创建：问答答案注入、网关中断与后台 Worker 必须共用同一份。
     let active_primary_turns = crate::run_commands::run_steer::ActivePrimaryTurnRegistry::default();
+    active_primary_turns.install_requeue_hook(requeue::store_requeue_hook(store.clone()));
     // 主 turn 唤醒信号必须先于问答装配创建：迟到作答落库后由答案注入器直接唤醒一次领取。
     let primary_turn_signal = Arc::new(DaemonMaintenanceSignal::default());
     // 问答宿主单例与答案服务在此装配；两者共用同一个宿主实例，见 QuestionWiring。

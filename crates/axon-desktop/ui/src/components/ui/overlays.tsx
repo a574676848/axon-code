@@ -115,7 +115,7 @@ export interface DropdownProps {
    * 展开方向。默认向下；贴着窗口下缘的锚点（侧栏底栏）用向上：
    * 向下展开时菜单会被下缘夹取，压在窗口边上并盖住被点的那一行。
    */
-  placement?: 'below' | 'above';
+  placement?: 'below' | 'above' | 'right';
   /** 菜单最小宽度类名。 */
   menuClassName?: string;
   /**
@@ -200,10 +200,19 @@ export const Dropdown: React.FC<DropdownProps> = ({
       const menu = menuRef.current;
       if (anchorRect === undefined || menu === null) return;
       const margin = 12;
+      const gap = 4;
       const menuWidth = menu.offsetWidth;
       const menuHeight = menu.offsetHeight;
-      let left = align === 'end' ? anchorRect.right - menuWidth : anchorRect.left;
-      let top = placement === 'above' ? anchorRect.top - menuHeight - 4 : anchorRect.bottom + 4;
+      let left: number;
+      let top: number;
+      if (placement === 'right') {
+        // 收轨图标轨贴着窗口左缘：卡片从锚点右缘外展开，顶端与图标齐平。
+        left = anchorRect.right + gap;
+        top = anchorRect.top;
+      } else {
+        left = align === 'end' ? anchorRect.right - menuWidth : anchorRect.left;
+        top = placement === 'above' ? anchorRect.top - menuHeight - gap : anchorRect.bottom + gap;
+      }
       if (menuWidth > 0) {
         left = Math.min(Math.max(left, margin), window.innerWidth - menuWidth - margin);
       }

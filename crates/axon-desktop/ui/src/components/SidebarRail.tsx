@@ -1,6 +1,9 @@
 import React from 'react';
-import { BrainIcon, ChecklistIcon, ClockIcon, FolderIcon, IconPanelLeft, SearchIcon, SettingsIcon } from '../icons';
+import { AlertCircleIcon, BrainIcon, ChecklistIcon, ClockIcon, FolderIcon, IconPanelLeft, SearchIcon, SettingsIcon } from '../icons';
 import { NavGlide, NewSessionButton, SidebarColumn } from './ui/shell';
+import { Dropdown, MenuItem, MenuLabel, MenuSeparator } from './ui/overlays';
+import { StateDot } from './ui/surfaces';
+import type { RailActivity, RailActivityCue } from './railActivity';
 import type { NavTab } from '../types';
 
 /*
@@ -16,8 +19,12 @@ const RailButton: React.FC<{
   label: string;
   active?: boolean;
   onClick: () => void;
+  /** 右上角的活动徽标；只是状态的视觉提示，结论写在无障碍名称里。 */
+  badge?: React.ReactNode;
+  /** 徽标状态的键：换档时换键，让入场动画重新播一次。 */
+  badgeKey?: string;
   children: React.ReactNode;
-}> = ({ label, active = false, onClick, children }) => (
+}> = ({ label, active = false, onClick, badge, badgeKey, children }) => (
   <button
     type="button"
     aria-label={label}
@@ -31,8 +38,84 @@ const RailButton: React.FC<{
     }`}
   >
     {children}
+    {badge !== undefined && (
+      <span
+        key={badgeKey}
+        className="rail-activity-badge pointer-events-none absolute -right-0.5 -top-0.5 flex items-center justify-center"
+        aria-hidden="true"
+      >
+        {badge}
+      </span>
+    )}
   </button>
 );
+
+/** 徽标的无障碍名称：颜色不单独承载状态，中文结论写进按钮名称。 */
+function activityLabel(activity: RailActivity): string {
+  const parts = ['搜索会话'];
+  if (activity.questionCount > 0) parts.push(`${activity.questionCount} 个会话待答复`);
+  if (activity.runningCount > 0) parts.push(`${activity.runningCount} 个会话进行中`);
+  if (activity.unseenCount > 0) parts.push(`${activity.unseenCount} 个会话有新结果`);
+  return parts.join('，');
+}
+
+/** 徽标与卡片条目共用一份标识：待答是琥珀线性图标，其余是状态点。 */
+const ActivityMark: React.FC<{ cue: RailActivityCue }> = ({ cue }) =>
+  cue === 'question' ? (
+    <AlertCircleIcon size={14} className="text-gold-ink" />
+  ) : (
+    <StateDot state={cue} />
+  );
+
+/** 收轨态的搜索格：有会话活动时弹出动态卡片，否则维持原来的展开搜索行为。 */
+const SearchRailControl: React.FC<{
+  activity: RailActivity;
+  onOpenSearch: () => void;
+  onOpenSession: (workspaceId: string, sessionId: string) => void;
+}> = ({ activity, onOpenSearch, onOpenSession }) => {
+  const cue = activity.cue;
+  if (cue === null) {
+    return (
+      <RailButton label="搜索会话" onClick={onOpenSearch}>
+        <SearchIcon size={14} />
+      </RailButton>
+    );
+  }
+
+  return (
+    <Dropdown
+      placement="right"
+      closeOnSelect
+      menuClassName="min-w-[220px] max-w-[300px]"
+      trigger={({ open, toggle }) => (
+        <RailButton
+          label={activityLabel(activity)}
+          active={open}
+          onClick={toggle}
+          badgeKey={cue}
+          badge={<ActivityMark cue={cue} />}
+        >
+          <SearchIcon size={14} />
+        </RailButton>
+      )}
+    >
+      <MenuLabel>会话动态</MenuLabel>
+      {activity.sessions.map((item) => (
+        <MenuItem
+          key={`${item.workspaceId}:${item.sessionId}`}
+          icon={<ActivityMark cue={item.cue} />}
+          onSelect={() => onOpenSession(item.workspaceId, item.sessionId)}
+        >
+          {item.title}
+        </MenuItem>
+      ))}
+      <MenuSeparator />
+      <MenuItem icon={<SearchIcon size={14} />} onSelect={onOpenSearch}>
+        搜索会话
+      </MenuItem>
+    </Dropdown>
+  );
+};
 
 /** 图标轨上各动作的序号：滑动指示标按它在整列里的位置平移。 */
 const RAIL_ORDER = ['expand', 'new', 'search', 'workspace', 'automation', 'goals', 'memory'] as const;
@@ -45,12 +128,16 @@ const RAIL_INSET = 10;
 interface SidebarRailProps {
   /** 当前顶层视图；导航按钮据此给出选中态。 */
   currentTab: NavTab;
+  /** 收轨态搜索格的会话活动聚合：在跑与未查看终态。 */
+  activity: RailActivity;
   /** 展开侧边栏。 */
   onToggleSidebar: () => void;
   /** 新建会话。 */
   onNewSession: () => void;
   /** 展开侧边栏并聚焦搜索。 */
   onOpenSearch: () => void;
+  /** 从活动卡片进入某条会话：折叠态不展开侧栏，直接切到该会话。 */
+  onOpenSession: (workspaceId: string, sessionId: string) => void;
   /** 展开侧边栏并切到工作区视图。 */
   onSelectWorkspace: () => void;
   /** 展开侧边栏并切到自动化任务。 */
@@ -65,9 +152,11 @@ interface SidebarRailProps {
 
 export const SidebarRail: React.FC<SidebarRailProps> = ({
   currentTab,
+  activity,
   onToggleSidebar,
   onNewSession,
   onOpenSearch,
+  onOpenSession,
   onSelectWorkspace,
   onSelectAutomation,
   onSelectGoals,
@@ -109,9 +198,11 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
           <IconPanelLeft size={14} />
         </RailButton>
         <NewSessionButton compact onClick={onNewSession} />
-        <RailButton label="搜索会话" onClick={onOpenSearch}>
-          <SearchIcon size={14} />
-        </RailButton>
+        <SearchRailControl
+          activity={activity}
+          onOpenSearch={onOpenSearch}
+          onOpenSession={onOpenSession}
+        />
         <RailButton label="工作区" active={currentTab === 'workspace'} onClick={onSelectWorkspace}>
           <FolderIcon size={14} />
         </RailButton>

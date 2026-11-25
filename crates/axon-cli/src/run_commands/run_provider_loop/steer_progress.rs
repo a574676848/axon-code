@@ -97,6 +97,35 @@ mod tests {
     use crate::run_commands::run_steer::RunSteerBridge;
 
     #[test]
+    fn reopen_propagates_through_the_daemon_wrapper_chain() {
+        let bridge = RunSteerBridge::default();
+        let inbox = bridge.open();
+        let mut events = Vec::new();
+
+        {
+            let mut emit = |event| events.push(event);
+            let sink = RunProgressSink::with_session_id(&mut emit, "test-session".to_owned());
+            let progress = ProgressSteerSource::new(&inbox, Some(&sink));
+            // 守护进程用的正是这条链：作业守卫包住进度投影，再落到本轮 FIFO。
+            let source = BackgroundJobGuardSteerSource::new(progress, "owner-1".to_owned());
+
+            assert!(source.close_and_drain().is_empty());
+            assert!(
+                bridge.try_send("边界那一刻的追加".to_owned()).is_err(),
+                "边界处关闭通道是语义本身：收口前再接收会随 inbox 释放一起丢掉"
+            );
+            source.reopen();
+            bridge
+                .try_send("边界之后追加".to_owned())
+                .expect("本轮继续时通道必须重新开放，否则追加会被静默降级成下一轮");
+        }
+
+        let inputs = inbox.drain();
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].message.content, "边界之后追加");
+    }
+
+    #[test]
     fn consumed_steer_emits_user_message_at_safe_boundary() {
         let bridge = RunSteerBridge::default();
         let inbox = bridge.open();

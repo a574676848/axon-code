@@ -218,6 +218,74 @@ impl InteractionStore for SqliteRuntimeStore {
         release_work_item(self, interaction_id, lease_token, now_ms)
     }
 
+    fn requeue_steered(
+        &self,
+        interaction_id: &InteractionId,
+        now_ms: u64,
+    ) -> Result<bool, InteractionStoreError> {
+        self.initialize().map_err(runtime_error)?;
+        let mut connection = self.connection().map_err(runtime_error)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let archived: Option<(String, String)> = transaction
+            .query_row(
+                "SELECT work_id, COALESCE(terminal_kind,'') FROM work_item_history \
+                 WHERE inbox_id=?1 ORDER BY finished_at_ms DESC, work_id DESC LIMIT 1",
+                params![interaction_id.as_str()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        let Some((work_id, terminal_kind)) = archived else {
+            transaction.commit().map_err(storage_error)?;
+            return Ok(false);
+        };
+        // 只重投「被当成已投递结算」的那一条：rejected/interrupted 是另一类结论，
+        // 重投它们会替用户或执行侧改写已经给出的结论。
+        if terminal_kind != TERMINAL_UNDERSTOOD {
+            transaction.commit().map_err(storage_error)?;
+            return Ok(false);
+        }
+        // 在途表已有同一入站事实时不再插第二条：调度器可能已经把它重新领起来了。
+        let in_flight: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM work_items WHERE inbox_id=?1)",
+                params![interaction_id.as_str()],
+                |row| row.get(0),
+            )
+            .map_err(storage_error)?;
+        if in_flight {
+            transaction.commit().map_err(storage_error)?;
+            return Ok(false);
+        }
+        transaction
+            .execute(
+                "INSERT INTO work_items(execution_id,goal_id,session_id,kind,payload_json,\
+                 goal_revision,context_version,attempt,priority,dedupe_key,inbox_id,status,\
+                 created_at_ms,updated_at_ms) \
+                 SELECT work_id,goal_id,session_id,kind,payload_json,goal_revision,\
+                 context_version,attempt+1,priority,dedupe_key,inbox_id,?2,created_at_ms,?3 \
+                 FROM work_item_history WHERE work_id=?1",
+                params![
+                    work_id,
+                    WORK_QUEUED,
+                    i64_value(now_ms).map_err(runtime_error)?
+                ],
+            )
+            .map_err(storage_error)?;
+        // 归档行必须一起撤掉：领取查询用「没有历史行」判定从未处理过，留着它就永远领不到。
+        // 这是归档表唯一的删除点，理由是该次结算是虚的：什么都没投递出去。
+        transaction
+            .execute(
+                "DELETE FROM work_item_history WHERE inbox_id=?1",
+                params![interaction_id.as_str()],
+            )
+            .map_err(storage_error)?;
+        transaction.commit().map_err(storage_error)?;
+        Ok(true)
+    }
+
     fn mark_rejected(
         &self,
         interaction_id: &InteractionId,

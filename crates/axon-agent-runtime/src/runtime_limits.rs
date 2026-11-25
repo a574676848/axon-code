@@ -124,6 +124,17 @@ pub const COMPLETION_NOTICE_DEDUP_CAPACITY: usize = 256;
 /// pre-final 守卫至多延迟轮数（合同 §5.1.6）。
 pub const PRE_FINAL_GUARD_MAX_DELAY_ROUNDS: u32 = 1;
 
+// ---------- turn 循环推进阈值 ----------
+
+/// 连续空转轮的上限：provider 既不收口、也不产出可执行动作的连续轮数。
+///
+/// 判据是「零工具调用 + `finish_reason` 不是 stop + 边界处没有取到新的运行中追加」。
+/// 这种轮次不推进任何东西，每一轮都在重发同一份全量上下文：没有上限时，供应商持续回
+/// 一个「未完成」的答复就能把预算无限烧在同一个请求上（现场：同一轮里空转反复出现，
+/// token 只增不减）。到达上限按最终答复收口，已产出的正文照常返回，`max_tokens_truncated`
+/// 仍按既有口径标记被预算掐断的事实。
+pub const MAX_IDLE_CONTINUE_ROUNDS: u32 = 8;
+
 // ---------- 前台会话回收通知阈值 ----------
 
 /// 会话回收通知的命令与工作目录展示上限。

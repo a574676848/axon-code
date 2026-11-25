@@ -566,10 +566,26 @@ pub(crate) fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
             )?,
         )
         .map_err(stringify)?),
-        "conversation_session_jobs" => Ok(serde_json::to_value(
-            conversation::session_jobs::session_jobs(&as_str("sessionId")?)?,
-        )
-        .map_err(stringify)?),
+        "conversation_session_jobs" => {
+            // 收口事实按点名取：只回界面手上那几条作业，不整段回放台账。
+            let settled = args
+                .get("settled")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| item.as_str().map(str::to_owned))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            Ok(
+                serde_json::to_value(conversation::session_jobs::session_jobs(
+                    &as_str("sessionId")?,
+                    &settled,
+                )?)
+                .map_err(stringify)?,
+            )
+        }
         "conversation_job_output" => {
             let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(0);
             Ok(serde_json::to_value(conversation::job_output::job_output(

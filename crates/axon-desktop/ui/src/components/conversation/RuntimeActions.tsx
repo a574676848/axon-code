@@ -8,8 +8,9 @@ import {
 } from '../../conversation/format';
 import type { JobRow, SubagentRow } from '../../conversation/transcript';
 import { canonicalAgentId, mergeSubagentRoster, reconciledSubagentStatus, shouldPollSubagentRoster } from '../../conversation/subagentRoster';
-import type { SessionSubagentSummary } from '../../types';
+import type { SessionJobFact, SessionSubagentSummary } from '../../types';
 import { isActiveJob, JOB_ROSTER_REFRESH_MS } from '../../conversation/runtimeFacts';
+import { settlementAskOf } from '../../conversation/jobRoster';
 import { Dropdown } from '../ui/overlays';
 import { StateDot, type StateDotState } from '../ui/surfaces';
 import { JobLine, SectionHeader } from './JobPanel';
@@ -187,7 +188,27 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
    * 免得网络慢一拍就把正在跑的作业显示成已结束。
    */
   const [liveJobIds, setLiveJobIds] = React.useState<Set<string> | null>(null);
+  /** 后端给出的收口事实：真实耗时、终态与退出码，按**行**标识索引。 */
+  const [settledFacts, setSettledFacts] = React.useState<Record<string, SessionJobFact>>({});
+  /** 已经问过收口事实的作业标识：同一条作业的终态不会再变，只问一次。 */
+  const askedSettledRef = React.useRef<Set<string>>(new Set());
+  /** 上一次对账看到的后端进程代际：代际一变，作业标识会从 1 重新计数。 */
+  const epochRef = React.useRef('');
+  /** 作业行的最新快照：对账回调里要按当前台账点名，不能读挂载时那一份。 */
+  const jobsRef = React.useRef<JobRow[]>(jobs);
+  React.useEffect(() => {
+    jobsRef.current = jobs;
+  }, [jobs]);
   const armTimer = React.useRef<number | null>(null);
+
+  // 换车道即清空收口事实与活名册：上一条车道的作业结局与在跑集合都与这一条无关。
+  // 名册回到「还没对过账」的 null，`isLive` 据此不把任何行判成失效，免得新车道里
+  // 快照还写着 running 的历史行在名册回来之前先闪一下「已结束」。
+  React.useEffect(() => {
+    askedSettledRef.current = new Set();
+    setSettledFacts({});
+    setLiveJobIds(null);
+  }, [sessionId]);
 
   // 作业行的对账：transcript 投影是历史事实，进程重启后旧行不会自己消失，
   // 因此定期向后端要一次活作业名册，不在这份名册里的行不再算「运行中」。
@@ -201,7 +222,61 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
       void ipc
         .conversationSessionJobs(sessionId)
         .then((roster) => {
-          if (!cancelled) setLiveJobIds(new Set(roster.jobIds));
+          if (cancelled) return;
+          /*
+           * 后端进程代际一变，作业标识就从 1 重新计数：上一代的收口事实与「已经问过」
+           * 记录必须一起作废，否则新一代同名作业的收口事实会被永久挡掉。
+           */
+          if (roster.epoch.length > 0 && roster.epoch !== epochRef.current) {
+            epochRef.current = roster.epoch;
+            askedSettledRef.current = new Set();
+            setSettledFacts({});
+          }
+          const live = new Set(roster.jobIds);
+          setLiveJobIds(live);
+          /*
+           * 名册已不再持有、又没有实测耗时的行：顺带问一次它们的收口事实。
+           * 启动回执测的是那条调用本身（常见 0 秒），拿它当作业耗时就是造假；
+           * 真实耗时只在后端事件日志里，界面因此点名要一次，取到即不再问。
+           * 该点哪些交给 `settlementAskOf`：它同时管住「还在跑的别问」「问过的别问」
+           * 与「标识重用只认最后一行」。
+           */
+          const ask = settlementAskOf({
+            jobs: jobsRef.current,
+            live,
+            asked: askedSettledRef.current,
+          });
+          if (ask.ids.length === 0) return;
+          for (const id of ask.ids) askedSettledRef.current.add(id);
+          void ipc
+            .conversationSessionJobs(sessionId, ask.ids)
+            .then((detail) => {
+              if (cancelled) return;
+              const facts = detail.settled ?? [];
+              if (facts.length === 0) return;
+              const byJobId = new Map(facts.map((fact) => [fact.jobId, fact]));
+              /*
+               * 事实按**行**落账，不按作业标识：标识在进程重启后从 1 重计，
+               * 按标识落账会让新一代作业读到上一代的结局。
+               */
+              setSettledFacts((current) => {
+                let next: Record<string, SessionJobFact> | null = null;
+                for (const row of ask.rows) {
+                  const fact = row.jobId === null ? undefined : byJobId.get(row.jobId);
+                  if (fact === undefined) continue;
+                  next ??= { ...current };
+                  next[row.id] = fact;
+                }
+                return next ?? current;
+              });
+            })
+            .catch(() => {
+              /*
+               * 取不到收口事实就按「没有事实」呈现：不画耗时，也不臆造一个。
+               * 不在下一拍重试：一行耗时属于可缺的读数，为它每十秒重发一次请求，
+               * 代价远大于收益；重新进入会话时会再问一次。
+               */
+            });
         })
         .catch(() => {
           // 对账失败保持上一次结论：宁可短暂显示旧状态，也不要误判成已结束。
@@ -249,6 +324,12 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
   const reasonOf = React.useCallback(
     (job: JobRow) => stopped[job.id] ?? null,
     [stopped],
+  );
+
+  /** 这一行的收口事实；没有作业标识或还没取到时为空。 */
+  const factOf = React.useCallback(
+    (job: JobRow): SessionJobFact | null => settledFacts[job.id] ?? null,
+    [settledFacts],
   );
 
   /** 两击式停止：首击武装并起表，窗口内再击一次才发请求。 */
@@ -537,6 +618,7 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
               armed={armed === job.id}
               stopping={stopping === job.id}
               nowMs={nowMs}
+              fact={factOf(job)}
               onToggle={() => setExpandedId((current) => (current === job.id ? null : job.id))}
               onStop={requestStop}
             />
@@ -578,6 +660,7 @@ export const RuntimeActions: React.FC<RuntimeActionsProps> = ({
                     armed={false}
                     stopping={false}
                     nowMs={nowMs}
+                    fact={factOf(job)}
                     onToggle={() => setExpandedId((current) => (current === job.id ? null : job.id))}
                     onStop={requestStop}
                   />

@@ -13,6 +13,7 @@ import { isRunning, type SessionRuntimeFacts } from '../conversation/runtimeFact
 import { Banner, Text } from './ui/surfaces';
 import { NewSessionButton, NavGlide, SidebarColumn } from './ui/shell';
 import { SidebarRail } from './SidebarRail';
+import { useRailActivity } from './useRailActivity';
 import { SidebarBrandBar, SidebarSectionHeader } from './SidebarHeader';
 import {
   ROW_ICON_COLUMN,
@@ -452,6 +453,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
     ],
   );
 
+  /** 收轨态徽标与卡片跳转：清单、标识、实时轮次都来自外壳，这里只消费。 */
+  const { activity: railActivityView, openSession: openSessionFromRail } = useRailActivity({
+    workspaces,
+    sessionMarks,
+    runtime,
+    onSelectSession,
+    onSelectTab,
+  });
+
   /*
    * 收轨态整块不渲染连接胶囊，也不给 RailButton 加状态槽：图标轨每一格都是一个
    * 导航目标，混入一枚状态入口会被读成第二个视图（与设计系统 §14.1.1「图标轨不
@@ -462,12 +472,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
     return (
       <SidebarRail
         currentTab={currentTab}
+        activity={railActivityView}
         onToggleSidebar={onToggleSidebar}
         onNewSession={() => void createSession()}
         onOpenSearch={() => {
           onToggleSidebar();
           setSearching(true);
         }}
+        onOpenSession={openSessionFromRail}
         onSelectWorkspace={() => {
           onToggleSidebar();
           onSelectTab('workspace');

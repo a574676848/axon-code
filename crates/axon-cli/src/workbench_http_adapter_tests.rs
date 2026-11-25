@@ -4,6 +4,7 @@ use super::*;
 
 use axon_agent_runtime::ShellCommandToolRuntime;
 use axon_agent_runtime::job_runtime::{JOB_REASON_USER_STOP, JobId, JobRuntime, JobSpec};
+use axon_session::EventLogStore as _;
 use std::sync::Arc;
 
 /// 需要人工收口的命令：给停止入口留出操作窗口。
@@ -203,10 +204,158 @@ fn empty_roster_is_returned_for_a_session_without_runtime() {
     let _ = runtime_store(&root)
         .create_session(&other, ".", 1)
         .expect("登记会话必须成功");
-    let payload = session_jobs_payload(&root, "session-session-no-runtime")
+    let payload = session_jobs_payload(&root, "session-session-no-runtime", &[])
         .expect("没有运行会话时名册应为空而不是报错");
     assert_eq!(payload["jobIds"], serde_json::json!([]));
     assert!(payload["epoch"].as_str().is_some_and(|v| !v.is_empty()));
+}
+
+#[test]
+fn roster_lists_jobs_owned_by_the_session_identity_and_its_run_window() {
+    let root = axon_test_support::test_temp_root();
+    let session_id = DaemonSessionId::new("session-session-roster").expect("车道标识合法");
+    let record = runtime_store(&root)
+        .create_session(&session_id, ".", 1)
+        .expect("登记会话必须成功");
+    // 生产路径里 Shell 工具把会话身份写进作业 owner，运行窗口是另一个标识。
+    // 名册只按窗口查就会恒空，界面把仍在跑的作业判成已结束。
+    assert_ne!(record.current_run_id, session_id.as_str());
+    let owner = session_id.as_str();
+    let by_session = start_job(owner);
+    let by_run_window = start_job(&record.current_run_id);
+    let other = start_job("session-session-roster-other");
+
+    // 点名一条仍在名册里的作业：它不得被报成收口，也不该被收口事实取代。
+    let payload =
+        session_jobs_payload(&root, owner, &[by_session.0.to_string()]).expect("名册必须可读");
+    let mut listed = payload["jobIds"]
+        .as_array()
+        .expect("名册是数组")
+        .iter()
+        .map(|value| value.as_str().unwrap_or_default().to_owned())
+        .collect::<Vec<_>>();
+    listed.sort_unstable();
+    let mut expected = vec![by_session.0.to_string(), by_run_window.0.to_string()];
+    expected.sort_unstable();
+    assert_eq!(listed, expected, "名册只列本车道仍在跑的作业");
+    assert_eq!(
+        payload["settled"],
+        serde_json::json!([]),
+        "仍在跑的作业即使被点名，也不得被报成收口"
+    );
+
+    let _ = JobRuntime::global().kill(by_session, owner);
+    let _ = JobRuntime::global().kill(by_run_window, &record.current_run_id);
+    let _ = JobRuntime::global().kill(other, "session-session-roster-other");
+}
+
+/// 在会话事件日志里追加一条作业事件，形状与运行侧落盘的一致。
+fn append_job_event(
+    store: &SqliteRuntimeStore,
+    session: &DaemonSessionId,
+    kind: &str,
+    payload: &str,
+) {
+    let host_id = axon_domain::RuntimeHostId::new(format!("test-jobs-{}", std::process::id()))
+        .expect("host 标识合法");
+    let host = store
+        .claim_host(&host_id, std::process::id(), None, 1, 60_000)
+        .expect("取得 host 租约");
+    store
+        .append_events(session, &host, &[(kind.to_owned(), payload.to_owned())], 2)
+        .expect("写入作业事件必须成功");
+}
+
+#[test]
+fn roster_reports_settled_facts_measured_by_the_backend() {
+    let root = axon_test_support::test_temp_root();
+    let session_id = DaemonSessionId::new("session-session-settled").expect("车道标识合法");
+    let store = runtime_store(&root);
+    let _ = store
+        .create_session(&session_id, ".", 1)
+        .expect("登记会话必须成功");
+    // 收口事实来自落盘事件：耗时是作业自己的实测值，不是启动回执的工具耗时。
+    append_job_event(
+        &store,
+        &session_id,
+        "job_started",
+        r#"{"jobId":"7","kind":"shell","owner":"session-session-settled","startedAtMs":100}"#,
+    );
+    append_job_event(
+        &store,
+        &session_id,
+        "job_completed",
+        r#"{"jobId":"7","status":"completed","elapsedMs":192340,"exitCode":0}"#,
+    );
+
+    let payload = session_jobs_payload(
+        &root,
+        "session-session-settled",
+        &["7".to_owned(), "9".to_owned()],
+    )
+    .expect("名册必须可读");
+    assert_eq!(payload["jobIds"], serde_json::json!([]));
+    let settled = payload["settled"].as_array().expect("收口事实是数组");
+    assert_eq!(settled.len(), 1, "只回点名且确有收口事实的那一条");
+    assert_eq!(settled[0]["jobId"], serde_json::json!("7"));
+    assert_eq!(settled[0]["status"], serde_json::json!("completed"));
+    assert_eq!(settled[0]["elapsedMs"], serde_json::json!(192340));
+    assert_eq!(settled[0]["exitCode"], serde_json::json!(0));
+}
+
+#[test]
+fn settled_facts_take_the_most_recent_close_for_one_job_id() {
+    let root = axon_test_support::test_temp_root();
+    let session_id = DaemonSessionId::new("session-session-reclose").expect("车道标识合法");
+    let store = runtime_store(&root);
+    let _ = store
+        .create_session(&session_id, ".", 1)
+        .expect("登记会话必须成功");
+    // 作业标识在进程重启后从 1 重计，同一段日志里可以存在同一个 id 的两代收口记录。
+    for elapsed in [1_000_u64, 9_000] {
+        append_job_event(
+            &store,
+            &session_id,
+            "job_completed",
+            &format!(r#"{{"jobId":"7","status":"completed","elapsedMs":{elapsed}}}"#),
+        );
+    }
+    let payload = session_jobs_payload(&root, "session-session-reclose", &["7".to_owned()])
+        .expect("名册必须可读");
+    assert_eq!(
+        payload["settled"][0]["elapsedMs"],
+        serde_json::json!(9_000),
+        "倒序扫描必须取最近一次收口，早先的记录不得覆盖它"
+    );
+    assert_eq!(
+        payload["settled"].as_array().map(Vec::len),
+        Some(1),
+        "同一个作业标识只占一行"
+    );
+}
+
+#[test]
+fn settled_facts_stay_inside_the_asking_lane() {
+    let root = axon_test_support::test_temp_root();
+    let store = runtime_store(&root);
+    let mine = DaemonSessionId::new("session-session-mine").expect("车道标识合法");
+    let other = DaemonSessionId::new("session-session-other").expect("车道标识合法");
+    let _ = store.create_session(&mine, ".", 1).expect("登记本车道");
+    let _ = store.create_session(&other, ".", 1).expect("登记他人车道");
+    append_job_event(
+        &store,
+        &other,
+        "job_completed",
+        r#"{"jobId":"8","status":"failed","elapsedMs":5000,"exitCode":1}"#,
+    );
+
+    let payload = session_jobs_payload(&root, "session-session-mine", &["8".to_owned()])
+        .expect("名册必须可读");
+    assert_eq!(
+        payload["settled"],
+        serde_json::json!([]),
+        "别人车道的作业不得出现在本车道的收口事实里"
+    );
 }
 
 #[test]

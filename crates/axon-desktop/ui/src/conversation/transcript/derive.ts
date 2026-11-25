@@ -37,13 +37,40 @@ export function jobRowOf(cell: TurnState['cells'][number]): JobRow | null {
     command: cell.command.length > 0 ? cell.command : cell.summary,
     status: cell.jobStatus ?? cell.status,
     output: cell.output,
-    durationMs: cell.durationMs,
+    /*
+     * 发起后台作业的那次调用几乎立刻返回，工具耗时测的是这条回执（常见为 0 秒），
+     * 不是作业本身。把它当作业耗时，收口后的行会顶着「已结束 0秒」。
+     * 作业自己的耗时只有两处可依：在跑时按服务端记录的启动时刻走秒，
+     * 收口后取后端实测值（名册的收口事实与会话历史清单同源）。
+     */
+    durationMs: null,
     startedAtMs: cell.startedAtMs,
     exitCode: cell.exitCode,
     jobId: cell.jobId,
     jobStatus: cell.jobStatus,
     fullOutputAvailable: cell.fullOutputAvailable,
   };
+}
+
+/**
+ * 后台作业行此刻该显示的耗时。
+ *
+ * 三种证据按强度取用，绝不拿启动回执的工具耗时冒充作业耗时：
+ * - 在跑：从服务端记录的启动时刻走到这一刻，读数随秒增长；
+ * - 已收口且拿到后端实测值（名册的收口事实，或历史清单里的 `elapsedMs`）：用它；
+ * - 一条证据都没有：返回 null，界面不画耗时。
+ */
+export function jobElapsedMs(
+  job: JobRow,
+  running: boolean,
+  nowMs: number,
+  measuredMs: number | null,
+): number | null {
+  if (running) {
+    const start = job.startedAtMs;
+    return start !== null && Number.isFinite(start) ? Math.max(0, nowMs - start) : null;
+  }
+  return measuredMs ?? job.durationMs;
 }
 
 /** 作业读取类工具：它们读的是**别的**作业，本身不是后台任务。 */

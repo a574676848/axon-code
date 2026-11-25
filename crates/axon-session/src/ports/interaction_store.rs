@@ -93,6 +93,22 @@ pub trait InteractionStore: Send + Sync {
         now_ms: u64,
     ) -> Result<(), InteractionStoreError>;
 
+    /// 把一条「已结算为 understood、但活跃主 turn 收口时并未取走」的追加重新排回队列。
+    ///
+    /// 运行中追加命中活跃 turn 时会在入站侧立刻结算成 understood；而运行侧可能因为等待
+    /// 外部动作、取消或失败直接收口，边界处没有取走它。这条 Interaction 已经落在
+    /// durable inbox 里，只差一次重新排队：否则主 turn 调度器不会再领取，用户看到的是
+    /// 「未送达」，服务端却记着已投递。
+    ///
+    /// 与 [`Self::release_processing`] 的区别是它**不需要有效 lease**：走到这里时该轮
+    /// 早已结算，令牌随结算失效，守卫落在「归档行的终态就是 understood」这一事实上。
+    /// 返回是否真的重投了一条；没有可重投的归档行时返回 `false`（幂等）。
+    fn requeue_steered(
+        &self,
+        interaction_id: &InteractionId,
+        now_ms: u64,
+    ) -> Result<bool, InteractionStoreError>;
+
     /// 提交 understood 状态并释放 lease。
     fn mark_understood(
         &self,

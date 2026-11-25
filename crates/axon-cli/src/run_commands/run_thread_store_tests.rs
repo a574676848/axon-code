@@ -14,6 +14,9 @@ const TEST_FREEFORM_PATCH: &str =
 #[path = "run_thread_store_model_history_tests.rs"]
 mod model_history_tests;
 
+#[path = "run_thread_store_window_boundary_tests.rs"]
+mod window_boundary_tests;
+
 #[test]
 fn structured_tool_history_roundtrips_complete_arguments_operation_and_receipt() {
     let record = session_record_with_tools();

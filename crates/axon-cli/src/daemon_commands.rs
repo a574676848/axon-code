@@ -12,6 +12,9 @@ use std::{
 
 #[path = "daemon_host_runner.rs"]
 mod daemon_host_runner;
+/// 收口回投落点的装配实现：生产路径在模块内直接调用，跨模块用例经这里取同一份实现。
+#[cfg(test)]
+pub(crate) use daemon_host_runner::requeue::store_requeue_hook;
 #[path = "daemon_service_manager.rs"]
 mod daemon_service_manager;
 #[path = "daemon_stop_request.rs"]

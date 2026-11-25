@@ -16,9 +16,7 @@ import type {
   TerminalExitFrame,
   GatewayHealth,
   InterruptReceipt,
-  JobStopReceipt,
   SessionInteractions,
-  SessionJobsRoster,
   SessionSubagents,
   SubagentMessageReceipt,
   ServiceAction,
@@ -413,9 +411,11 @@ export const conversationUnsubscribe = (subscribeId: string): Promise<void> =>
 export const conversationInterrupt = (sessionId: string): Promise<InterruptReceipt> =>
   call('conversation_interrupt', { sessionId });
 
-/** 用户手动停止某条车道上的后台作业。 */
-export const conversationStopJob = (sessionId: string, jobId: string): Promise<JobStopReceipt> =>
-  call('conversation_stop_job', { sessionId, jobId });
+/*
+ * 后台作业的停止、名册（含收口事实）与输出增量在 `ipcJobs` 里：它们共用同一份
+ * 作业事实源，单独成篇才守得住单文件行数。调用方仍从 `ipc` 取，不必知道分篇。
+ */
+export * from './ipcJobs';
 
 /** 向正在运行的子代理投递一条用户消息。 */
 export const conversationSendSubagentMessage = (
@@ -424,37 +424,6 @@ export const conversationSendSubagentMessage = (
   content: string,
 ): Promise<SubagentMessageReceipt> =>
   call('conversation_send_subagent_message', { sessionId, agentId, content });
-
-/** 读取一条车道上仍在运行的后台作业名册。 */
-export const conversationSessionJobs = (sessionId: string): Promise<SessionJobsRoster> =>
-  call('conversation_session_jobs', { sessionId });
-
-/** 后台作业输出的一页：网关按字节游标增量给出。 */
-export interface JobOutputStream {
-  sessionId: string;
-  jobId: string;
-  /** 本次读取的起始字节偏移（已在归档头部之后）。 */
-  offset: number;
-  /** 下一次读取的字节偏移。 */
-  nextOffset: number;
-  text: string;
-  /** 是否已到归档末尾；作业在跑时同样可能为真。 */
-  eof: boolean;
-  running: boolean;
-  status: string | null;
-  exitCode: number | null;
-  elapsedMs: number | null;
-  fullOutputAvailable: boolean;
-  /** 读不到的原因；为空表示这一页就是真实输出。 */
-  unavailable: string | null;
-}
-
-/** 读取一次后台作业的输出增量。 */
-export const conversationJobOutput = (
-  sessionId: string,
-  jobId: string,
-  offset: number,
-): Promise<JobOutputStream> => call('conversation_job_output', { sessionId, jobId, offset });
 
 /** 读取一条车道下的子代理会话清单。 */
 export const conversationSessionSubagents = (sessionId: string): Promise<SessionSubagents> =>

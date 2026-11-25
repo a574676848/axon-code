@@ -30,11 +30,26 @@ struct RegisteredDeferredMessage {
     inbox: RunSteerInbox,
 }
 
-#[derive(Debug, Default)]
+/// 收口时把「已结算但没取走」的入站事实交还调用方重投。
+///
+/// 只有守护进程装配了落点（`InteractionStore::requeue_steered`）；CLI 直跑没有
+/// durable 入站表，钩子留空，收口时只留痕。
+pub(crate) type SteerRequeueHook =
+    Arc<dyn Fn(&InteractionId, u64) -> Result<bool, String> + Send + Sync>;
+
+#[derive(Default)]
 struct RunSteerState {
     accepting: bool,
     pending: VecDeque<AgentTurnSteerInput>,
     pending_bytes: usize,
+    /// 与 `pending` 逐位对齐的入站登记：`Some` 表示这条追加来自一条已在入站侧结算成
+    /// understood 的 durable Interaction。它一旦没被取走，本 turn 收口时必须回投，
+    /// 否则调度器不会再领取，而服务端记着「已投递」。
+    tracked: VecDeque<Option<InteractionId>>,
+    /// 用户主动中断过：客户端会把未注入的追加转投下一条，服务端不得再重投，
+    /// 否则同一句话会跑两轮，双倍消耗预算。
+    user_interrupted: bool,
+    requeue: Option<SteerRequeueHook>,
 }
 
 #[derive(Clone, Default)]
@@ -57,6 +72,8 @@ impl RunSteerBridge {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.pending.clear();
         state.pending_bytes = 0;
+        state.tracked.clear();
+        state.user_interrupted = false;
         state.accepting = true;
         RunSteerInbox {
             state: Arc::clone(&self.state),
@@ -74,6 +91,7 @@ impl RunSteerBridge {
                 message: AgentModelMessage::text("user", text),
                 quoted_message: None,
             },
+            None,
         )
     }
 }
@@ -81,6 +99,7 @@ impl RunSteerBridge {
 fn try_send_input(
     state: &Arc<Mutex<RunSteerState>>,
     input: AgentTurnSteerInput,
+    tracked: Option<InteractionId>,
 ) -> Result<(), RunSteerSendError> {
     let mut state = state
         .lock()
@@ -96,6 +115,7 @@ fn try_send_input(
         return Err(RunSteerSendError::CapacityExceeded);
     }
     state.pending.push_back(input);
+    state.tracked.push_back(tracked);
     state.pending_bytes = pending_bytes;
     Ok(())
 }
@@ -160,15 +180,21 @@ pub(crate) fn try_send_deferred_runtime_note(
         .get(session_key)
         .ok_or(RunSteerSendError::Inactive)?
         .inbox;
-    inbox.try_send_input(AgentTurnSteerInput {
-        message: AgentModelMessage::runtime_note(kind, content),
-        quoted_message: None,
-    })
+    inbox.try_send_input(
+        AgentTurnSteerInput {
+            message: AgentModelMessage::runtime_note(kind, content),
+            quoted_message: None,
+        },
+        None,
+    )
 }
 
 fn run_deferred_message_registry() -> &'static Mutex<HashMap<String, RegisteredDeferredMessage>> {
     RUN_DEFERRED_MESSAGE_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
+
+#[path = "run_steer_requeue.rs"]
+mod requeue;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RunSteerSendError {
@@ -294,8 +320,25 @@ impl Drop for RunSteerInbox {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.accepting = false;
+            // 收口时还排着的追加没有被取走：凡是登记过入站事实的，都必须交还调用方重投。
+            // 它们早已在入站侧结算成 understood，不回投就再也不会被领取。
+            let leftovers: Vec<InteractionId> = state.tracked.drain(..).flatten().collect();
+            let user_interrupted = state.user_interrupted;
             state.pending.clear();
             state.pending_bytes = 0;
+            let hook = state.requeue.clone();
+            drop(state);
+            if user_interrupted {
+                // 用户亲手停的：桌面端会把它们转投下一条，服务端再重投就是双份。
+                if !leftovers.is_empty() {
+                    axon_logger::info(&format!(
+                        "用户中断：{} 条未取走的追加交由客户端转投，服务端不重投",
+                        leftovers.len()
+                    ));
+                }
+                return;
+            }
+            requeue::requeue_leftovers(hook.as_ref(), &leftovers);
         }
     }
 }
@@ -328,6 +371,8 @@ impl AgentTurnSteerSource for RunSteerInbox {
 
 fn drain_pending(state: &mut RunSteerState) -> Vec<AgentTurnSteerInput> {
     state.pending_bytes = 0;
+    // 取走即已投递：登记一起清掉，收口时不得再回投它们。
+    state.tracked.clear();
     state.pending.drain(..).collect()
 }
 
@@ -341,10 +386,29 @@ impl RunSteerInbox {
         &self,
         message: AgentModelMessage,
     ) -> Result<(), RunSteerSendError> {
-        self.try_send_input(AgentTurnSteerInput {
-            message,
-            quoted_message: None,
-        })
+        self.try_send_input(
+            AgentTurnSteerInput {
+                message,
+                quoted_message: None,
+            },
+            None,
+        )
+    }
+
+    /// 装上收口回投落点；由守护进程的注册表在登记活跃主 turn 时装配。
+    pub(crate) fn install_requeue_hook(&self, hook: Option<SteerRequeueHook>) {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .requeue = hook;
+    }
+
+    /// 记下「这一轮是用户亲手停的」：收口时不再重投，交给客户端转投。
+    fn mark_user_interrupt(&self) {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .user_interrupted = true;
     }
 
     /// 子代理投递通道句柄；装配层用它装上本轮的控制面。
@@ -372,8 +436,12 @@ impl RunSteerInbox {
         self.subagents.deliver(agent, content)
     }
 
-    fn try_send_input(&self, input: AgentTurnSteerInput) -> Result<(), RunSteerSendError> {
-        try_send_input(&self.state, input)
+    fn try_send_input(
+        &self,
+        input: AgentTurnSteerInput,
+        tracked: Option<InteractionId>,
+    ) -> Result<(), RunSteerSendError> {
+        try_send_input(&self.state, input, tracked)
     }
 }
 
@@ -389,9 +457,22 @@ struct RegisteredPrimaryTurn {
 #[derive(Clone, Default)]
 pub(crate) struct ActivePrimaryTurnRegistry {
     entries: Arc<Mutex<HashMap<String, RegisteredPrimaryTurn>>>,
+    /// 收口回投落点；守护进程装配，CLI 直跑留空。登记活跃主 turn 时装进该轮队列。
+    ///
+    /// 必须与 `entries` 一样按引用共享：注册表会被克隆进多个装配点（问答、网关、
+    /// provider runner），装配只发生一次，克隆必须都能看到。
+    requeue: Arc<Mutex<Option<SteerRequeueHook>>>,
 }
 
 impl ActivePrimaryTurnRegistry {
+    /// 装上收口回投落点：只装配一次，之后登记的每一轮都继承它。
+    pub(crate) fn install_requeue_hook(&self, hook: SteerRequeueHook) {
+        *self
+            .requeue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
+    }
+
     pub(crate) fn register(
         &self,
         affinity_key: &str,
@@ -399,6 +480,11 @@ impl ActivePrimaryTurnRegistry {
         inbox: RunSteerInbox,
         cancel_token: RunCancelToken,
     ) -> Result<ActivePrimaryTurnRegistration, String> {
+        let requeue = self
+            .requeue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         let mut entries = self
             .entries
             .lock()
@@ -406,6 +492,7 @@ impl ActivePrimaryTurnRegistry {
         if entries.contains_key(affinity_key) {
             return Err(ACTIVE_PRIMARY_TURN_CONFLICT_ERROR.to_owned());
         }
+        inbox.install_requeue_hook(requeue);
         let registration_id = RUN_STEER_REGISTRATION_ID.fetch_add(1, Ordering::Relaxed);
         entries.insert(
             affinity_key.to_owned(),
@@ -448,6 +535,29 @@ impl ActivePrimaryTurnRegistry {
         affinity_key: &str,
         message: AgentModelMessage,
     ) -> Result<Option<InteractionId>, String> {
+        self.send_into_turn(affinity_key, message, None)
+    }
+
+    /// 注入一条来自 durable 入站事实的追加，并登记它的标识以便收口回投。
+    ///
+    /// 与 [`Self::try_send_message`] 的唯一差别是「登记」：入站侧在命中活跃 turn 时
+    /// 已把该 Interaction 结算成 understood，因此本 turn 收口时若还没取走它，必须由
+    /// 回投钩子重新排队，否则它再也不会被领取。
+    pub(crate) fn try_send_steer(
+        &self,
+        affinity_key: &str,
+        interaction_id: InteractionId,
+        message: AgentModelMessage,
+    ) -> Result<Option<InteractionId>, String> {
+        self.send_into_turn(affinity_key, message, Some(interaction_id))
+    }
+
+    fn send_into_turn(
+        &self,
+        affinity_key: &str,
+        message: AgentModelMessage,
+        tracked: Option<InteractionId>,
+    ) -> Result<Option<InteractionId>, String> {
         let turn = self
             .entries
             .lock()
@@ -457,10 +567,13 @@ impl ActivePrimaryTurnRegistry {
         let Some(turn) = turn else {
             return Ok(None);
         };
-        match turn.inbox.try_send_input(AgentTurnSteerInput {
-            message,
-            quoted_message: None,
-        }) {
+        match turn.inbox.try_send_input(
+            AgentTurnSteerInput {
+                message,
+                quoted_message: None,
+            },
+            tracked,
+        ) {
             Ok(()) => Ok(Some(turn.interaction_id)),
             Err(RunSteerSendError::Inactive) => Ok(None),
             Err(RunSteerSendError::CapacityExceeded) => {
@@ -500,19 +613,39 @@ impl ActivePrimaryTurnRegistry {
     /// 都会立即收口，本轮按「已中断」结束。返回被中断的 Interaction 标识；
     /// `Ok(None)` 表示该车道当前没有活跃主 turn，调用方应如实回执而不是假装成功。
     pub(crate) fn interrupt(&self, affinity_key: &str) -> Result<Option<InteractionId>, String> {
-        let turn = self
-            .entries
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(affinity_key)
-            .cloned();
-        let Some(turn) = turn else {
+        let Some(turn) = self.registered_turn(affinity_key) else {
             return Ok(None);
         };
         // 先把 entry 取出锁外再置位：取消会同步唤醒等待中的 provider 流，
         // 持锁调用会让并发的注册与注销一起阻塞。
         turn.cancel_token.cancel();
         Ok(Some(turn.interaction_id))
+    }
+
+    /// 用户主动中断（网关中断 / ESC）。
+    ///
+    /// 与 [`Self::interrupt`] 的唯一差别是把「客户端会接手」这一事实记进本轮队列：
+    /// 桌面端在中断时会把未注入的追加转投下一条，服务端若同时重投，同一句话就会跑
+    /// 两轮、双倍消耗预算。租约丢失与停机走的仍是 [`Self::interrupt`]，那两条路径
+    /// 没有客户端接手，必须由服务端重投。
+    pub(crate) fn interrupt_for_user(
+        &self,
+        affinity_key: &str,
+    ) -> Result<Option<InteractionId>, String> {
+        let Some(turn) = self.registered_turn(affinity_key) else {
+            return Ok(None);
+        };
+        turn.inbox.mark_user_interrupt();
+        turn.cancel_token.cancel();
+        Ok(Some(turn.interaction_id))
+    }
+
+    fn registered_turn(&self, affinity_key: &str) -> Option<RegisteredPrimaryTurn> {
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(affinity_key)
+            .cloned()
     }
 }
 
@@ -538,144 +671,5 @@ impl Drop for ActivePrimaryTurnRegistration {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn close_and_drain_atomically_rejects_late_input_until_reopened() {
-        let bridge = RunSteerBridge::default();
-        let inbox = bridge.open();
-        bridge.try_send("第一条".to_owned()).unwrap();
-
-        let drained = inbox.close_and_drain();
-
-        assert_eq!(drained.len(), 1);
-        assert_eq!(drained[0].message.content, "第一条");
-        assert_eq!(
-            bridge.try_send("过晚输入".to_owned()),
-            Err(RunSteerSendError::Inactive)
-        );
-        inbox.reopen();
-        bridge.try_send("第二条".to_owned()).unwrap();
-        assert_eq!(inbox.drain()[0].message.content, "第二条");
-    }
-
-    #[test]
-    fn cloned_inbox_does_not_extend_or_close_active_lifecycle() {
-        let bridge = RunSteerBridge::default();
-        let inbox = bridge.open();
-        let observer = inbox.clone();
-
-        drop(observer);
-        bridge.try_send("仍在运行".to_owned()).unwrap();
-        drop(inbox);
-
-        assert_eq!(
-            bridge.try_send("运行已结束".to_owned()),
-            Err(RunSteerSendError::Inactive)
-        );
-    }
-
-    #[test]
-    fn capacity_overflow_is_rejected_and_drain_releases_budget() {
-        let bridge = RunSteerBridge::default();
-        let inbox = bridge.open();
-
-        assert_eq!(
-            bridge.try_send("x".repeat(RUN_STEER_PENDING_BYTE_LIMIT)),
-            Err(RunSteerSendError::CapacityExceeded)
-        );
-        for index in 0..RUN_STEER_PENDING_MESSAGE_LIMIT {
-            bridge.try_send(format!("追加消息 {index}")).unwrap();
-        }
-        assert_eq!(
-            bridge.try_send("超限消息".to_owned()),
-            Err(RunSteerSendError::CapacityExceeded)
-        );
-
-        assert_eq!(inbox.drain().len(), RUN_STEER_PENDING_MESSAGE_LIMIT);
-        bridge.try_send("释放后可继续".to_owned()).unwrap();
-        assert_eq!(inbox.drain()[0].message.content, "释放后可继续");
-    }
-
-    #[test]
-    fn deferred_runtime_note_uses_internal_message_and_registration_lifecycle() {
-        let session_key = format!("deferred-diagnostics-{}", std::process::id());
-        let bridge = RunSteerBridge::default();
-        let inbox = bridge.open();
-        let registration = register_deferred_message_session(&session_key, inbox.clone());
-
-        try_send_deferred_runtime_note(
-            &session_key,
-            AgentRuntimeNoteKind::DeferredDiagnostics,
-            "late diagnostics".to_owned(),
-        )
-        .unwrap();
-
-        let input = inbox.drain().pop().unwrap();
-        assert!(input.message.cache_excluded);
-        assert!(input.message.content.contains("late diagnostics"));
-        drop(registration);
-        assert_eq!(
-            try_send_deferred_runtime_note(
-                &session_key,
-                AgentRuntimeNoteKind::DeferredDiagnostics,
-                "too late".to_owned(),
-            ),
-            Err(RunSteerSendError::Inactive)
-        );
-    }
-
-    #[test]
-    fn active_primary_turn_registry_routes_by_workspace_and_unregisters() {
-        let registry = ActivePrimaryTurnRegistry::default();
-        let bridge = RunSteerBridge::default();
-        let inbox = bridge.open();
-        let interaction_id = InteractionId::new("interaction-a").expect("Interaction ID");
-        let affinity_key = ActivePrimaryTurnRegistry::affinity_key("session-session-a");
-        let registration = registry
-            .register(
-                &affinity_key,
-                interaction_id.clone(),
-                inbox.clone(),
-                RunCancelToken::default(),
-            )
-            .expect("注册活跃主 turn");
-        assert_eq!(registry.active_count(), 1);
-
-        assert!(
-            registry
-                .try_send(&affinity_key, "补充约束".to_owned())
-                .expect("steer 成功")
-                .is_some_and(|value| value == interaction_id)
-        );
-        assert_eq!(inbox.drain()[0].message.content, "补充约束");
-        assert!(
-            !registry
-                .try_send(
-                    &ActivePrimaryTurnRegistry::affinity_key("session-session-b"),
-                    "其他工作区".to_owned(),
-                )
-                .expect("其他工作区应排队")
-                .is_some()
-        );
-        assert!(
-            !registry
-                .try_send(
-                    &ActivePrimaryTurnRegistry::affinity_key("session-session-a-remote"),
-                    "其他渠道".to_owned(),
-                )
-                .expect("其他渠道应隔离")
-                .is_some()
-        );
-
-        drop(registration);
-        assert_eq!(registry.active_count(), 0);
-        assert!(
-            !registry
-                .try_send(&affinity_key, "过晚输入".to_owned())
-                .expect("注册释放后应排队")
-                .is_some()
-        );
-    }
-}
+#[path = "run_steer_tests.rs"]
+mod tests;

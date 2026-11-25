@@ -82,14 +82,14 @@ pub(super) fn install_active_compaction_projection(
     // 整个函数是一次换窗的 Thread I/O 总成本：定位当前轮（读整份 thread）加装投影
     // （整份快照重写）。采样覆盖两段，才能看出长会话上换窗究竟慢在哪里。
     let started = Instant::now();
-    // `through_sequence` 取 thread 侧当前轮的序号：turn_id 由
-    // `{thread_id}-turn-{assistant_part_id}` 组成，因此按后缀精确命中，找不到再退回活动轮。
+    // 当前轮由 turn_id 后缀精确命中（`{thread_id}-turn-{assistant_part_id}`），找不到再退回
+    // 活动轮；命中结果只用来定位轮次身份，边界另按下面的口径计算。
     //
     // 入参必须是 Thread 事件流的键（`sessions.current_run_id`），不是会话 ULID：
     // 两者是不同的身份空间，拿会话 ULID 来读 Thread 只会得到「未找到 thread」。
     let detail = service.read_thread(root, thread_id)?;
     let suffix = format!("-turn-{assistant_part_id}");
-    let current = detail
+    let current_turn_id = detail
         .turns
         .iter()
         .rev()
@@ -101,8 +101,15 @@ pub(super) fn install_active_compaction_projection(
                 .rev()
                 .find(|turn| turn.status == TurnStatus::Active)
         })
-        .ok_or_else(|| "活动窗口缺少当前运行轮次".to_owned())?;
-    compaction.through_sequence = current.sequence;
+        .ok_or_else(|| "活动窗口缺少当前运行轮次".to_owned())?
+        .turn_id
+        .clone();
+    // 边界取本轮**收口后**会拿到的轮序，而不是当前轮对象上的 sequence：起跑镜像写入的
+    // 占位轮次序号恒为 0，照抄它等于让恢复侧 `sequence >= 0` 退回「无边界」，把已归档的
+    // 全部轮次重新装回模型历史；全量本地估算随即越过强制换窗线，于是每个 turn 起跑都
+    // 触发一次自动换窗（真机实测 710 条约 1.05M tokens，而 Provider 实测只有 143K）。
+    compaction.through_sequence =
+        mirror_turn::next_sequence(&detail, Some(current_turn_id.as_str()));
     let through_sequence = compaction.through_sequence;
     // 复用刚读到的 detail 安装投影：`compact_thread` 会再读一遍整份 thread，
     // 对 60 MiB 级的会话等于把同一份语料解析两次。
@@ -451,11 +458,17 @@ fn prepare_run_session_inner(
         .read_thread(&root, run_session_id)
         .map_err(|error| format!("会话历史读取失败：{run_session_id}，{error}"))?;
     if detail.compacted_history.is_none()
-        && window_number_exceeds_first(config_path, run_session_id)?
+        && let Some(window_number) =
+            window_number_exceeds_first(config_path, &identities.session_id)?
     {
-        return Err(
-            "会话已换窗但活动窗口投影缺失，拒绝恢复旧聊天历史；请先修复窗口投影".to_owned(),
-        );
+        // fail-closed：跨窗恢复会让模型重新看到已归档历史，可能重复执行已经发生过的工具
+        // 副作用，比「这个会话暂时打不开」危险得多。文案必须给出可核对的下一步，而不是
+        // 一句「请修复」。
+        return Err(format!(
+            "thread {run_session_id} 已转到窗口 #{window_number}，但缺少活动窗口投影，\
+             拒绝恢复旧聊天历史；先用 `axon debug session read {run_session_id}` 核对，\
+             再按需重建投影，不要删除会话数据"
+        ));
     }
     let facts = ResumedSessionFacts::from_detail(&detail);
     let model_history_json = thread_model_history_json(&detail)?;
@@ -503,14 +516,22 @@ fn repair_open_turn_before_restore(
 }
 
 /// 换窗后的 thread 必须带活动窗口投影，否则恢复出来的历史会跨窗。
-fn window_number_exceeds_first(config_path: &Path, thread_id: &str) -> Result<bool, String> {
+///
+/// 入参是会话 ULID（`sessions.session_id`）：窗口身份与归档都落在 `sessions/<会话 ID>`
+/// 下，用运行窗口 `current_run_id` 去查只会得到空目录，判断恒为 false，保护形同不存在。
+/// 返回窗口号（仅当已经换过窗），供调用方在拒绝恢复时写出可核对的身份。
+fn window_number_exceeds_first(
+    config_path: &Path,
+    session_id: &str,
+) -> Result<Option<u64>, String> {
     let session_dir = resolved_axon_root(config_path)?
         .join("sessions")
-        .join(thread_id);
+        .join(session_id);
     Ok(
         axon_agent_runtime::SessionNotes::load_from_session(&session_dir)
             .map_err(|error| format!("读取窗口身份失败：{error:?}"))?
-            .is_some_and(|notes| notes.window_number > 1),
+            .map(|notes| notes.window_number)
+            .filter(|window_number| *window_number > 1),
     )
 }
 

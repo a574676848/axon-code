@@ -68,6 +68,7 @@ export {
   attachmentsFromPaths,
   compactDuration,
   deriveJobs,
+  jobElapsedMs,
   mergeCarriedPrompts,
   pendingSteerCount,
   previewCommand,

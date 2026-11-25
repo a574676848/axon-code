@@ -61,6 +61,9 @@ mod sqlite_runtime_store_interaction_tests;
 #[path = "sqlite_runtime_store_recovering_tests.rs"]
 mod sqlite_runtime_store_recovering_tests;
 #[cfg(test)]
+#[path = "sqlite_runtime_store_requeue_tests.rs"]
+mod sqlite_runtime_store_requeue_tests;
+#[cfg(test)]
 #[path = "sqlite_runtime_store_result_tests.rs"]
 mod sqlite_runtime_store_result_tests;
 #[cfg(test)]

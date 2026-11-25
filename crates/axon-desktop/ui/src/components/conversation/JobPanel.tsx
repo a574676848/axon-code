@@ -1,11 +1,12 @@
 import React from 'react';
 import { ChevronRightIcon, StopIcon } from '../../icons';
 import { formatDurationUnits } from '../../conversation/format';
-import type { JobRow } from '../../conversation/transcript';
+import { jobElapsedMs, type JobRow } from '../../conversation/transcript';
 import { isActiveJob } from '../../conversation/runtimeFacts';
+import type { SessionJobFact } from '../../types';
 import { StateDot } from '../ui/surfaces';
 import { DisclosureRow } from './DisclosureRow';
-import { jobDotState } from './jobRowStatus';
+import { ABNORMAL_TERMINAL, jobDotState, jobRowConclusion } from './jobRowStatus';
 import { useJobStream } from './useJobStream';
 import * as ipc from '../../ipc';
 
@@ -29,24 +30,6 @@ const OUTPUT_CAP = 'max-h-72';
 /** 状态文本的最大宽度：失败原因是产出方的原文，没有长度上限。 */
 const STATUS_MAX = 'max-w-[60%]';
 
-/**
- * 只有这些终态才代表「作业结束但没有退出码」。
- *
- * 启动回执与读取回执本来就不带退出码，拿「退出码为空」当结论会把每一次后台启动
- * 都标成「未正常退出」。结论必须有证据：作业真的被判成失败、终止、超时才画这个标签。
- */
-const ABNORMAL_JOB_TERMINAL = new Set(['failed', 'killed', 'timeout', 'unresponsive', 'refusal']);
-
-/** 状态的展示文案。 */
-function statusLabel(status: string): string {
-  if (status === 'running') return '运行中';
-  if (status === 'stopping') return '正在停止';
-  if (status === 'completed') return '已完成';
-  if (status === 'killed') return '已取消';
-  if (status === 'failed') return '已失败';
-  return status;
-}
-
 /** 行尾耗时：等宽数字，位置固定，不随状态文本长度跳动。 */
 const Duration: React.FC<{ durationMs: number | null; running: boolean }> = ({
   durationMs,
@@ -64,14 +47,17 @@ const Duration: React.FC<{ durationMs: number | null; running: boolean }> = ({
 /**
  * 这一行此刻该显示的耗时。
  *
- * 在跑的行由开始时刻按秒起算，因此列表里的数字会自己走；跑完的行用后端给的
- * 实测耗时，不受采样时刻影响。开始时刻是服务端记录这条工具调用的时间，
- * 不是客户端第一次看到它的时间。
+ * 在跑的行由开始时刻按秒起算，因此列表里的数字会自己走；跑完的行只认后端实测值，
+ * 不受采样时刻影响。开始时刻是服务端记录这条工具调用的时间，
+ * 不是客户端第一次看到它的时间。判定本身在 `conversation/transcript` 里，便于单测。
  */
-function elapsedOf(job: JobRow, running: boolean, nowMs: number): number | null {
-  const start = job.startedAtMs;
-  if (running && start !== null && Number.isFinite(start)) return Math.max(0, nowMs - start);
-  return job.durationMs;
+function elapsedOf(
+  job: JobRow,
+  running: boolean,
+  nowMs: number,
+  measuredMs: number | null,
+): number | null {
+  return jobElapsedMs(job, running, nowMs, measuredMs);
 }
 
 /** 停止按钮：首击武装成带文案的确认胶囊，窗口内再击一次才真的停。 */
@@ -103,11 +89,15 @@ const StopButton: React.FC<{ armed: boolean; pending: boolean; onStop: () => voi
  * 与复制入口贴住横幅顶端，命令滚走时它们还在。在跑且尚无输出的命令只有横幅，
  * 不画空的输出区；输出区同样限高内部滚动，中间行不折叠。
  */
-const JobTerminal: React.FC<{ job: JobRow; running: boolean; sessionId: string | null }> = ({
-  job,
-  running,
-  sessionId,
-}) => {
+const JobTerminal: React.FC<{
+  job: JobRow;
+  running: boolean;
+  sessionId: string | null;
+  /** 收口事实给出的退出码；没有事实时退回行内快照。 */
+  exitCode: number | null;
+  /** 收口事实给出的终态。 */
+  status: string;
+}> = ({ job, running, sessionId, exitCode, status }) => {
   const [copied, setCopied] = React.useState(false);
   const timer = React.useRef<number | null>(null);
   // 输出只认作业自己的归档：发起作业的那条工具回执（`job start …`）不是作业输出。
@@ -138,12 +128,13 @@ const JobTerminal: React.FC<{ job: JobRow; running: boolean; sessionId: string |
   };
 
   // 未跑完时不谈退出码；跑完且非零退出才给结论，没有证据就不下结论。
+  // 判据与状态点的错误档同源（`jobRowStatus` 的 `ABNORMAL_TERMINAL`），两处不会分叉。
   const exitPill =
-    running || job.exitCode === 0
+    running || exitCode === 0
       ? null
-      : job.exitCode !== null
-        ? `退出码 ${job.exitCode}`
-        : ABNORMAL_JOB_TERMINAL.has(job.status)
+      : exitCode !== null
+        ? `退出码 ${exitCode}`
+        : ABNORMAL_TERMINAL.has(status)
           ? '未正常退出'
           : null;
   // 多行命令一行一个提示符：读起来就是它要跑的那几条命令。
@@ -252,6 +243,13 @@ export interface JobLineProps {
   stopping: boolean;
   /** 本秒的采样时刻；在跑的行据此走高。 */
   nowMs: number;
+  /**
+   * 后端给出的收口事实（真实耗时、终态与退出码）。
+   *
+   * 启动快照只说明「作业被发起」，作业自己的结局由它回答；没有这份事实的行
+   * 一律不猜：不画耗时，也不假装自己知道它怎么收口的。
+   */
+  fact: SessionJobFact | null;
   onToggle: () => void;
   onStop: (job: JobRow) => void;
 }
@@ -266,30 +264,38 @@ export const JobLine: React.FC<JobLineProps> = ({
   armed,
   stopping,
   nowMs,
+  fact,
   onToggle,
   onStop,
 }) => {
   const running = live && isActiveJob(job.status) && stoppedReason === null;
   // 认得出作业的行都能展开看输出：在跑的行随时开始输出，跑完的行归档仍可读。
   const observable = running || job.output.length > 0 || job.jobId !== null;
-  // 行里仍声称在跑、后端却已不再持有：如实说明，不假装它还在跑。
-  const stale = !live && isActiveJob(job.status);
-  /** 行内状态：停止原因优先，其次是退出码，最后才是状态词。 */
-  const statusText =
-    stoppedReason ??
-    (job.exitCode !== null
-      ? `exit ${job.exitCode}`
-      : stale
-        ? '已结束'
-        : statusLabel(job.status));
-  const statusDanger =
-    stoppedReason !== null ||
-    (job.exitCode !== null && job.exitCode !== 0) ||
-    job.status === 'failed' ||
-    job.status === 'killed';
+  /*
+   * 在跑的作业还没有结局：收口事实（可能来自上一代同名作业，作业标识在进程重启后
+   * 从 1 重计）一律不套到这一行上，否则会出现「转圈 + 红色 exit N」的自相矛盾。
+   */
+  const settled = running ? null : fact;
+  // 收口事实给出的终态优先于启动快照：它才是这条作业真实的结局。
+  const effectiveStatus = settled?.status ?? job.status;
+  const effectiveExitCode = settled === null ? job.exitCode : (settled.exitCode ?? null);
+  // 行尾结论（文案 / 危险色 / 是否只是「后端已不再持有」）在 `jobRowStatus` 里判定，可被单测钉住。
+  const conclusion = jobRowConclusion({
+    status: effectiveStatus,
+    exitCode: effectiveExitCode,
+    live,
+    stoppedReason,
+  });
+  const statusText = conclusion.text;
+  const statusDanger = conclusion.danger;
   // 正常在跑的行不再重复「运行中」：转圈状态点与分组标题已经把这件事说清楚了。
   const liveDetail = statusText === '运行中' ? null : statusText;
-  const duration = <Duration durationMs={elapsedOf(job, running, nowMs)} running={running} />;
+  const duration = (
+    <Duration
+      durationMs={elapsedOf(job, running, nowMs, settled?.elapsedMs ?? null)}
+      running={running}
+    />
+  );
 
   return (
     <div className="flex flex-col">
@@ -307,7 +313,7 @@ export const JobLine: React.FC<JobLineProps> = ({
             open={observable ? expanded : undefined}
             onToggle={observable ? onToggle : undefined}
             rowRole="menuitem"
-            icon={<StateDot state={jobDotState(job.status, { running, stopped: stoppedReason !== null })} />}
+            icon={<StateDot state={jobDotState(effectiveStatus, { running, stopped: stoppedReason !== null })} />}
             label="命令"
             title={<span className="font-mono">{job.command}</span>}
             titleText={job.command}
@@ -327,7 +333,15 @@ export const JobLine: React.FC<JobLineProps> = ({
           <StopButton armed={armed} pending={stopping} onStop={() => onStop(job)} />
         )}
       </div>
-      {expanded && observable && <JobTerminal job={job} running={running} sessionId={sessionId} />}
+      {expanded && observable && (
+        <JobTerminal
+          job={job}
+          running={running}
+          sessionId={sessionId}
+          exitCode={effectiveExitCode}
+          status={effectiveStatus}
+        />
+      )}
     </div>
   );
 };

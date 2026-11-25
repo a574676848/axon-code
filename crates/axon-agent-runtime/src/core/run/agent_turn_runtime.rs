@@ -4,7 +4,7 @@ use axon_domain::{AxonError, AxonResult, TurnId};
 
 #[cfg(test)]
 use crate::ModelToolDefinition;
-use crate::runtime_limits::PRE_FINAL_GUARD_MAX_DELAY_ROUNDS;
+use crate::runtime_limits::{MAX_IDLE_CONTINUE_ROUNDS, PRE_FINAL_GUARD_MAX_DELAY_ROUNDS};
 use crate::{
     AgentModelHistorySnapshot, AgentModelMessage, AgentModelMessageKind, AgentRuntimeNoteKind,
     AgentTurnSteerInput, ProviderStreamingTransportInput, ProviderStreamingTransportOutcome,
@@ -194,6 +194,9 @@ impl AgentTurnRuntime {
         // 守卫的独立去重标记：与预算提醒的 `reminder_emitted` 无关，
         // 共享标记会让其中一方被另一方静默吞掉（设计 §6.3）。
         let mut pre_final_guard_emitted = false;
+        // 连续空转轮计数：只有「既不收口也不产出动作」的轮次才累加，任何一次真正推进
+        // （工具执行、运行中追加被注入）都归零，因此长任务不会因为轮数多而被误判。
+        let mut idle_continue_rounds = 0_u32;
         loop {
             turn_index = turn_index
                 .checked_add(1)
@@ -372,6 +375,7 @@ impl AgentTurnRuntime {
                     if let Some(source) = steer_source {
                         source.reopen();
                     }
+                    idle_continue_rounds = 0;
                     turn_reports.push(AgentTurnIterationReport {
                         turn_id,
                         transport_report: report,
@@ -379,7 +383,11 @@ impl AgentTurnRuntime {
                     continue;
                 }
                 let content = report.runner_report.content.clone();
-                if report.runner_report.end_turn == Some(false) {
+                // 空转预算：provider 说「还没完」却既没给工具调用、边界处也没取到新的
+                // 运行中追加，这一轮什么都没推进。预算用完就按最终答复收口，绝不无限重发。
+                let idle_continue = report.runner_report.end_turn == Some(false);
+                if idle_continue && idle_continue_rounds < MAX_IDLE_CONTINUE_ROUNDS {
+                    idle_continue_rounds = idle_continue_rounds.saturating_add(1);
                     if !content.trim().is_empty() {
                         messages
                             .make_mut()
@@ -391,6 +399,13 @@ impl AgentTurnRuntime {
                         turn_id,
                         transport_report: report,
                     });
+                    // 本轮还没有收口：边界处关掉通道只是为了让「取走那一刻」是原子的，
+                    // 既然还要继续跑，就必须重新开放。否则此后用户在本轮追加的输入
+                    // 一律被拒，由调用方静默降级成下一轮；界面上那条消息则永远挂着
+                    // 「等待注入」，直到本轮收口才被标成未送达。
+                    if let Some(source) = steer_source {
+                        source.reopen();
+                    }
                     continue;
                 }
                 // pre-final 守卫（合同 §5.1.6）：存在未终态后台作业时先提醒一次，
@@ -425,6 +440,10 @@ impl AgentTurnRuntime {
                         turn_id,
                         transport_report: report,
                     });
+                    // 守卫只是把最终答复推迟一轮，本轮仍在继续，通道同样必须重新开放。
+                    if let Some(source) = steer_source {
+                        source.reopen();
+                    }
                     continue;
                 }
                 turn_events.push(
@@ -490,6 +509,7 @@ impl AgentTurnRuntime {
                     messages.make_mut().extend(next_messages);
                     provider_accounted_message_count =
                         current_context_tokens.map(|_| provider_accounted_prefix);
+                    idle_continue_rounds = 0;
                     if let Some(source) = steer_source {
                         let inputs = source.drain();
                         let projected = project_steer_inputs(inputs, &messages, &request_input);

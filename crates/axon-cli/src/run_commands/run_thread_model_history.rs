@@ -8,7 +8,7 @@ use axon_agent_runtime::{
     agent_run_tool_result_messages,
 };
 use axon_session::{
-    ThreadDetail, ThreadHistoryFileRef, ThreadHistoryImageRef, ThreadHistoryItem,
+    ThreadCompaction, ThreadDetail, ThreadHistoryFileRef, ThreadHistoryImageRef, ThreadHistoryItem,
     ThreadHistoryStatus, Turn,
 };
 
@@ -24,10 +24,11 @@ pub(crate) fn thread_model_history_json(detail: &ThreadDetail) -> Result<String,
         .map_err(|error| format!("压缩历史 JSON 无效：{error}"))?;
     // `through_sequence` 是**首个仍然可见的轮次**：换窗那轮自己留在窗口里（它的回复在换窗
     // 之后才产生，压缩摘要里不可能有），此前的轮次已经并入摘要。因此边界取包含。
+    let through_sequence = effective_through_sequence(detail, compaction);
     let recent_turns = detail
         .turns
         .iter()
-        .filter(|turn| turn.sequence >= compaction.through_sequence);
+        .filter(|turn| turn.sequence >= through_sequence);
     let recent = collect_turn_model_messages(recent_turns);
     // 换窗可能发生在多步 turn 中途：那一轮的 user 消息已经落过 thread，交接摘要的尾部
     // 也带了同一条输入。拼接前剔除重复的一条，否则重启恢复后模型会把同一句话看两次。
@@ -38,6 +39,35 @@ pub(crate) fn thread_model_history_json(detail: &ThreadDetail) -> Result<String,
             .filter_map(|message| model_message_history_value(&message).ok()),
     );
     serde_json::to_string(&messages).map_err(|error| format!("历史序列化失败：{error}"))
+}
+
+/// 解析真正生效的窗口边界，并修正「边界被写成 0」的存量快照。
+///
+/// 0 有两种来源：一是这次换窗就发生在第一轮（那时它是唯一可见轮次，0 正确）；二是旧写入
+/// 把起跑占位轮次的 0 当成了边界。仅凭快照字段分不出来，但换窗时刻本身是证据：换窗那轮
+/// 在换窗之前就已起跑（`started_at_ms <= recorded_at_ms`），它必须留在窗口里，更早的轮次
+/// 已经并入摘要。按这个口径反推首个可见轮次，既不误伤合法的 0，也不会把已归档轮次整段
+/// 装回模型视图（真机现场：710 条约 1.05M tokens，而 Provider 实测只有 143K）。
+fn effective_through_sequence(detail: &ThreadDetail, compaction: &ThreadCompaction) -> u64 {
+    if compaction.through_sequence > 0 {
+        return compaction.through_sequence;
+    }
+    let rebuilt = detail
+        .turns
+        .iter()
+        .filter(|turn| turn.started_at_ms <= compaction.recorded_at_ms)
+        .map(|turn| turn.sequence)
+        .max()
+        .unwrap_or(0);
+    if rebuilt == 0 {
+        return 0;
+    }
+    axon_logger::warning(&format!(
+        "窗口轮转边界为 0 但换窗时已有更早轮次，已按换窗那轮的轮序 {rebuilt} 修正：thread={} turns={}",
+        detail.thread.thread_id,
+        detail.turns.len()
+    ));
+    rebuilt
 }
 
 /// 收集若干轮次投影出的模型消息，不写入外部缓冲。

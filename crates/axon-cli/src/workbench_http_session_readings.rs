@@ -164,6 +164,9 @@ pub(super) struct SessionPlanStep {
 }
 
 /// 会话级后台作业的一行事实。
+///
+/// 形状由会话历史页与作业名册共用：两条路径读的是同一份事件日志（`job_started` /
+/// `job_completed`），界面因此只需要一套字段与一份解析。
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct SessionJobFact {
@@ -366,7 +369,13 @@ fn plan_snapshot(payload: &serde_json::Value) -> Option<SessionPlanSnapshot> {
 }
 
 /// 收下一条作业事件；启动与终态合并成同一行。
-fn collect_job_fact(record: &axon_eventlog::RuntimeEventRecord, jobs: &mut Vec<SessionJobFact>) {
+///
+/// 名册路径只把 `job_completed` 帧喂进来，因此拿到的是收口事实（状态、实测耗时、
+/// 退出码），恰好就是「跑完之后这一行该显示什么」。
+pub(super) fn collect_job_fact(
+    record: &axon_eventlog::RuntimeEventRecord,
+    jobs: &mut Vec<SessionJobFact>,
+) {
     match record.event_type.as_str() {
         "job_started" => {
             let Ok(reference) =

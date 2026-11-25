@@ -111,6 +111,15 @@ impl InteractionStore for Store {
         Ok(())
     }
 
+    fn requeue_steered(
+        &self,
+        _interaction_id: &InteractionId,
+        _now_ms: u64,
+    ) -> Result<bool, InteractionStoreError> {
+        // 测试仓不建归档表：真实实现重投的是归档行，这里如实返回「没有可重投的行」。
+        Ok(false)
+    }
+
     fn mark_understood(
         &self,
         interaction_id: &InteractionId,

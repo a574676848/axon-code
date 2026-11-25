@@ -57,14 +57,14 @@ pub(super) fn notification_copy(
         .map(str::trim)
         .filter(|value| !value.is_empty());
     if notice.is_question() {
-        // 提问要的是用户的一个动作，标题必须说清是哪种动作，因此带状态标签。
-        let title = compose_title(session, &notice.title);
+        // 标题只写会话标题：问题本身就是正文，标题再挂状态标签就读了两遍。
+        let title = session.unwrap_or(&notice.title);
         let body = if notice.body.is_empty() {
             "请回到 Axon 作答".to_owned()
         } else {
             notice.body.clone()
         };
-        return Some((clip(&title, TITLE_LIMIT), clip(&body, BODY_LIMIT)));
+        return Some((clip(title, TITLE_LIMIT), clip(&body, BODY_LIMIT)));
     }
     let title = session.unwrap_or(&notice.title);
     let body = match (notice.body.as_str(), notice.status.as_str()) {
@@ -76,14 +76,6 @@ pub(super) fn notification_copy(
         (body, _) => format!("{}：{body}", notice.title),
     };
     Some((clip(title, TITLE_LIMIT), clip(&body, BODY_LIMIT)))
-}
-
-/// 会话名在前的标题：只写状态标签时，用户得点进去才知道是哪个会话。
-fn compose_title(session: Option<&str>, base: &str) -> String {
-    match session {
-        Some(session) => format!("{session} · {base}"),
-        None => base.to_owned(),
-    }
 }
 
 /// 压平空白：多行正文直接贴进通知会带出一串空格，读起来是断裂的。
@@ -316,17 +308,14 @@ fn question_notice(event_type: &str, payload_json: &str) -> Option<TurnNotice> {
     }
     let call_id = payload.get("callId")?.as_str()?;
     let title = question_title(status).to_owned();
+    // 正文取问题本身；挂起交接语只在没有可展示的问题时兜底。
     let body = payload
-        .get("handoff")
+        .get("questions")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|questions| questions.first())
+        .and_then(|question| question.get("question"))
         .and_then(serde_json::Value::as_str)
-        .or_else(|| {
-            payload
-                .get("questions")
-                .and_then(serde_json::Value::as_array)?
-                .first()?
-                .get("question")?
-                .as_str()
-        })
+        .or_else(|| payload.get("handoff").and_then(serde_json::Value::as_str))
         .unwrap_or_default();
 
     Some(TurnNotice {
@@ -464,11 +453,25 @@ mod tests {
     }
 
     #[test]
-    fn question_notice_keeps_the_session_prefix_and_never_goes_empty() {
+    fn question_notification_uses_session_title_and_question_body() {
         let question = notice("question_pending", "模型需要您的确认", "");
         let (title, body) = notification_copy(&question, Some("会话甲")).expect("提问必须通知");
-        assert_eq!(title, "会话甲 · 模型需要您的确认");
+        assert_eq!(title, "会话甲");
         assert_eq!(body, "请回到 Axon 作答");
+
+        let with_question = notice(
+            "question_pending",
+            "模型需要您的确认",
+            "是否部署到生产环境？",
+        );
+        let (title, body) =
+            notification_copy(&with_question, Some("部署会话")).expect("提问必须通知");
+        assert_eq!(title, "部署会话");
+        assert_eq!(body, "是否部署到生产环境？");
+
+        // 没有会话名时标题回落到状态标签，不让通知没有标题。
+        let (title, _) = notification_copy(&with_question, None).expect("提问必须通知");
+        assert_eq!(title, "模型需要您的确认");
     }
 
     #[test]
@@ -594,5 +597,27 @@ mod tests {
         // 重复帧（例如窗口扩展或重复事件）不再重复通知
         assert!(state.observe(&q_frame("pending", false)).is_none());
         assert!(state.observe(&q_frame("suspended", false)).is_none());
+    }
+
+    #[test]
+    fn question_body_prefers_the_question_over_handoff() {
+        let mut state = NotificationState::default();
+        let frame = frame(
+            "interaction:q2",
+            EVENT_WIRE,
+            serde_json::json!({
+                "kind": {"type": "userQuestion", "payload": {
+                    "partId": "part:q2",
+                    "callId": "call-2",
+                    "status": "suspended",
+                    "questions": [{"id": "1", "question": "选择部署分支？"}],
+                    "handoff": "等待确认部署分支",
+                    "deadlineAtMs": 10000
+                }}
+            }),
+            false,
+        );
+        let notice = state.observe(&frame).expect("应通知");
+        assert_eq!(notice.body, "选择部署分支？");
     }
 }
