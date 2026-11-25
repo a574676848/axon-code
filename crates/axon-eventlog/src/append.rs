@@ -65,6 +65,33 @@ pub struct EventLogWriter {
     /// 重写日志会改变修改时刻，即使新旧字节数恰好相同；只看长度会让常驻句柄把帧
     /// 写进已经被换掉的那份文件，调用方还会拿到成功。`None` 表示尚未取样。
     modified: Option<std::time::SystemTime>,
+    /// 最近一批追加的分段耗时：句柄与索引打开、写帧、fsync。
+    ///
+    /// 只在慢追加时随告警一起打出来，平时不做任何额外 IO。等锁与持锁总量由
+    /// [`Self::append_batch_reusing`] 单独记录，两者合起来才能把一次慢追加归因到段。
+    segments: AppendSegments,
+}
+
+/// 一批追加内部的分段耗时，单位微秒。
+#[derive(Debug, Default, Clone, Copy)]
+struct AppendSegments {
+    /// 首次写入时打开日志与索引句柄。
+    open_us: u128,
+    /// 写帧并 flush。
+    write_us: u128,
+    /// 逐帧 `sync_data`。
+    fsync_us: u128,
+}
+
+impl AppendSegments {
+    fn summary(&self) -> String {
+        format!(
+            "打开={:.1}ms 写帧={:.1}ms fsync={:.1}ms",
+            self.open_us as f64 / 1000.0,
+            self.write_us as f64 / 1000.0,
+            self.fsync_us as f64 / 1000.0
+        )
+    }
 }
 
 impl EventLogWriter {
@@ -100,6 +127,7 @@ impl EventLogWriter {
             index_state: None,
             generation: 0,
             modified: None,
+            segments: AppendSegments::default(),
         })
     }
 
@@ -176,11 +204,17 @@ impl EventLogWriter {
             .map_err(|_| EventLogError::Corrupt("单帧超过可寻址长度".to_owned()))?;
         let offset = self.bytes_len;
         let covered = offset.saturating_add(written);
+        let open_started = std::time::Instant::now();
         self.ensure_files(first_sequence.is_some())?;
+        self.segments.open_us += open_started.elapsed().as_micros();
         if let Some(file) = self.file.as_mut() {
+            let write_started = std::time::Instant::now();
             file.write_all(frame)?;
             file.flush()?;
+            self.segments.write_us += write_started.elapsed().as_micros();
+            let sync_started = std::time::Instant::now();
             file.sync_data()?;
+            self.segments.fsync_us += sync_started.elapsed().as_micros();
         }
         if let Some(first_sequence) = first_sequence {
             let len = u32::try_from(written).map_err(|_| {
@@ -366,6 +400,7 @@ impl EventLogWriter {
             index_state,
             generation: 0,
             modified,
+            segments: AppendSegments::default(),
         })
     }
 }
@@ -421,6 +456,7 @@ impl EventLogWriter {
                 ));
             }
         }
+        self.segments = AppendSegments::default();
         let started = std::time::Instant::now();
         let outcome = self.append_locked(expected_next, events);
         self.release_lock();
@@ -431,10 +467,11 @@ impl EventLogWriter {
              * 这里再给出持锁内的总耗时，两者相减即写帧与对齐的净成本。
              */
             axon_logger::warning(&format!(
-                "事件日志追加偏慢：log={} 持锁耗时={}ms 帧数={}",
+                "事件日志追加偏慢：log={} 持锁耗时={}ms 帧数={} 分段：{}",
                 self.path.display(),
                 elapsed_ms,
-                events.len()
+                events.len(),
+                self.segments.summary()
             ));
         }
         outcome

@@ -109,6 +109,7 @@ fn append_events_with(
      * 写锁争用是瞬时的（持有者几毫秒到几百毫秒后放锁），交给 `with_busy_retry` 重试；
      * 事务在错误路径整体回滚，重来一次不会把水位推进两次。
      */
+    let allocate_started = std::time::Instant::now();
     let (start, end) = super::with_busy_retry(|| {
         allocate_event_sequence(
             store,
@@ -119,6 +120,18 @@ fn append_events_with(
             interaction_lease,
         )
     })?;
+    /*
+     * 序号事务这一段不会进事件日志写者的分段埋点：它发生在控制面库，跨 crate 边界。
+     * 超过 100ms 单独留痕，便于把「慢在号段分配」与「慢在写帧/fsync」区分开。
+     */
+    let allocate_ms = allocate_started.elapsed().as_millis();
+    if allocate_ms >= 100 {
+        axon_logger::warning(&format!(
+            "事件序号分配偏慢：session={} 帧数={} 事务耗时={allocate_ms}ms",
+            session_id.as_str(),
+            events.len()
+        ));
+    }
 
     // 阶段 2：事件面追加。不持有任何数据库锁。
     let interaction_column = attribution

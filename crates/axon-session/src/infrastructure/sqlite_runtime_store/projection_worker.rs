@@ -309,7 +309,15 @@ impl ProjectionQueue {
     fn execute_locked(&self, job: ProjectionJob) {
         let session = job.session_id.as_str().to_owned();
         let start_sequence = job.start_sequence;
+        let started = std::time::Instant::now();
         let outcome = catch_unwind(AssertUnwindSafe(|| (self.apply)(job)));
+        // 投影已移出写路径，这里只留「单批偏慢」的归因线索，不影响写延迟。
+        let elapsed_ms = started.elapsed().as_millis();
+        if elapsed_ms >= 100 {
+            axon_logger::warning(&format!(
+                "单批投影偏慢：session={session} start={start_sequence} 耗时={elapsed_ms}ms"
+            ));
+        }
         self.processed.fetch_add(1, Ordering::Relaxed);
         match outcome {
             Ok(ProjectionOutcome::Applied) => {}
