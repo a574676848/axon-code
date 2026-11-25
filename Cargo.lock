@@ -744,6 +744,7 @@ version = "0.0.1"
 name = "axon-eventlog"
 version = "0.0.1"
 dependencies = [
+ "axon-logger",
  "serde",
  "serde_json",
  "tempfile",

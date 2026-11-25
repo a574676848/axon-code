@@ -160,3 +160,35 @@ fn an_aborted_rewrite_keeps_the_resident_writer() {
         "放弃的重写不得作废常驻写句柄"
     );
 }
+
+/// 空闲超过 TTL 的常驻句柄必须在下次新增句柄时被释放。
+#[test]
+fn an_idle_writer_is_evicted_when_another_session_registers() {
+    let _guard = serial();
+    let directory = tempdir().expect("临时目录");
+    let log = EventLog::open(directory.path(), "session-idle-ttl");
+    let path = log.path();
+    crate::append_once(&log, 0, 1_000, &[record(0)]).expect("首批");
+    assert!(super::has_resident_writer(&path));
+
+    // 进程刚启动时可能还不满一个 TTL，此时无法构造「过期」的时刻，跳过即可。
+    let Some(stale) = std::time::Instant::now()
+        .checked_sub(super::IDLE_TTL + std::time::Duration::from_secs(1))
+    else {
+        return;
+    };
+    {
+        let mut registry = super::REGISTRY
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        registry.last_used.insert(path.clone(), stale);
+    }
+
+    let other = EventLog::open(directory.path(), "session-idle-ttl-other");
+    crate::append_once(&other, 0, 1_000, &[record(0)]).expect("另一条会话");
+    assert!(
+        !super::has_resident_writer(&path),
+        "空闲超过 TTL 的句柄必须被释放"
+    );
+    assert!(super::has_resident_writer(&other.path()));
+}

@@ -28,6 +28,11 @@ use crate::record::RuntimeEventRecord;
 /// 句柄本身只占一个文件句柄与一份索引，但索引随会话帧数增长；上限按「同时活跃的
 /// 会话数」定，实测一个 daemon 同时写的会话不超过十余条，64 足够覆盖多轮切换。
 const MAX_WRITERS: usize = 64;
+/// 常驻句柄的空闲存活时长：超过它没有写入就释放。
+///
+/// 句柄持有一份完整的内存帧索引（每帧 24 字节），长会话下单个句柄可达数 MB。只按
+/// 条数上限淘汰会让「写完就闲置」的会话一直占着内存，这里按空闲时间再收一道。
+const IDLE_TTL: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// 常驻写句柄与它们的最近使用顺序。
 #[derive(Default)]
@@ -37,6 +42,8 @@ struct Registry {
     generations: HashMap<PathBuf, u64>,
     /// 最近使用的在前；淘汰从尾部开始。
     order: VecDeque<PathBuf>,
+    /// 每个路径最后一次被取用的时刻，用于空闲淘汰。
+    last_used: HashMap<PathBuf, std::time::Instant>,
 }
 
 static REGISTRY: LazyLock<Mutex<Registry>> = LazyLock::new(|| Mutex::new(Registry::default()));
@@ -91,8 +98,31 @@ pub(crate) fn forget_session_log(path: &Path) {
     let mut registry = REGISTRY.lock().unwrap_or_else(PoisonError::into_inner);
     registry.writers.remove(path);
     registry.order.retain(|candidate| candidate != path);
+    registry.last_used.remove(path);
     let generation = registry.generations.entry(path.to_path_buf()).or_insert(0);
     *generation = generation.wrapping_add(1);
+}
+
+/// 淘汰空闲太久的句柄；返回被丢弃的条数。
+///
+/// 只在新增句柄时调用一次：新增路径本来就少，顺手做一次全表清理比每次追加都扫一遍便宜。
+fn evict_idle(
+    registry: &mut Registry,
+    now: std::time::Instant,
+    ttl: std::time::Duration,
+) -> usize {
+    let idle: Vec<PathBuf> = registry
+        .last_used
+        .iter()
+        .filter(|(_, used)| now.duration_since(**used) >= ttl)
+        .map(|(path, _)| path.clone())
+        .collect();
+    for path in &idle {
+        registry.writers.remove(path);
+        registry.order.retain(|candidate| candidate != path);
+        registry.last_used.remove(path);
+    }
+    idle.len()
 }
 
 /// 某个日志路径是否还有常驻句柄，供测试断言重写后的失效行为。
@@ -136,11 +166,17 @@ fn writer_for(
         .writers
         .insert(path.to_path_buf(), Arc::clone(&created));
     registry.order.push_front(path.to_path_buf());
+    registry
+        .last_used
+        .insert(path.to_path_buf(), std::time::Instant::now());
+    // 新增路径时顺手收一次空闲句柄：写完就闲置的会话不该一直占着整份内存索引。
+    evict_idle(&mut registry, std::time::Instant::now(), IDLE_TTL);
     while registry.writers.len() > MAX_WRITERS {
         let Some(evicted) = registry.order.pop_back() else {
             break;
         };
         registry.writers.remove(&evicted);
+        registry.last_used.remove(&evicted);
     }
     Ok((created, current_generation_locked(&registry, path)))
 }
@@ -151,6 +187,9 @@ fn lookup(path: &Path) -> Option<(Arc<Mutex<EventLogWriter>>, u64)> {
     let generation = current_generation_locked(&registry, path);
     registry.order.retain(|candidate| candidate != path);
     registry.order.push_front(path.to_path_buf());
+    registry
+        .last_used
+        .insert(path.to_path_buf(), std::time::Instant::now());
     Some((writer, generation))
 }
 
