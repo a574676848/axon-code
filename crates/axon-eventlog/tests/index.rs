@@ -418,3 +418,36 @@ fn tail_reads_work_with_and_without_the_index() {
         expected_matched[expected_matched.len().saturating_sub(4)..].to_vec()
     );
 }
+
+/// 掉电留下「覆盖长度齐、条目为空」的索引时，读路径必须回退全量扫描。
+///
+/// 首次写数据帧时索引先落头页、再落条目；两步之间崩溃就是这个形态。若不拒绝它，
+/// 读路径会以为日志里没有可读数据，静默返回空页。
+#[test]
+fn an_index_without_entries_but_a_full_cover_is_rejected() {
+    let directory = tempfile::tempdir().expect("临时目录");
+    let log = EventLog::open(directory.path(), "session-empty-index-cover");
+    let mut writer = log.writer().expect("写句柄");
+    writer
+        .append_batch(&[record(0), record(1)])
+        .expect("写入两帧");
+    drop(writer);
+
+    let log_len = std::fs::metadata(log.path()).expect("日志元数据").len();
+    let mut index_path = log.path().into_os_string();
+    index_path.push(".idx");
+    let index_path = PathBuf::from(index_path);
+    let mut header = Vec::new();
+    header.extend_from_slice(b"AXONEVLI");
+    header.extend_from_slice(&2_u32.to_le_bytes());
+    header.extend_from_slice(&0_u32.to_le_bytes());
+    header.extend_from_slice(&log_len.to_le_bytes());
+    std::fs::write(&index_path, header).expect("写空条目索引");
+
+    let records = read_after(&log.path(), 0, 100).expect("读全部记录");
+    assert_eq!(
+        records.first().map(|record| record.sequence),
+        Some(1),
+        "空条目索引必须被拒绝，读路径从日志首帧回退扫描"
+    );
+}

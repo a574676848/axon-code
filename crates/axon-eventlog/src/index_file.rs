@@ -20,6 +20,7 @@ use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::Path;
 
 use crate::error::EventLogError;
+use crate::format::{HEADER_FRAME_INDEX, scan_file_frames};
 use crate::index::{FrameIndex, FrameIndexEntry, index_path};
 
 /// 索引文件魔数；识别不出就不碰。
@@ -100,6 +101,19 @@ pub(crate) fn load(log_path: &Path, log_len: u64) -> Option<FrameIndex> {
         && last.end() != covered
     {
         return None;
+    }
+    /*
+     * 空条目索引还有一个更隐蔽的形态：首次写数据帧时，覆盖长度先落了盘、条目没落，
+     * 于是「覆盖长度等于日志长度、条目为空」。若日志里其实已经有数据帧，这份索引会
+     * 让读路径以为「没有可读数据」并静默返回空页。这里按帧结构核一次，确认日志真的
+     * 只有 header 帧。
+     */
+    if entries.is_empty() {
+        let mut file = std::fs::File::open(log_path).ok()?;
+        let scan = scan_file_frames(&mut file).ok()?;
+        if scan.frames.len() > HEADER_FRAME_INDEX + 1 {
+            return None;
+        }
     }
     Some(FrameIndex::new(entries))
 }

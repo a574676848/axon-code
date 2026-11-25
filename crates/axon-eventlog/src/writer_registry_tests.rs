@@ -132,3 +132,31 @@ fn a_stale_generation_is_rejected_before_any_byte_is_written() {
         .expect("当前代际可写");
     assert_eq!(sequences(&log), vec![0, 1]);
 }
+
+/// 重写因为「期间被追加」而放弃时，不得作废刚建立好的常驻写句柄。
+///
+/// 代际只在日志真的被替换之后推进；放弃路径不动代际，否则下一次追加会白付一次
+/// 全量打开，而文件其实一个字节都没变。
+#[test]
+fn an_aborted_rewrite_keeps_the_resident_writer() {
+    let _guard = serial();
+    let directory = tempdir().expect("临时目录");
+    let log = EventLog::open(directory.path(), "session-aborted-rewrite");
+    let path = log.path();
+    crate::append_once(&log, 0, 1_000, &[record(0)]).expect("首批");
+    assert!(super::has_resident_writer(&path));
+
+    let header = crate::read_header(&path).expect("读头部").expect("有头部");
+    // 期望尾号故意停留在旧值：调用之间又追加了一帧，乐观校验必须失败。
+    let mut other = log.writer().expect("外部写句柄");
+    other.append_batch(&[record(1)]).expect("外部追加");
+    drop(other);
+
+    let outcome =
+        crate::rewrite_log_if_unchanged(&log, 0, &header, &[record(0)]).expect("重写调用");
+    assert!(outcome.is_none(), "尾号已变，重写必须放弃");
+    assert!(
+        super::has_resident_writer(&path),
+        "放弃的重写不得作废常驻写句柄"
+    );
+}
