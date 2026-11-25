@@ -589,8 +589,9 @@ export function useConversation(
     [sessionCapability, rememberSubscribed],
   );
 
-  const { activeQuestion, answerQuestion } = useQuestionSync({
+  const { activeQuestion, answerQuestion, reconcileQuestions } = useQuestionSync({
     sessionId: sessionCapability.sessionId,
+    projectionGeneration: state.projectionGeneration,
     state,
     dispatch,
     onError: setQuestionError,
@@ -636,6 +637,7 @@ export function useConversation(
     unfoldingId: paging.unfoldingId,
     activeQuestion,
     answerQuestion,
+    reconcileQuestions,
     watchedInteractionId: sessionCapability.available ? watchedRef.current : null,
     sessionCumulative,
     sessionReadyId,

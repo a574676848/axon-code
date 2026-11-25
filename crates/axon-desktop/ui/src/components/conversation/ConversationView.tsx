@@ -11,8 +11,7 @@ import { ConversationHeader } from './ConversationHeader';
 import { SessionOriginBar } from './SessionOriginBar';
 import { CAPABILITY_PENDING_PLACEHOLDER, READ_ONLY_PLACEHOLDER, UNREGISTERED_SESSION_PLACEHOLDER, sessionWriteGate, type SessionOriginBarState } from '../../sessionOpening';
 import { ConversationHeaderActions } from './ConversationHeaderActions';
-import { useSessionGoals } from './useSessionGoals';
-import { useLiveJobIds } from './useLiveJobIds';
+import { useRuntimeFactsReport } from './useRuntimeFactsReport';
 import { goalSessionSelection } from '../../sessionOpening';
 import { useAutoReadReply } from './useAutoReadReply';
 import { ConversationStream } from './ConversationStream';
@@ -27,11 +26,7 @@ import { useConversationActionsValue } from './useConversationActionsValue';
 import { sessionReferenceIndex } from './referenceAnchors';
 import type { ConversationMcp } from '../../conversation/useConversationMcp';
 import { changedFilesOf, workingLineOf } from '../../conversation/transcript';
-import {
-  isActiveSubagent,
-  activeJobCount,
-  type SessionRuntimeFacts,
-} from '../../conversation/runtimeFacts';
+import type { SessionRuntimeFacts } from '../../conversation/runtimeFacts';
 import {
   resolveConfig,
   resolveEffectiveModel,
@@ -298,7 +293,15 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
       unfoldTurn: (interactionId) => conversationRef.current.unfoldTurn(interactionId),
     collapseTurn: (interactionId) => conversationRef.current.collapseTurn(interactionId),
       openResource: (address, params) => railRef.current.openResource(address, params),
-      openQuestion: () => setQuestionReopenToken((value) => value + 1),
+      /*
+       * 时间线上的回入口要点两件事：先解除这一次进入里的收起（token 前进），再向
+       * 权威记录要一次结论。只做前者是个死入口：占座卡的可见性由待答位驱动，而待答位
+       * 可能是空的（历史回放只够画出单元），空位上没有卡片可被「叫回来」。
+       */
+      openQuestion: () => {
+        setQuestionReopenToken((value) => value + 1);
+        conversationRef.current.reconcileQuestions();
+      },
       // 正文里的相对路径要靠会话已知路径才能落到真路径上；真值在点击时从当前
       // 投影拉取，渲染期不遍历任何单元，动作集合也不会因此重建。
       referenceIndex: () => sessionReferenceIndex(conversationRef.current.state.turns),
@@ -396,62 +399,15 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   useExpiringNotice(createError, clearCreateError);
 
   /*
-   * 子代理与主会话同一条路径：直接把它当成一条会话选中，历史索引、分页、过程折叠与
-   * 输入坞都复用同一套实现。差别只在输入坞的控制（模型与思考强度只读），不再另立视图。
+   * 运行态事实上报（在跑、子代理与作业计数、待答标记与停止入口）收在
+   * `useRuntimeFactsReport` 里：外壳只读那一份，渲染层不在每帧各算一遍。
    */
-  const openSubagentSession = React.useCallback(
-    (row: import('../../conversation/transcript').SubagentRow) => {
-      const sessionId = (row.sessionId ?? '').trim();
-      if (sessionId.length === 0 || selection === null) return;
-      onSelectSession({
-        ...selection,
-        sessionId,
-        destination: '',
-        title: row.label,
-        channel: 'agent',
-        backTo: selection,
-        fixedModel: null,
-        fixedReasoningEffort: null,
-      });
-    },
-    [onSelectSession, selection],
-  );
-  /** 停止本轮：控制器经 ref 取，避免回调每轮换引用而让上报 effect 自激。 */
-  const interruptRef = React.useRef(conversation.interrupt);
-  interruptRef.current = conversation.interrupt;
-  const stopRunning = React.useCallback(async () => {
-    await interruptRef.current();
-  }, []);
-
-  const activeSubagents = conversation.state.subagents.filter((row) =>
-    isActiveSubagent(row.status),
-  ).length;
-  const selectedSessionId = selection?.sessionId ?? null;
-  const liveJobIds = useLiveJobIds(selectedSessionId);
-  const activeJobs = activeJobCount(conversation.jobs, liveJobIds);
-  /** 本会话创建的目标清单；点其中的一行进入它的执行会话。 */
-  const sessionGoals = useSessionGoals(selection?.sessionId ?? null, selection?.workspaceId ?? null);
-
-
-  React.useEffect(() => {
-    onRuntimeFacts?.({
-      sessionId: selection?.sessionId ?? null,
-      turnRunning: conversation.working,
-      activeSubagents,
-      activeJobs,
-      // 待答标识的清除条件：这条会话已经没有在等用户回答的提问了。
-      hasPendingQuestion: conversation.activeQuestion !== null,
-      stop: stopRunning,
-    });
-  }, [
-    activeJobs,
-    activeSubagents,
-    conversation.activeQuestion,
-    conversation.working,
+  const { openSubagentSession, sessionGoals } = useRuntimeFactsReport({
+    conversation,
+    selection,
+    onSelectSession,
     onRuntimeFacts,
-    selection?.sessionId,
-    stopRunning,
-  ]);
+  });
 
   /*
    * 正文舞台：切换会话时正文层显示哪一屏。

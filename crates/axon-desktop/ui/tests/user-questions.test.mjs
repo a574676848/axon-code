@@ -10,6 +10,7 @@ import {
 } from '../src/conversation/questions.ts';
 import { conversationReducer } from '../src/conversation/transcript/reducer.ts';
 import { INITIAL_CONVERSATION } from '../src/conversation/transcript/state.ts';
+import { projectFrames } from '../src/conversation/historyProjection.ts';
 
 test('倒计时分级阶段判定：临界值切换准确无抖动', () => {
   assert.equal(getCountdownPhase(30001), 'normal');
@@ -136,6 +137,133 @@ test('走消息通道的作答之后必须重贴车道，回灌给等待者的�
   // 网关没有下发投递方式时按需要重贴处理：停在原地比多贴一次更糟。
   assert.equal(shouldReattachSession(null), true);
   assert.equal(shouldReattachSession(undefined), true);
+});
+
+test('重进会话时，回放算出的待答位必须随整轮一起落回会话投影', () => {
+  /** 一条开场用户消息：这一轮因此有归属。 */
+  const opening = {
+    kind: 'event',
+    eventType: 'wire_event',
+    payloadJson: JSON.stringify({
+      schemaVersion: 'axon.wire.v3',
+      eventId: 'evt-open',
+      correlationId: 'corr-open',
+      session: { sessionId: 'interaction-1' },
+      sequence: 1,
+      recordedAtMs: 1_000,
+      kind: { type: 'userMessage', payload: { partId: 'part:user', content: '开始' } },
+    }),
+  };
+  /** 一条挂起提问帧：它同时决定时间线上的单元与输入坞的作答入口。 */
+  const suspended = {
+    kind: 'event',
+    eventType: 'wire_event',
+    payloadJson: JSON.stringify({
+      schemaVersion: 'axon.wire.v3',
+      eventId: 'evt-q',
+      correlationId: 'corr-q',
+      session: { sessionId: 'interaction-1' },
+      sequence: 2,
+      recordedAtMs: 2_000,
+      kind: {
+        type: 'userQuestion',
+        payload: {
+          partId: 'part:q',
+          callId: 'call-replay',
+          status: 'suspended',
+          questions: [{ id: 'q1', question: '走哪个分支？' }],
+          handoff: '我在等长官选定分支。',
+          deadlineAtMs: 60_000,
+        },
+      },
+    }),
+  };
+
+  const projected = projectFrames('interaction-1', [opening, suspended], undefined, undefined, null);
+  const cells = projected.turn.cells.filter((cell) => cell.role === 'question');
+  assert.equal(cells.length, 1, '回放必须画出这一张问答单元');
+  assert.equal(projected.questions.length, 1, '回放必须把这条提问一起交回来');
+
+  /*
+   * 单元画得出来、作答能力却丢掉，正是「进入详情看不到回答卡片、点回入口也没反应」
+   * 的现场：投影只交出轮次时，那份待答位随一次性状态一起被扔掉。
+   */
+  const state = conversationReducer(INITIAL_CONVERSATION, {
+    type: 'replace-turn',
+    turn: projected.turn,
+    jobs: projected.jobs,
+    questions: projected.questions,
+  });
+  assert.equal(state.pendingQuestions['call-replay']?.status, 'suspended');
+  assert.equal(state.pendingQuestions['call-replay']?.questions[0].question, '走哪个分支？');
+});
+
+test('回放补写待答位只补空缺：已有更新事实与已结算结论都不被覆盖', () => {
+  const opened = conversationReducer(INITIAL_CONVERSATION, {
+    type: 'open-turn',
+    turnId: 'turn-1',
+    nowMs: 1_000,
+  });
+  const turn = opened.turns[0];
+  const stale = {
+    partId: 'part:q8',
+    callId: 'call-8',
+    status: 'pending',
+    questions: [{ id: 'q1', question: '旧状态' }],
+    deadlineAtMs: 60_000,
+  };
+
+  // 1) 权威结论是「已结算」：更旧的挂起帧不得把它复活。
+  const settled = conversationReducer(opened, {
+    type: 'reconcile-questions',
+    authoritative: true,
+    questions: [{ ...stale, status: 'settled', answers: [{ id: 'q1', selected: ['release'] }] }],
+  });
+  const afterStale = conversationReducer(settled, {
+    type: 'replace-turn',
+    turn,
+    questions: [{ ...stale, status: 'suspended' }],
+  });
+  assert.equal(afterStale.pendingQuestions['call-8'], undefined);
+
+  // 2) 待答位上已有更新的状态：回放不得把它改回旧的。
+  const live = conversationReducer(opened, {
+    type: 'reconcile-questions',
+    questions: [{ ...stale, status: 'extended' }],
+  });
+  const afterReplay = conversationReducer(live, {
+    type: 'replace-turn',
+    turn,
+    questions: [stale],
+  });
+  assert.equal(afterReplay.pendingQuestions['call-8'].status, 'extended');
+});
+
+test('清空投影推进代次，问答对账因此能在清空之后重取一次', () => {
+  const opened = conversationReducer(INITIAL_CONVERSATION, {
+    type: 'open-turn',
+    turnId: 'turn-1',
+    nowMs: 1_000,
+  });
+  const filled = conversationReducer(opened, {
+    type: 'replace-turn',
+    turn: opened.turns[0],
+    questions: [
+      {
+        partId: 'part:q7',
+        callId: 'call-7',
+        status: 'suspended',
+        questions: [{ id: 'q1', question: '继续吗？' }],
+        deadlineAtMs: 9_000,
+      },
+    ],
+  });
+  assert.equal(filled.pendingQuestions['call-7'].status, 'suspended');
+
+  const cleared = conversationReducer(filled, { type: 'reset' });
+  assert.equal(cleared.pendingQuestions['call-7'], undefined, '清空之后待答位应当为空');
+  // 代次必须前进：只清空不推进，对账就不会重取，待答位永远停在清空后的空值上。
+  assert.equal(cleared.projectionGeneration, filled.projectionGeneration + 1);
 });
 
 test('对账先于回放到达时，重放出来的挂起帧不得把答过的题摆回待答态', () => {

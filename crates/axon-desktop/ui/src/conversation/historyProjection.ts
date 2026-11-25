@@ -35,6 +35,7 @@ import {
 import type { SessionJobFact, TurnMetricsReading } from '../types';
 import type { ConversationStreamEvent } from './wire';
 import type { AttachmentRef } from './transcript';
+import type { PendingQuestion } from './questions';
 
 /** 历史索引里一条轮次的补充事实：帧里没有、只有索引才有的那几项。 */
 export interface HistoryFacts {
@@ -90,6 +91,10 @@ export interface FrameProjectionOptions {
  *
  * 收口与起跑时刻都由调用方给的事实决定，投影不替服务端下结论：`settled` 为假表示这
  * 一轮还在跑，投影保持 `streaming`，收口交给随后到达的终态帧。
+ *
+ * 第三条：**投影必须交全**。回放里见到的提问同时决定两件事，时间线上那张问答单元，
+ * 以及输入坞的作答入口（会话级待答位）。只交 `turn` 就等于只恢复看得见的那一份，
+ * 重进会话时卡片不会再出现，点击时间线上的回入口也没有对象可唤醒。
  */
 export function projectFrames(
   interactionId: string,
@@ -98,7 +103,7 @@ export function projectFrames(
   reading: TurnMetricsReading | undefined,
   fallbackElapsedMs: number | null,
   options: FrameProjectionOptions = {},
-): { turn: TurnState; jobs: JobRow[] } {
+): { turn: TurnState; jobs: JobRow[]; questions: PendingQuestion[] } {
   const { truncated = false, settled = true } = options;
   const nowMs = Date.now();
   /*
@@ -123,7 +128,7 @@ export function projectFrames(
   state = applyFrames(state, [...frames], nowMs);
   const turn = state.turns[0];
   if (turn === undefined) {
-    return { turn: state.turns[0], jobs: state.jobs };
+    return { turn: state.turns[0], jobs: state.jobs, questions: Object.values(state.pendingQuestions) };
   }
   const observed = truncated ? upsertCell(turn, truncationCell(interactionId)) : turn;
   const open = observed.status === 'streaming' || observed.status === 'pending';
@@ -135,6 +140,7 @@ export function projectFrames(
   return {
     turn: applyTurnSummary(seeded, turnSummaryFacts(reading, fallbackElapsedMs, seeded)),
     jobs: state.jobs,
+    questions: Object.values(state.pendingQuestions),
   };
 }
 

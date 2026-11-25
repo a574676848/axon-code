@@ -421,6 +421,14 @@ export interface ConversationState {
    * 变空）。行只在发起作业的那一次调用处新增，后续回执原位更新。
    */
   jobs: JobRow[];
+  /**
+   * 投影代次：每清空一次投影（换会话、重试重开）就加一。
+   *
+   * 会话级事实的重取必须排在清空之后：问答对账挂在它上面，代次不变就不重取，而在
+   * 清空之前取回的结论会被同一次清空原样丢掉，待答位于是永远空着。清空一律走
+   * `reset`，因此代次也只有那一处推进。
+   */
+  projectionGeneration: number;
 }
 
 export interface ResolvedQuestion {
@@ -456,6 +464,7 @@ export const INITIAL_CONVERSATION: ConversationState = {
   pendingQuestions: {},
   resolvedQuestions: {},
   jobs: [],
+  projectionGeneration: 0,
 };
 
 /** 归约动作。 */
@@ -542,6 +551,14 @@ export type ConversationAction =
       mode?: 'as-is' | 'folded' | 'expanded';
       /** 这一轮回放出来的作业台账；折叠会释放单元，台账不能跟着丢。 */
       jobs?: JobRow[];
+      /**
+       * 这一轮回放出来的待答提问。
+       *
+       * 时间线上的问答单元与待答位是同一件事实的两处投影：只交出 `turn` 就等于只
+       * 恢复了「看得见的那一份」，作答能力（输入坞占座卡）随那份一次性状态一起丢掉，
+       * 重进会话时卡片因此不出现。回放算出来的提问必须一并交给归约器。
+       */
+      questions?: PendingQuestion[];
     }
   | { type: 'collapse-turn'; turnId: string }
   | { type: 'connecting' }

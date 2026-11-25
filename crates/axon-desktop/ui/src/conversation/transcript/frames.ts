@@ -76,6 +76,7 @@ import {
   findQuestionCell,
   hasTurnSummary,
   openTurn,
+  questionSettled,
   refreshLiveSummary,
   settleTurn,
   upsertCell,
@@ -557,16 +558,4 @@ function turnStartFromEvent(turn: TurnState, recordedAtMs: number): number | nul
   if (turn.firstEventAtMs !== null) return turn.startedAtMs;
   if (turn.startedAtMs === null) return recordedAtMs;
   return Math.min(turn.startedAtMs, recordedAtMs);
-}
-
-/**
- * 这条提问是否已经有权威的「已结算」结论。
- *
- * 两个来源都要看：时间线上的单元（结算帧或早先的对账写过它），以及对账台账
- * （结论先于回放到达时留下的那一份）。只看单元会漏掉后者：对账先到、单元还没
- * 被回放出来，随后到达的挂起帧就会在时间线上重新长出一张「已挂起」的单元。
- */
-function questionSettled(state: ConversationState, callId: string): boolean {
-  if (state.resolvedQuestions[callId] !== undefined) return true;
-  return findQuestionCell(state.turns, callId)?.status === 'settled';
 }

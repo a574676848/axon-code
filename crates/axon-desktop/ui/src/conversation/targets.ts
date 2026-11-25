@@ -96,6 +96,13 @@ export interface ConversationController {
   activeQuestion: import('./questions').PendingQuestion | null;
   /** 提交提问回答。 */
   answerQuestion: (callId: string, answers: import('./questions').AnswerItem[]) => Promise<void>;
+  /**
+   * 再向权威记录要一次问答结论。
+   *
+   * 时间线那条问答单元的「重新打开」用它：待答位可能是空的（历史回放只够画出单元），
+   * 而占座卡只由待答位驱动，空位上的一次点击不取回结论就什么也不会发生。
+   */
+  reconcileQuestions: () => void;
   /** 当前订阅的 Interaction 标识；会话目标恒为 null。 */
   watchedInteractionId: string | null;
   /**

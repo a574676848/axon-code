@@ -19,33 +19,21 @@ import * as ipc from '../ipc';
 import type { TurnMetricsReading } from '../types';
 import {
   historySource,
-  insertControlAfterInput,
-  interactionStillRunning,
-  sessionJobRows,
   projectFrames,
-  readingFactsOf,
-  turnSummaryFacts,
+  sessionJobRows,
   type HistoryFacts,
 } from './historyProjection';
 import { readInteractionFrames, readInteractionFramesTailFirst } from './interactionReplay';
 import { newestReceivedAtMs, newestExpandable, isAuditTurn, sessionOpenFailure, turnsNewerThanFloor } from './pagingBounds';
-import { provisionalFrames, withOpeningInput, type HistoryEntry } from './pagingSkeleton';
+import { withOpeningInput, type HistoryEntry } from './pagingSkeleton';
 import {
-  INITIAL_CONVERSATION,
-  applyFrames,
   attachmentsFromPaths,
-  conversationReducer,
-  outlineControl,
   planProjectionOf,
-  summaryFromIndexFacts,
   type ConversationAction,
-  type JobRow,
-  type TurnState,
 } from './transcript';
-import { applyTurnSummary, seedTurnReadings, settleTurn, type TurnSummaryFacts } from './transcript/turns';
 import { sessionBaselineOf, type SessionTokenBaseline } from './sessionUsage';
 import { sessionFactsOf, type SessionFacts } from './sessionFacts';
-import type { ConversationStreamEvent } from './wire';
+import { useTurnProjection } from './useTurnProjection';
 import type { SessionEffectiveModel } from './viewConfig';
 
 /** 首屏索引页大小：一次拿到最近一页的轮次清单，不参与正文回放。 */
@@ -161,21 +149,6 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
     }
   }, []);
 
-  /**
-   * 一轮的分割线读数：索引给出的 `turn_metrics` 优先，缺失时退回帧算出来的那份。
-   */
-  const readingFactsFor = useCallback(
-    (interactionId: string, fallbackElapsedMs: number | null, turn: TurnState): TurnSummaryFacts =>
-      turnSummaryFacts(readingsRef.current.get(interactionId), fallbackElapsedMs, turn),
-    [],
-  );
-
-  /** 索引读数：把 `turn_metrics` 换成归约器认得的形状，供指标条在帧回来之前成立。 */
-  const indexReadings = useCallback(
-    (interactionId: string) => readingFactsOf(readingsRef.current.get(interactionId)),
-    [],
-  );
-
   /** 记住下一次前翻的游标，并判定车道是否还有更早的轮次。 */
   const rememberOldest = useCallback((entry: HistoryEntry | undefined, more: boolean) => {
     if (entry !== undefined) {
@@ -214,130 +187,15 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
     [dispatch, onEffectiveModel, onReflectionNotice, onSessionFacts],
   );
 
-  /**
-   * 把一轮投影出来：有帧就纯按帧投影，没有帧才用索引骨架。
-   *
-   * 两条路径不能叠：索引骨架里那条合成的用户消息会与帧里的真实用户消息各成一格，
-   * 而骨架自带的收口帧又会先把这一轮判成结束，让随后的回放帧另起一轮（实测表现为
-   * 「打开会话后最新一轮的过程行整段不见、上下文读数也空着」）。因此这里二选一。
-   *
-   * `truncated` 是回放自己交回来的事实：这一轮中间一段没读到，正文要如实标一句。
+  /*
+   * 投影入口收在 `useTurnProjection` 里：打开会话、展开一轮与增量接管共用同一套口径，
+   * 本文件只负责取数（索引、帧、订阅）与派发。
    */
-  const projectTurn = useCallback(
-    (
-      entry: HistoryEntry,
-      frames: readonly ConversationStreamEvent[] | null,
-      truncated = false,
-      /*
-       * 这一轮在服务端是否已经收口。
-       *
-       * 有帧时由 `InteractionFrames.settled` 给（帧里有没有终态帧），没有帧的骨架路径按
-       * 索引里的 lifecycle 判。两条路都不替服务端下结论：还在跑的一轮必须留在
-       * `streaming`，否则 `working` 当场变假，工作状态行与侧栏转圈一起消失。
-       */
-      settled = !interactionStillRunning(entry.status),
-    ): { turn: TurnState; jobs: JobRow[] } => {
-      if (frames !== null && frames.length > 0) {
-        return projectFrames(
-          entry.interactionId,
-          frames,
-          factsRef.current.get(entry.interactionId),
-          readingsRef.current.get(entry.interactionId),
-          entry.elapsedMs ?? null,
-          { truncated, settled },
-        );
-      }
-      let state = conversationReducer(INITIAL_CONVERSATION, {
-        type: 'open-turn',
-        turnId: entry.interactionId,
-        nowMs: entry.receivedAtMs,
-      });
-      const facts = factsRef.current.get(entry.interactionId);
-      if (facts !== undefined) {
-        state = conversationReducer(state, {
-          type: 'attach-history',
-          interactionId: entry.interactionId,
-          attachments: facts.attachments,
-          channel: facts.channel,
-        });
-      }
-      state = applyFrames(state, provisionalFrames(entry), entry.receivedAtMs);
-      const turn = state.turns[0];
-      if (turn === undefined) {
-        return { turn: state.turns[0], jobs: state.jobs };
-      }
-      const closed =
-        settled && (turn.status === 'streaming' || turn.status === 'pending')
-          ? settleTurn(turn, 'completed', entry.elapsedMs ?? null)
-          : turn;
-      /*
-       * 索引读数先落到这一轮上：首字、速率与用量在帧回来之前就要在指标条上成立。
-       * 窗口占用不在索引里，因此这一轮只有 token 分桶，上下文段仍等收尾负载。
-       */
-      const seeded = seedTurnReadings(closed, indexReadings(entry.interactionId));
-      /*
-       * 只读索引的那一轮：给一根折叠行当入口。
-       *
-       * 过程要等点开才读整轮，但读者需要一个「这一轮可以展开」的落点；标题只写中性的
-       * 「过程」，点开之后换成帧算出来的真实动作摘要（没有过程时这一行会消失）。
-       */
-      const elapsed = readingFactsFor(entry.interactionId, entry.elapsedMs ?? null, seeded).durationMs;
-      /*
-       * 没有过程证据就不立折叠行。
-       *
-       * 纯问答轮点开也没有过程可看，给它立一根「过程」抬头只是把一次问答伪装成跑过
-       * 东西的回合。判据取索引里的事实：这一轮有工具名、有工具调用次数或有推理输出，
-       * 三者都没有才认定它没有过程。
-       */
-      const reading = readingsRef.current.get(entry.interactionId);
-      const hasProcess =
-        (entry.toolNames?.length ?? 0) > 0 ||
-        (reading?.toolCalls ?? 0) > 0 ||
-        (reading?.reasoningTokens ?? 0) > 0;
-      const withControl = hasProcess
-        ? insertControlAfterInput(
-            seeded,
-            outlineControl(
-              entry.interactionId,
-              entry.interactionId,
-              entry.receivedAtMs,
-              elapsed,
-              summaryFromIndexFacts(entry.toolNames ?? [], reading?.reasoningTokens),
-            ),
-          )
-        : seeded;
-      return {
-        turn: applyTurnSummary(
-          withControl,
-          readingFactsFor(entry.interactionId, entry.elapsedMs ?? null, withControl),
-        ),
-        jobs: state.jobs,
-      };
-    },
-    [indexReadings, provisionalFrames, readingFactsFor],
-  );
-
-  /** 一条轮次的骨架形态（打开时光标还没落到任何历史帧上）。 */
-  const withProvisional = useCallback(
-    (entries: readonly HistoryEntry[]) =>
-      entries.filter((entry) => !isAuditTurn(entry)).map((entry) => projectTurn(entry, null).turn),
-    [projectTurn],
-  );
-
-  /**
-   * 帧读不到时的收口兜底。
-   *
-   * 骨架已经按「在跑」立起来了，但这一轮此刻没有任何证据（帧没读到，实时尾也没订上）：
-   * 继续挂着 `streaming` 会让工作状态行与侧栏转圈永远转下去，比少一段过程更误导。
-   * 退回按历史收口的骨架，失败本身仍由调用方如实上报。
-   */
-  const settleUnread = useCallback(
-    (entry: HistoryEntry) => {
-      const settled = projectTurn(entry, null, false, true);
-      dispatch({ type: 'replace-turn', turn: settled.turn, jobs: settled.jobs });
-    },
-    [dispatch, projectTurn],
-  );
+  const { projectTurn, withProvisional, settleUnread } = useTurnProjection({
+    dispatch,
+    facts: factsRef,
+    readings: readingsRef,
+  });
 
   /**
    * 打开一条车道：索引立起三形态，再升级最新一轮为展开形态。
@@ -394,7 +252,12 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
             tail.truncated,
             tail.settled,
           );
-          dispatch({ type: 'replace-turn', turn: projected.turn, jobs: projected.jobs });
+          dispatch({
+            type: 'replace-turn',
+            turn: projected.turn,
+            jobs: projected.jobs,
+            questions: projected.questions,
+          });
         }
         void reading.full
           .then((full) => {
@@ -405,7 +268,12 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
               full.truncated,
               full.settled,
             );
-            dispatch({ type: 'replace-turn', turn: projected.turn, jobs: projected.jobs });
+            dispatch({
+            type: 'replace-turn',
+            turn: projected.turn,
+            jobs: projected.jobs,
+            questions: projected.questions,
+          });
             if (!full.settled && workspaceId !== null) {
               void subscribeTail(newest.interactionId, full.cursor);
             }
@@ -547,7 +415,12 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
             tail.truncated,
             tail.settled,
           );
-          dispatch({ type: 'replace-turn', turn: projected.turn, jobs: projected.jobs });
+          dispatch({
+            type: 'replace-turn',
+            turn: projected.turn,
+            jobs: projected.jobs,
+            questions: projected.questions,
+          });
           // 只有最新一条走「整轮展开」，其余新轮拿到尾窗就够；但它们仍在跑时必须各订一条
           // 实时尾，否则会永久停在骨架的 streaming 态。
           if (!expand && !tail.settled) void subscribeTail(entry.interactionId, tail.cursor);
@@ -566,7 +439,12 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
               full.truncated,
               full.settled,
             );
-            dispatch({ type: 'replace-turn', turn: projected.turn, jobs: projected.jobs });
+            dispatch({
+            type: 'replace-turn',
+            turn: projected.turn,
+            jobs: projected.jobs,
+            questions: projected.questions,
+          });
             if (!full.settled) void subscribeTail(entry.interactionId, full.cursor);
           })
           .catch(() => {
@@ -643,6 +521,7 @@ export function useSessionPaging(options: SessionPagingOptions): SessionPaging {
             turn: projected.turn,
             mode: 'expanded',
             jobs: projected.jobs,
+            questions: projected.questions,
           });
           if (!read.settled && workspaceId !== null) {
             void subscribeTail(interactionId, read.cursor);

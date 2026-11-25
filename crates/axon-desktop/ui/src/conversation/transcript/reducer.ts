@@ -11,7 +11,7 @@ import { collapseTurn, foldTurn, replaceTurnCells } from './fold';
 import { applySettledSilentTurn } from './terminal';
 import { INITIAL_CONVERSATION, LOCAL_STEER_PREFIX, type AttachmentRef, type ConversationAction, type ConversationState, type JobRow, type TurnState } from './state';
 import { pruneSettledQuestions, type PendingQuestion } from '../questions';
-import { emptyTurn, absorbClaimedUserCells, detachCells, localUserId, openTurn, refreshLiveElapsed, refreshLiveSummary, upsertCell, withTurn } from './turns';
+import { emptyTurn, absorbClaimedUserCells, detachCells, localUserId, openTurn, questionSettled, refreshLiveElapsed, refreshLiveSummary, upsertCell, withTurn } from './turns';
 
 /** 归约入口。 */
 export function conversationReducer(
@@ -20,7 +20,13 @@ export function conversationReducer(
 ): ConversationState {
   switch (action.type) {
     case 'reset':
-      return INITIAL_CONVERSATION;
+      /*
+       * 清空投影，但推进投影代次。
+       *
+       * 会话级事实（问答对账）挂在代次上重取一次：清空之前取回的结论会被这一下原样
+       * 抹掉，而代次不变就没有任何一处会再触发一次，待答位因此永远空着。
+       */
+      return { ...INITIAL_CONVERSATION, projectionGeneration: state.projectionGeneration + 1 };
     case 'plan-seed':
       // 快照只是「打开那一刻的当前计划」：已有计划（来自回放帧或实时帧）时一律不动。
       return state.plan === null ? { ...state, plan: action.plan } : state;
@@ -123,7 +129,9 @@ export function conversationReducer(
       return withTurn(state, position, (turn) => collapseTurn(turn));
     }
     case 'replace-turn': {
-      const position = state.turns.findIndex((turn) => turn.id === action.turn.id);
+      // 回放算出来的待答提问一并落回待答位：单元与作答入口是同一件事实的两处投影。
+      const base = adoptReplayedQuestions(state, action.questions);
+      const position = base.turns.findIndex((turn) => turn.id === action.turn.id);
       if (position < 0) {
         /*
          * 这一轮不在时间线上，但帧已经证明它存在：补进来，不能静默丢弃。
@@ -133,14 +141,14 @@ export function conversationReducer(
          * 投影出来的整轮又因为找不到位置被丢掉，于是正文永远空白。判据放在这里最稳：
          * 有帧就是事实，按起始时刻插到正确位置；没有任何帧时仍然不会凭空长出一轮。
          */
-        const inserted = [...state.turns, action.turn].sort(
+        const inserted = [...base.turns, action.turn].sort(
           (left, right) => (left.startedAtMs ?? 0) - (right.startedAtMs ?? 0),
         );
-        const jobs = mergeJobs(state.jobs, action.jobs);
-        const withJobs = jobs === state.jobs ? state : { ...state, jobs };
+        const jobs = mergeJobs(base.jobs, action.jobs);
+        const withJobs = jobs === base.jobs ? base : { ...base, jobs };
         return absorbClaimedUserCells({ ...withJobs, turns: inserted }, [action.turn]);
       }
-      const replaced = withTurn(state, position, () => {
+      const replaced = withTurn(base, position, () => {
         const incoming = { ...action.turn, folded: false, summary: action.turn.summary };
         if (action.mode === 'folded') {
           // 折叠位置直接用原始单元折：先插控件再折会给「没有过程」的轮次留下一根空抬头。
@@ -178,6 +186,34 @@ export function conversationReducer(
     default:
       return state;
   }
+}
+
+/**
+ * 把一次回放投影出来的待答提问落进会话级待答位。
+ *
+ * 只补不覆盖：实时帧与对账都比一次历史回放新，已有条目的状态不得被更旧的帧改回去。
+ * 已结算的条目不入位（待答位只关心还需要回答的那几条），台账里已有权威结论的同样
+ * 不入位。补进去之后，重进会话时的占座卡与时间线那条问答单元由同一份回放事实成立，
+ * 不必再靠一次额外往返把作答入口找回来。
+ */
+function adoptReplayedQuestions(
+  state: ConversationState,
+  questions: readonly PendingQuestion[] | undefined,
+): ConversationState {
+  if (questions === undefined || questions.length === 0) return state;
+  let pending = state.pendingQuestions;
+  let changed = false;
+  for (const question of questions) {
+    if (question.status === 'settled') continue;
+    if (pending[question.callId] !== undefined) continue;
+    if (questionSettled(state, question.callId)) continue;
+    if (!changed) {
+      pending = { ...pending };
+      changed = true;
+    }
+    pending[question.callId] = question;
+  }
+  return changed ? { ...state, pendingQuestions: pending } : state;
 }
 
 /**
