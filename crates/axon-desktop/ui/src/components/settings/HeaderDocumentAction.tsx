@@ -20,6 +20,7 @@ const SECTION_TARGET: Record<SettingsSection, string | null> = {
   // 连接分区没有对应的配置文件：档案由客户端自己的状态文件承载，不是 config.toml。
   connection: null,
   general: 'config',
+  voice: 'config',
   models: 'config',
   balancer: 'config',
   remote: 'config',

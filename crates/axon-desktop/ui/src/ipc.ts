@@ -28,6 +28,7 @@ import type {
   SubmissionReceipt,
   SystemInfo,
   UpdateCheck,
+  VoiceConfigDto,
   SkillItem,
   WorkspaceItem,
   DesktopPreferences,
@@ -135,6 +136,13 @@ export const validateConfig = (tomlContent: string): Promise<ConfigValidateResul
 
 export const writeConfig = (tomlContent: string): Promise<ConfigWriteResult> =>
   call('config_write', { tomlContent });
+
+/** 读取脱敏后的整段语音配置。 */
+export const readVoiceConfig = (): Promise<VoiceConfigDto> => call('voice_config_read');
+
+/** 整段替换语音配置并落盘，密钥明文由后端按渠道名保留。 */
+export const applyVoiceConfig = (config: VoiceConfigDto): Promise<ConfigWriteResult> =>
+  call('voice_config_apply', { config });
 
 /** 批量应用配置键值，后端校验并备份后直接写入。 */
 export const applyConfigValues = (values: Record<string, string>): Promise<ConfigWriteResult> =>

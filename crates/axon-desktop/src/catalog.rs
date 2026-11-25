@@ -337,7 +337,7 @@ fn remove_from(config: &mut axon_config::AxonConfig, name: &str) -> Result<(), S
 /// 取权威配置全文、在内存里改一处、整份写回后台。
 ///
 /// 读改写都在网关侧：桌面端只做一次转发式的编辑，落盘与校验都由后台完成。
-fn edit_config(
+pub(crate) fn edit_config(
     edit: impl FnOnce(&mut axon_config::AxonConfig) -> Result<(), String>,
 ) -> Result<ConfigWriteResponse, String> {
     let receipt = config_gateway::get_json(config_gateway::CONFIG_PATH)?;

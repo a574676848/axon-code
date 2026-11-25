@@ -73,6 +73,8 @@ pub mod ui_failure;
 pub mod usage;
 /// 语音：音色试听与麦克风上行。
 pub mod voice;
+/// 独立 `[voice]` 段的脱敏整段读写 IPC。
+pub mod voice_config;
 /// 操作系统级麦克风隐私探测与系统设置跳转。
 pub mod voice_permission;
 /// 窗口级系统材质、原生深浅色联动与最大化状态翻转。
@@ -276,6 +278,8 @@ pub fn run() {
             connection_keys_revoke,
             open_external_url,
             voice_presets,
+            voice_config::voice_config_read,
+            voice_config::voice_config_apply,
             voice_runtime_status,
             voice_tts,
             voice_preview,
