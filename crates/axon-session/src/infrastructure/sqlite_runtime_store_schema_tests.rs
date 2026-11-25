@@ -180,3 +180,52 @@ fn schema_version_mismatch_reports_product_message_with_versions_in_debug() {
         "原始版本必须留在 Debug 供日志取证：{debug}"
     );
 }
+
+/// 低版本库（有版本标记、缺新表）应自动补齐新增表，且既有行一条不丢。
+#[test]
+fn a_lower_version_database_is_migrated_with_its_rows_intact() {
+    let directory = axon_test_support::test_temp_dir();
+    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    store.initialize().expect("建库");
+    let control = store.path().to_path_buf();
+    {
+        let connection = rusqlite::Connection::open(&control).expect("打开控制面库");
+        connection
+            .execute(
+                "INSERT INTO session_metrics(session_id, updated_at_ms) VALUES('keep-me', 1)",
+                [],
+            )
+            .expect("写一行待保留数据");
+        // 回到 15 版本并删掉本轮新增的表：等价于升级前的存量库。
+        connection
+            .execute_batch("DROP TABLE projection_state; PRAGMA user_version = 15;")
+            .expect("构造旧版本库");
+    }
+
+    let migrated = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    migrated.initialize().expect("低版本库必须自动迁移");
+    let version: i64 = migrated
+        .with_read_connection(|connection| {
+            connection.query_row("PRAGMA user_version", [], |row| row.get(0))
+        })
+        .expect("读版本");
+    assert_eq!(version, 16, "迁移后版本号必须推进到当前版本");
+    let kept: i64 = migrated
+        .with_read_connection(|connection| {
+            connection.query_row(
+                "SELECT COUNT(*) FROM session_metrics WHERE session_id='keep-me'",
+                [],
+                |row| row.get(0),
+            )
+        })
+        .expect("读保留数据");
+    assert_eq!(kept, 1, "迁移不得丢既有数据");
+    let projection_rows: i64 = migrated
+        .with_read_connection(|connection| {
+            connection.query_row("SELECT COUNT(*) FROM projection_state", [], |row| {
+                row.get(0)
+            })
+        })
+        .expect("新表必须存在");
+    assert_eq!(projection_rows, 0);
+}

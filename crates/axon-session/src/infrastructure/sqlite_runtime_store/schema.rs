@@ -37,9 +37,24 @@ impl SchemaKind {
             // 13：新增 turn_activity 逐轮事实投影（索引页不再扫事件日志）。
             // 14：删掉无人使用的 turn_activity_latest 索引；thread_turn_facts 增 turn_sequence。
             // 15：新增 context_snapshots 会话级上下文快照投影（界面占用读数与剩余量同源）。
-            Self::Control => 15,
+            // 16：新增 projection_state 投影水位（异步投影补齐的起点，只加表）。
+            Self::Control => 16,
             // 2：三张保留期表各增一个以 expires_at_ms 前导的清理索引，清批不再整索引扫描。
             Self::Outbox => 2,
+        }
+    }
+
+    /// 从旧版本升到当前版本的迁移步骤，按 `from` 升序排列。
+    ///
+    /// 只允许「加表 / 加索引」这类**不改动既有表**的语句：迁移在 `prepare_schema` 的
+    /// IMMEDIATE 事务里执行，失败整体回滚；并且必须幂等（`IF NOT EXISTS`），因为版本号
+    /// 只在事务末尾写入，崩溃后重入会再执行一次。`ALTER`、`DROP` 与数据回填不在这一层，
+    /// 它们需要各自的备份与回滚设计。
+    const fn migrations(self) -> &'static [(i64, &'static [&'static str])] {
+        match self {
+            // 15 升 16：投影水位表。旧库打开时补建，新库由 DDL 直接建。
+            Self::Control => &[(15, &[PROJECTION_STATE_DDL])],
+            Self::Outbox => &[],
         }
     }
 
@@ -49,11 +64,23 @@ impl SchemaKind {
     /// 模块（单文件行数硬限）。片段顺序不影响建表结果，外键引用在 SQLite 首次使用时才校验。
     const fn ddl(self) -> &'static [&'static str] {
         match self {
-            Self::Control => &[CONTROL_DDL, CONTEXT_SNAPSHOT_DDL],
+            Self::Control => &[CONTROL_DDL, CONTEXT_SNAPSHOT_DDL, PROJECTION_STATE_DDL],
             Self::Outbox => &[OUTBOX_DDL],
         }
     }
 }
+
+/// 投影水位：每个会话「已投影到哪一帧」。
+///
+/// 异步投影要靠它判断补齐起点；同步投影阶段它可以只写不读，等投影 worker 落地后转为
+/// 唯一权威。表只增不改，迁移因此只需要一条 `CREATE TABLE IF NOT EXISTS`。
+const PROJECTION_STATE_DDL: &str = "
+    CREATE TABLE IF NOT EXISTS projection_state (
+        session_id TEXT PRIMARY KEY,
+        last_projected_seq INTEGER NOT NULL DEFAULT 0,
+        updated_at_ms INTEGER NOT NULL
+    );
+";
 
 /// 进程内建库的串行点。
 ///
@@ -175,11 +202,35 @@ pub(super) fn initialize_schema(
         |row| row.get(0),
     )?;
     let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if existing_tables > 0 && version != kind.version() {
+    if existing_tables > 0 && (version == 0 || version > kind.version()) {
+        /*
+         * 没有版本标记的既有库仍是陌生库：它可能是另一个程序的库，也可能是更早的
+         * 未版本化格式，两者都不能靠「补表」猜过去。高于当前版本的库同理，降级运行
+         * 会读到它不认识的列。
+         */
         return Err(SchemaPrepareError::VersionMismatch {
             expected: kind.version(),
             found: version,
         });
+    }
+    if existing_tables > 0 && version < kind.version() {
+        /*
+         * 只走**已登记的单步迁移**：登记的版本号必须正好等于库头版本。
+         *
+         * 这样「15 升 16」这类只加表的升级可以自动完成，而任何没登记过的旧库（例如
+         * 版本 1 的陌生库）仍然按原策略拒绝打开，不会被「补表」猜过去。每条语句都
+         * 幂等，整段在调用方的事务里，失败时连版本号一起回滚。
+         */
+        let Some((_, statements)) = kind.migrations().iter().find(|(from, _)| *from == version)
+        else {
+            return Err(SchemaPrepareError::VersionMismatch {
+                expected: kind.version(),
+                found: version,
+            });
+        };
+        for statement in *statements {
+            connection.execute_batch(statement)?;
+        }
     }
     // 只给空库建表：既有库不跑 DDL。`CREATE ... IF NOT EXISTS` 在版本一致时执行等于
     // 一条「缺表就补表」的迁移通道，与「不迁移、缺表即不兼容」的目标态冲突。
