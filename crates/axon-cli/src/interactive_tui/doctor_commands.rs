@@ -598,7 +598,13 @@ fn doctor_runtime_check(fix: bool) -> DoctorCheck {
         }
     };
     let data = root.join(axon_config::AXON_RUNTIME_DATA_DIR);
-    let candidates = [root.clone(), data.clone(), data.join("ipc")];
+    // 只校验真正会被写入的两级目录：`<root>` 与 `<root>/data`。
+    //
+    // 不再要求 `<root>/data/ipc`：Daemon 的 IPC 端点走 interprocess 的命名端点，端点是
+    // `axon-daemon` 这类名字而不是绝对路径，因此不会在磁盘上落地（Windows 命名管道、
+    // Unix 抽象 socket）。这个目录从来没有代码创建过，留在候选里只会让 doctor 在健康
+    // 机器上永久报一句「运行目录尚未创建」，把排查者引向一个不存在的故障。
+    let candidates = [root.clone(), data.clone()];
     let mut created = false;
     for path in candidates {
         if path.is_dir() {
