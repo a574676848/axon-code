@@ -168,6 +168,95 @@ fn compaction_projection_writes_the_sequence_the_turn_will_close_with() {
     );
 }
 
+/// 起跑镜像必须当场定序：占位轮不再是 0，换窗边界因此有既成事实可引用。
+///
+/// 反向判据：把起跑分支改回原样（不赋 sequence），这条用例立刻失败。
+#[test]
+fn start_mirror_assigns_the_turn_sequence_up_front() {
+    let root = temp_root("start-sequence");
+    std::fs::create_dir_all(&root).unwrap();
+    let service = ThreadService::new(JsonlThreadEventStore);
+    let thread_id = "thread-start-seq";
+    let record = session_record("历史提问", "历史回答", 400);
+    service
+        .start_empty_thread(
+            &root,
+            StartEmptyThreadCommand {
+                thread_id: thread_id.to_owned(),
+                session_root_id: thread_id.to_owned(),
+                parent_thread_id: None,
+                forked_from_thread_id: None,
+                source: ThreadSource::CliRun,
+                ephemeral: false,
+                settings: settings_from_record(&record),
+                created_at_ms: 400,
+            },
+        )
+        .unwrap();
+    let done = Turn {
+        turn_id: format!("{thread_id}-turn-assistant:done"),
+        ..turn_from_record(&record, 0).unwrap()
+    };
+    service
+        .append_turn_at_tail(
+            &root,
+            AppendTurnCommand {
+                thread_id: thread_id.to_owned(),
+                recorded_at_ms: 500,
+                turn: done,
+            },
+        )
+        .unwrap();
+
+    let detail = service.read_thread(&root, thread_id).unwrap();
+    let running = Turn {
+        turn_id: format!("{thread_id}-turn-assistant:running"),
+        status: TurnStatus::Active,
+        ..turn_from_record(&record, 0).unwrap()
+    };
+    mirror_existing_turn(&service, &root, thread_id, &detail, running, &record).unwrap();
+
+    let after = service.read_thread(&root, thread_id).unwrap();
+    let started = after
+        .turns
+        .iter()
+        .find(|turn| turn.turn_id.ends_with("assistant:running"))
+        .expect("起跑镜像必须写入本轮");
+    assert_eq!(
+        started.sequence, 1,
+        "起跑镜像必须当场把轮序定成 max+1，不能留 0"
+    );
+}
+
+/// 边界越过全部轮次时回退到最新轮：换窗那轮没收口，照边界过滤会清空整条历史。
+///
+/// 反向判据：去掉 `effective_through_sequence` 的越界回退，这条用例立刻失败
+/// （真机现场：边界 40 而最大轮序 39，可见轮次 0 条，模型把已经做过的事重做一遍）。
+#[test]
+fn boundary_beyond_every_turn_falls_back_to_the_latest_turn() {
+    let records = vec![
+        session_record("archived-user", "archived-assistant", 100),
+        session_record("latest-user", "latest-assistant", 200),
+    ];
+    let mut detail = thread_detail_from_records(&records).unwrap();
+    detail.compacted_history = Some(ThreadCompaction {
+        history_json: serde_json::json!([
+            {"role": "user", "content": "checkpoint", "cache_excluded": true}
+        ])
+        .to_string(),
+        through_sequence: 5,
+        checkpoint_text: "checkpoint".to_owned(),
+        recorded_at_ms: 300,
+    });
+
+    let history = thread_model_history_json(&detail).unwrap();
+
+    assert!(
+        history.contains("latest-user"),
+        "边界越过全部轮次时必须保留最新一轮，不能把窗口交接到空历史"
+    );
+}
+
 /// 起跑占位轮（序号恒为 0）不参与轮序计算：换窗边界不会因此退化成 0。
 ///
 /// 这是 `next_sequence` 自身的口径；接线层的反向判据在

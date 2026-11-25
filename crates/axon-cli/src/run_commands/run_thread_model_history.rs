@@ -41,33 +41,58 @@ pub(crate) fn thread_model_history_json(detail: &ThreadDetail) -> Result<String,
     serde_json::to_string(&messages).map_err(|error| format!("历史序列化失败：{error}"))
 }
 
-/// 解析真正生效的窗口边界，并修正「边界被写成 0」的存量快照。
+/// 解析真正生效的窗口边界，修正两类会让历史装配失真的快照。
 ///
-/// 0 有两种来源：一是这次换窗就发生在第一轮（那时它是唯一可见轮次，0 正确）；二是旧写入
+/// 一是 0：可能是这次换窗就发生在第一轮（那时它是唯一可见轮次，0 正确），也可能是旧写入
 /// 把起跑占位轮次的 0 当成了边界。仅凭快照字段分不出来，但换窗时刻本身是证据：换窗那轮
 /// 在换窗之前就已起跑（`started_at_ms <= recorded_at_ms`），它必须留在窗口里，更早的轮次
-/// 已经并入摘要。按这个口径反推首个可见轮次，既不误伤合法的 0，也不会把已归档轮次整段
-/// 装回模型视图（真机现场：710 条约 1.05M tokens，而 Provider 实测只有 143K）。
+/// 已经并入摘要。按这个口径反推既不误伤合法的 0，也不会把已归档轮次整段装回模型视图
+/// （真机现场：710 条约 1.05M tokens，而 Provider 实测只有 143K）。
+///
+/// 二是边界越过全部轮次：边界按「本轮收口后会拿到的轮序」写入，若那轮最终没有收口
+/// （被中断、进程被杀、或换窗后直接结束），这个号码从未落到任何轮次上。照它过滤会把整条
+/// 历史清空，只剩上一个窗口的 checkpoint，模型于是丢掉最近所有动作、把已经做过的事重做
+/// 一遍（真机现场：边界 40 而最大轮序 39，可见轮次 0 条）。这种情况下回退到最新已收口轮，
+/// 宁可多带一轮，也不让窗口交接到空的历史上。
 fn effective_through_sequence(detail: &ThreadDetail, compaction: &ThreadCompaction) -> u64 {
-    if compaction.through_sequence > 0 {
-        return compaction.through_sequence;
+    let declared = compaction.through_sequence;
+    let boundary = if declared > 0 {
+        declared
+    } else {
+        let rebuilt = detail
+            .turns
+            .iter()
+            .filter(|turn| turn.started_at_ms <= compaction.recorded_at_ms)
+            .map(|turn| turn.sequence)
+            .max()
+            .unwrap_or(0);
+        if rebuilt > 0 {
+            axon_logger::warning(&format!(
+                "窗口轮转边界为 0 但换窗时已有更早轮次，已按换窗那轮的轮序 {rebuilt} 修正：thread={} turns={}",
+                detail.thread.thread_id,
+                detail.turns.len()
+            ));
+        }
+        rebuilt
+    };
+    if boundary == 0 || detail.turns.is_empty() {
+        return boundary;
     }
-    let rebuilt = detail
+    if detail.turns.iter().any(|turn| turn.sequence >= boundary) {
+        return boundary;
+    }
+    let fallback = detail
         .turns
         .iter()
-        .filter(|turn| turn.started_at_ms <= compaction.recorded_at_ms)
         .map(|turn| turn.sequence)
         .max()
         .unwrap_or(0);
-    if rebuilt == 0 {
-        return 0;
-    }
     axon_logger::warning(&format!(
-        "窗口轮转边界为 0 但换窗时已有更早轮次，已按换窗那轮的轮序 {rebuilt} 修正：thread={} turns={}",
+        "窗口轮转边界 {boundary} 越过全部轮次，已回退到最新轮 {fallback}：换窗那轮没有收口，thread={} turns={}",
         detail.thread.thread_id,
         detail.turns.len()
     ));
-    rebuilt
+    fallback
 }
 
 /// 收集若干轮次投影出的模型消息，不写入外部缓冲。

@@ -89,7 +89,7 @@ pub(super) fn install_active_compaction_projection(
     // 两者是不同的身份空间，拿会话 ULID 来读 Thread 只会得到「未找到 thread」。
     let detail = service.read_thread(root, thread_id)?;
     let suffix = format!("-turn-{assistant_part_id}");
-    let current_turn_id = detail
+    let current = detail
         .turns
         .iter()
         .rev()
@@ -101,15 +101,19 @@ pub(super) fn install_active_compaction_projection(
                 .rev()
                 .find(|turn| turn.status == TurnStatus::Active)
         })
-        .ok_or_else(|| "活动窗口缺少当前运行轮次".to_owned())?
-        .turn_id
-        .clone();
-    // 边界取本轮**收口后**会拿到的轮序，而不是当前轮对象上的 sequence：起跑镜像写入的
-    // 占位轮次序号恒为 0，照抄它等于让恢复侧 `sequence >= 0` 退回「无边界」，把已归档的
-    // 全部轮次重新装回模型历史；全量本地估算随即越过强制换窗线，于是每个 turn 起跑都
-    // 触发一次自动换窗（真机实测 710 条约 1.05M tokens，而 Provider 实测只有 143K）。
-    compaction.through_sequence =
-        mirror_turn::next_sequence(&detail, Some(current_turn_id.as_str()));
+        .ok_or_else(|| "活动窗口缺少当前运行轮次".to_owned())?;
+    let current_turn_id = current.turn_id.clone();
+    let current_sequence = current.sequence;
+    /*
+     * 边界就是本轮自己的轮序：起跑镜像已经把序号写进 thread，它是既成事实，不需要预测
+     * 「收口后会不会拿到这个号」，也就不会写出一个没有轮次承载的悬空边界。只有旧快照里的
+     * 占位轮（序号恒为 0）仍需按收口口径推算，否则边界会退化成「无边界」。
+     */
+    compaction.through_sequence = if current_sequence > 0 || detail.turns.len() <= 1 {
+        current_sequence
+    } else {
+        mirror_turn::next_sequence(&detail, Some(current_turn_id.as_str()))
+    };
     let through_sequence = compaction.through_sequence;
     // 复用刚读到的 detail 安装投影：`compact_thread` 会再读一遍整份 thread，
     // 对 60 MiB 级的会话等于把同一份语料解析两次。

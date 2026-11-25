@@ -42,13 +42,22 @@ pub(crate) fn mirror_existing_turn(
                 )
                 .map(|()| None);
         }
+        /*
+         * 起跑时就把本轮的轮序定下来。
+         *
+         * 序号一旦写进 thread 就是事实：换窗边界、`trace:<session>:<sequence>` 与按序号
+         * 定位都直接引用它，不再依赖「本轮收口后会不会拿到这个号」。旧实现让占位轮恒为 0、
+         * 收口时才补定，换窗因此只能预测一个尚未落地的未来序号；那轮一旦被中断或进程被杀，
+         * 预测值就悬空，恢复时按它过滤会把整条历史清空，只剩上一个窗口的摘要。
+         */
+        let sequence = next_sequence(detail, None);
         return service
             .start_turn(
                 root,
                 StartTurnCommand {
                     thread_id: thread_id.to_owned(),
                     recorded_at_ms: record.created_at_ms,
-                    turn,
+                    turn: Turn { sequence, ..turn },
                 },
             )
             .map(|()| None);
@@ -62,11 +71,15 @@ pub(crate) fn mirror_existing_turn(
         .find(|value| value.status == TurnStatus::Active && value.turn_id == turn.turn_id)
     {
         /*
-         * 占位轮次的序号一律从 0 起（起跑镜像还不知道它排第几），收口时必须在这里定下
-         * 真正的轮序：沿用 `active.sequence` 会让每一轮都拿到 0，`trace:<session>:<sequence>`、
-         * `card_id` 与「按序号定位轮次」随即全轮撞车，治理显式信号也全部退化。
+         * 新快照从起跑起就带着真实轮序，收口直接沿用；只有旧快照里的占位轮（序号恒为 0
+         * 且不是 thread 的第一轮）才需要在这里补定，否则会与 Turn 0 撞号，
+         * `trace:<session>:<sequence>`、`card_id` 与「按序号定位轮次」随即全轮撞车。
          */
-        let sequence = next_sequence(detail, Some(active.turn_id.as_str()));
+        let sequence = if active.sequence > 0 || detail.turns.len() <= 1 {
+            active.sequence
+        } else {
+            next_sequence(detail, Some(active.turn_id.as_str()))
+        };
         // detail 已确认过这一轮：追加不再把整条 thread 读第二遍。
         return service
             .append_turn_at_tail(
