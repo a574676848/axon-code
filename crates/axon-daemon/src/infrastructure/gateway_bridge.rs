@@ -6,6 +6,8 @@ use event_options::prepare_event_content;
 pub use event_options::{EVENT_CONTENT_INLINE_LIMIT_CHARS, GatewayEventOptions};
 
 use super::gateway_debounce::GatewayDebouncer;
+#[path = "gateway_live_facts.rs"]
+pub mod live_facts;
 #[path = "gateway_session_cache.rs"]
 mod session_cache;
 #[path = "gateway_session_routing.rs"]
@@ -30,6 +32,7 @@ use axon_domain::{ConsumerCursor, DaemonSessionId, InteractionId};
 use axon_protocol::SubmitInteractionReceipt;
 use axon_session::{RuntimeStore, WorkspaceResolver};
 use axon_session_runtime::RuntimeClock;
+use live_facts::LiveTurnFactsStore;
 use session_cache::{SessionAdmission, SessionAdmissionCache};
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -129,8 +132,19 @@ impl<S: RuntimeStore, C> DaemonGatewayBridge<S, C> {
         &self,
         session_id: &DaemonSessionId,
     ) -> Result<(), GatewayKernelError> {
+        self.session_or_not_found(session_id).map(|_| ())
+    }
+
+    /// 读取会话行；不存在时按网关固定契约报 404。
+    ///
+    /// 运行态证据要同时用到会话行的尾序号与最后活动时刻，因此存在性判定与读取合并成
+    /// 一次回表：同一条会话在同一个请求里只读一次。
+    fn session_or_not_found(
+        &self,
+        session_id: &DaemonSessionId,
+    ) -> Result<axon_session::SessionRuntimeRecord, GatewayKernelError> {
         match self.dependencies.store.get_session(session_id) {
-            Ok(_) => Ok(()),
+            Ok(record) => Ok(record),
             Err(axon_session::RuntimeStoreError::NotFound(_)) => Err(GatewayKernelError::NotFound(
                 format!("会话不存在：{}", session_id.as_str()),
             )),
@@ -141,7 +155,7 @@ impl<S: RuntimeStore, C> DaemonGatewayBridge<S, C> {
 
 impl<S, C> GatewayIngress for DaemonGatewayBridge<S, C>
 where
-    S: RuntimeStore + Clone + 'static,
+    S: RuntimeStore + LiveTurnFactsStore + Clone + 'static,
     C: RuntimeClock + Clone + 'static,
 {
     fn submit_external_event(
@@ -277,40 +291,29 @@ where
     ///
     /// 判定与写侧共用宿主时钟：两处各取一次时间会让「租约刚好到期」随毫秒差抖动。
     /// `idleForMs` 取会话行上的最后活动时刻（最后一条事件写入的投影），不另读事件日志。
+    /// 会话行只读一次，在跑与排队计数从 `work_items` 的会话索引直接取，不再按消息数扫描。
     fn session_live(
         &self,
         session_id: &DaemonSessionId,
     ) -> Result<GatewaySessionLive, GatewayKernelError> {
-        self.ensure_session_exists(session_id)?;
-        let runtime = self
-            .dependencies
-            .store
-            .get_session(session_id)
-            .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
+        let runtime = self.session_or_not_found(session_id)?;
         let now_ms = self.dependencies.clock.now_ms();
-        let turns = self
+        let facts = self
             .dependencies
             .store
-            .in_flight_turns(session_id)
+            .live_turn_facts(session_id)
             .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
-        let lease_remaining_ms = turns
-            .iter()
-            .filter_map(|turn| turn.lease_expires_at_ms)
-            .filter(|expires_at_ms| *expires_at_ms > now_ms)
-            .map(|expires_at_ms| expires_at_ms - now_ms)
-            .max();
         // 排队轮次与在跑轮次分开报：刚提交的轮次还没有租约，但它是活的，不是过期。
-        let queued_turns = self
-            .dependencies
-            .store
-            .queued_turn_count(session_id)
-            .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
+        let lease_remaining_ms = facts
+            .running_lease_expires_at_ms
+            .filter(|expires_at_ms| *expires_at_ms > now_ms)
+            .map(|expires_at_ms| expires_at_ms - now_ms);
         Ok(GatewaySessionLive {
             running: lease_remaining_ms.is_some(),
             lease_remaining_ms,
             last_frame_sequence: runtime.last_event_sequence,
             idle_for_ms: now_ms.saturating_sub(runtime.last_activity_at_ms),
-            queued_turns,
+            queued_turns: facts.queued_turns,
         })
     }
 }

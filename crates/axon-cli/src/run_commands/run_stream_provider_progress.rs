@@ -1,14 +1,18 @@
 //! Provider turn 的实时观察、文本批处理与权威收口投影。
+#[path = "run_stream_backpressure.rs"]
+mod run_stream_backpressure;
+
 use std::path::Path;
 use std::sync::{Arc, Mutex, mpsc::sync_channel};
 
 use axon_agent_runtime::RunCancelToken;
-use axon_protocol::wire::{WireEventEnvelope, WireEventKind};
+use axon_protocol::wire::WireEventKind;
 use axon_session_runtime::{
     ProviderTurnRequest, SubagentSessionSinkFactory, TurnEventSink, TurnPerformanceRecorder,
     TurnPerformanceStage,
 };
 
+use self::run_stream_backpressure::{StreamFrameCounters, StreamFrameSender};
 use super::run_progress::RunProgressWireEvent;
 use super::run_steer::RunSteerInbox;
 use super::run_stream_event_batch::{channel_capacity, run_event_batch_worker};
@@ -36,6 +40,13 @@ pub(super) fn run_with_progress(
         let (sender, receiver) = sync_channel(channel_capacity());
         let (run_result, projection_result) = std::thread::scope(|scope| {
             let worker = scope.spawn(|| run_event_batch_worker(receiver, sink));
+            let counters = Arc::new(StreamFrameCounters::default());
+            // 帧通道的发送侧统一走非阻塞策略：正文增量满时合并或丢弃，终态与工具边界帧
+            // 保送，落盘变慢不再反压共享的 Provider runtime。
+            let frames = Arc::new(StreamFrameSender::new(
+                sender.clone(),
+                Arc::clone(&counters),
+            ));
             let run_result;
             {
                 let mut observe = |event: RunProgressWireEvent| {
@@ -44,34 +55,30 @@ pub(super) fn run_with_progress(
                     {
                         performance.record(TurnPerformanceStage::ProviderFirstDeltaParsed);
                     }
-                    if let Err(error) = sender.send(event.event.clone()) {
+                    if let Err(error) = frames.send(event.event) {
                         axon_logger::warning(&format!("Daemon 实时投影批处理通道已断开: {error}"));
                     }
                 };
-                let bus_sender = sender.clone();
-                // 子代理进度总线闭包持有的 sender 克隆会随后台作业的终端保留窗（5 分钟）
+                // 子代理进度总线闭包持有的发送端会随后台作业的终端保留窗（5 分钟）
                 // 存活，令事件 worker 的 Disconnected 迟迟不到、runner 被迫等满保留窗。
                 // 改为可摘取发送端：父 run 收口时立即摘除，尾随进度事件显式丢弃并留痕。
-                let bus_sender_cell: Arc<
-                    Mutex<Option<std::sync::mpsc::SyncSender<WireEventEnvelope>>>,
-                > = Arc::new(Mutex::new(Some(bus_sender)));
+                let bus_sender_cell: Arc<Mutex<Option<Arc<StreamFrameSender>>>> =
+                    Arc::new(Mutex::new(Some(Arc::clone(&frames))));
                 let bus_cell_for_closure = Arc::clone(&bus_sender_cell);
                 let subagent_event_bus: Option<super::run_progress::RunProgressEventBus> =
                     Some(Arc::new(move |event| {
-                        let sender = bus_cell_for_closure
+                        let frames = bus_cell_for_closure
                             .lock()
                             .expect("子代理进度总线锁")
                             .clone();
-                        match sender {
-                            Some(sender) => sender
-                                .send(event.event.clone())
-                                .map_err(|error| error.to_string()),
+                        match frames {
+                            Some(frames) => frames.send(event.event),
                             None => Err("父 run 已收口，尾随子代理进度事件已丢弃".to_owned()),
                         }
                     }));
                 // 问答事件与子代理进度共用同一条实时通道：进程级问答宿主按车道身份把
                 // 事件投进这里，run 收口时与子代理总线一起摘除发送端。
-                let question_registration = question_event_registration(request, &sender);
+                let question_registration = question_event_registration(request, &frames);
                 run_result = super::run_run_with_progress(
                     command,
                     Some(config_path),
@@ -93,6 +100,13 @@ pub(super) fn run_with_progress(
                 bus_sender_cell.lock().expect("子代理进度总线锁").take();
                 drop(question_registration);
             }
+            if let Err(error) = frames.finish() {
+                axon_logger::debug(&format!("流式帧通道收口补发失败: {error}"));
+            }
+            // 收口一次性输出发送侧计数：正常路径没有溢出与合并，不会打扰日志。
+            counters.report(&request.session_id);
+            // 摘掉最后一处发送端，事件 worker 才能看到 Disconnected 并在排空后退出。
+            drop(frames);
             drop(sender);
             let projection_result = worker
                 .join()
@@ -233,18 +247,18 @@ pub(crate) fn client_channel_of(
 /// 进程级问答宿主按车道身份把事件投进这条通道；run 收口即摘除，尾随事件显式丢弃。
 fn question_event_registration(
     request: &ProviderTurnRequest,
-    sender: &std::sync::mpsc::SyncSender<WireEventEnvelope>,
+    frames: &Arc<StreamFrameSender>,
 ) -> super::run_question_projection::QuestionEventRegistration {
     let router = super::run_question_projection::global_question_event_router();
     let session_id = super::run_question_projection::run_session_id(
         request.transport_context.as_ref(),
         &request.session_id,
     );
-    let sender_cell = Arc::new(Mutex::new(Some(sender.clone())));
+    let sender_cell = Arc::new(Mutex::new(Some(Arc::clone(frames))));
     let bus: super::run_question_projection::QuestionEventBus = Arc::new(move |event| {
-        let sender = sender_cell.lock().expect("问答事件通道锁").clone();
-        match sender {
-            Some(sender) => sender.send(event.event).map_err(|error| error.to_string()),
+        let frames = sender_cell.lock().expect("问答事件通道锁").clone();
+        match frames {
+            Some(frames) => frames.send(event.event),
             None => Err("本轮 run 已收口，尾随问答事件已丢弃".to_owned()),
         }
     });

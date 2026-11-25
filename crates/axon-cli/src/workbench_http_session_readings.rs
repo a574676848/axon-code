@@ -6,7 +6,8 @@
 //!   不回放正文、不解析单轮记录。
 //! - **逐轮读数**：每条 Interaction 自己的 `turn_metrics` 事件。索引页要为十几轮各给
 //!   一行读数（用时、token、首字、速率），逐轮整段回放会把一页正文全部解压一遍，因此
-//!   按帧索引的交互指纹从尾部定向取，一条交互通常只解压它自己的最后几帧。
+//!   投影覆盖不到的轮次按帧索引的交互指纹定向补，一条交互通常只解压它自己的最后几帧。
+//! - **会话级事实**：计划快照与后台作业不属于任何一轮，只从尾部一小段固定窗口取。
 //!
 //! 两个读数都不变量子化：会话累计与分页无关，逐轮读数只服务本页。
 
@@ -110,13 +111,10 @@ fn measured_or_derived_speed(metrics: &TurnMetrics) -> Option<f64> {
 /// 标注，想看全文的人可以点开过程回放那条记录。
 const ANSWER_TEXT_LIMIT_CHARS: usize = 16 * 1024;
 
-/// 尾部扫描的硬上限：防住异常日志把一次翻页拖成整条会话解压。
-const PAGE_TAIL_MAX_FRAMES: usize = 16_384;
-
-/// 整页都已命中投影行时的兜底尾扫窗口。
+/// 会话级尾扫的帧数上限。
 ///
-/// 这时尾扫只为会话级事实（后台作业与计划快照）服务，不再需要覆盖整页轮次，
-/// 因此窗口可以小两个数量级：索引页的代价从「页内帧数」降到常量。
+/// 窗口只服务会话级事实（后台作业与计划快照），以及窗口内顺带读到的逐轮事实；
+/// 窗口之外缺失的轮次由定向补帧负责，因此页内是否还有未收口的轮次都不改变这个上限。
 const SESSION_TAIL_MAX_FRAMES: usize = 2_000;
 
 /// 一页历史的逐轮事实：读数、最终正文与动作摘要。
@@ -189,17 +187,37 @@ pub(super) struct SessionJobFact {
     pub exit_code: Option<i32>,
 }
 
-/// 读一页历史的逐轮事实：一次有界的尾部读取，不随会话体量增长。
+/// 读一页历史的逐轮事实：投影优先，缺的按交互定向补，会话级事实走有界尾扫。
+///
+/// 事件面只花两段代价：一段固定上限的会话级尾扫，加上为缺失轮次各补它自己那几帧。
+/// 页里有轮次还没收口时不再放大尾扫窗口。
 pub(super) fn page_facts(
     axon_root: &Path,
     session_id: &str,
     interaction_ids: &[&str],
 ) -> PageFacts {
+    page_facts_within(
+        axon_root,
+        session_id,
+        interaction_ids,
+        SESSION_TAIL_MAX_FRAMES,
+    )
+}
+
+/// 补帧本体；`tail_frames` 是会话级尾扫的帧数上限。
+///
+/// 生产唯一调用点是 [`page_facts`]，恒传 [`SESSION_TAIL_MAX_FRAMES`]；把窗口做成入参
+/// 是为了让测试能把它压到 0，从而证明逐轮事实不再依赖窗口宽度。
+fn page_facts_within(
+    axon_root: &Path,
+    session_id: &str,
+    interaction_ids: &[&str],
+    tail_frames: usize,
+) -> PageFacts {
     let mut facts = PageFacts::default();
     if interaction_ids.is_empty() {
         return facts;
     }
-    let wanted: std::collections::HashSet<&str> = interaction_ids.iter().copied().collect();
     let store = runtime_store(axon_root);
     let Ok(session) = DaemonSessionId::new(session_id.to_owned()) else {
         return facts;
@@ -208,13 +226,11 @@ pub(super) fn page_facts(
      * 投影表优先：答案、工具名与逐轮读数都在 `turn_activity` 里，一次按会话的区间查询
      * 就能给整页，不必再为它们扫事件日志。
      */
-    let mut covered = 0usize;
     if let Ok(projected) = store.turn_activities_for(session_id, interaction_ids) {
         for interaction_id in interaction_ids {
             let Some(row) = projected.get(*interaction_id) else {
                 continue;
             };
-            covered += 1;
             if let Some(answer) = row.answer_text.as_deref() {
                 facts
                     .answers
@@ -236,93 +252,10 @@ pub(super) fn page_facts(
             }
         }
     }
-    // 整页都有投影行时，尾扫只补会话级事实，窗口因此可以小两个数量级。
-    let tail_frames = if covered == interaction_ids.len() {
-        SESSION_TAIL_MAX_FRAMES
-    } else {
-        PAGE_TAIL_MAX_FRAMES
-    };
     let path = store.event_log(&session).path();
     if path.exists() {
-        // 只扫到「本页最早那一轮」为止：代价正比于这一页真实占用的帧数，与日志总长无关。
-        let mut current: Option<String> = None;
-        let mut covered: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let _ = axon_eventlog::read_tail_scan(&path, tail_frames, |record| {
-            match record.event_type.as_str() {
-                "turn_completed" => {
-                    let Some(interaction_id) = record
-                        .payload
-                        .get("interactionId")
-                        .and_then(serde_json::Value::as_str)
-                    else {
-                        current = None;
-                        return true;
-                    };
-                    // 已经覆盖完整页、又遇到更早的一轮：这一页到此为止。
-                    if wanted.contains(interaction_id) {
-                        covered.insert(interaction_id.to_owned());
-                    } else if !covered.is_empty() {
-                        return false;
-                    }
-                    current = Some(interaction_id.to_owned());
-                    if let Some(answer) = record
-                        .payload
-                        .get("response")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::trim)
-                        .filter(|text| !text.is_empty())
-                    {
-                        facts
-                            .answers
-                            .entry(interaction_id.to_owned())
-                            .or_insert_with(|| clamp_answer_text(answer));
-                    }
-                }
-                "turn_metrics" => {
-                    let Some(owner) = current.as_deref().filter(|owner| wanted.contains(owner))
-                    else {
-                        return true;
-                    };
-                    let Ok(metrics) = serde_json::from_value::<TurnMetrics>(record.payload.clone())
-                    else {
-                        return true;
-                    };
-                    facts
-                        .readings
-                        .entry(owner.to_owned())
-                        .or_insert_with(|| TurnReadings::from_metrics(&metrics));
-                }
-                "wire_event" => {
-                    /*
-                     * 计划是会话级事实：反向扫描遇到的第一个 `planUpdate` 就是最新那一份，
-                     * 取到即止。热路径只做一次 `kind.type` 比较，非计划帧不反序列化、不分配。
-                     */
-                    if facts.plan.is_none()
-                        && let Some(plan) = plan_snapshot(&record.payload)
-                    {
-                        facts.plan = Some(plan);
-                    }
-                    let (Some(owner), Some(name)) =
-                        (current.as_deref(), tool_call_name(&record.payload))
-                    else {
-                        return true;
-                    };
-                    if !wanted.contains(owner) {
-                        return true;
-                    }
-                    let names = facts.tool_names.entry(owner.to_owned()).or_default();
-                    if !names.iter().any(|known| known == &name) {
-                        names.push(name);
-                    }
-                }
-                "job_started" | "job_completed" => {
-                    // 作业是会话级事实：它不属于某一轮，因此在收口边界之外单独收集。
-                    collect_job_fact(record, &mut facts.jobs);
-                }
-                _ => {}
-            }
-            true
-        });
+        // 余下的事实只从事件面取：会话级走固定窗口，逐轮走定向补帧。
+        event_repair::fill(axon_root, &path, interaction_ids, tail_frames, &mut facts);
     }
     // 反向攒出来的工具名要翻回模型真实动作顺序，折叠摘要才按发生先后读。
     for names in facts.tool_names.values_mut() {
@@ -619,3 +552,10 @@ fn session_run_session_id(axon_root: &Path, session_id: &str) -> Option<String> 
         })
         .ok()
 }
+
+#[path = "workbench_http_session_readings_repair.rs"]
+mod event_repair;
+
+#[cfg(test)]
+#[path = "workbench_http_session_readings_tests.rs"]
+mod tests;

@@ -2,18 +2,22 @@
 //!
 //! 名册只回答一件事：这条车道下有哪些**用户可见的子代理会话**、它们此刻在不在跑。
 //! 状态取自运行态轮次头，不取 JSONL 索引缓存（索引里的 `active` 在子会话收口后仍会停留）。
+//!
+//! 名册的候选集合来自 `sessions` 的 `(kind, root_session_id)` 索引：一次查询拿到本车道
+//! 已登记的子代理会话，成本与全局 thread 数无关。thread 侧的装饰性事实（标题、模型与
+//! 末轮状态）按这些会话各自的运行实例标识定向读取，不再把整份 thread 派生索引读出来
+//! 逐行过滤。
 
-use std::collections::HashMap;
 use std::path::Path;
 
 use axon_domain::DaemonSessionId;
 use axon_session::{
-    InteractionQueryStore, RosterLastTurnStatus, RosterTurnStatus, RuntimeStore, RuntimeStoreError,
-    SessionRuntimeRecord, SqliteRuntimeStore,
+    InteractionQueryStore, JsonlThreadEventStore, RosterLastTurnStatus, RosterTurnStatus,
+    RuntimeStore, RuntimeStoreError, SqliteRuntimeStore, TurnStatus,
 };
 
 use super::runtime_store;
-use crate::run_commands::run_thread_children::{child_session_rows, is_internal_agent_path};
+use crate::run_commands::run_thread_children::is_internal_agent_path;
 
 /// 子代理会话在名册里的 slug：代理路径去掉开头斜杠、层级用下划线连接。
 ///
@@ -31,15 +35,70 @@ const MAX_SESSION_SUBAGENTS: usize = 200;
 /// 取一条就够：每个子会话一次点查，不会随历史长度放大。
 const ROSTER_TURN_WINDOW: u32 = 1;
 
-/// 运行侧终态到名册状态的归一。
+/// 末轮状态回到运行侧口径的字符串。
+fn turn_status_text(status: TurnStatus) -> &'static str {
+    match status {
+        TurnStatus::Active => "active",
+        TurnStatus::Completed => "completed",
+        TurnStatus::Interrupted => "interrupted",
+        TurnStatus::Failed => "failed",
+    }
+}
+
+/// 一条子会话的 thread 侧事实：标题、模型与末轮状态。
+struct ThreadFacts {
+    title: Option<String>,
+    provider: String,
+    model: String,
+    /// thread 事件里的末轮状态；只作对账旁证。
+    last_turn_status: Option<String>,
+    updated_at_ms: u64,
+    last_turn_at_ms: Option<u64>,
+}
+
+/// 一次性读出全部 thread 侧事实，按 thread 标识索引。
 ///
-/// 运行侧把失败写成 `errored`，而名册对外只给界面认得的取值（`failed` 才是失败）。
-/// 其余取值原样透传，未知与缺失都读作未知，不在这里猜成已完成。
+/// 只读一次派生索引（按会话量线性、与子代理数无关），在内存里按 id 过滤；不要逐子会话
+/// 打开各自的 thread 分片，那是「子代理数 × 各自历史长度」的整文件读加全量投影，
+/// 在长会话上比名册本身贵两个数量级。
+fn thread_facts_by_thread(axon_root: &Path) -> std::collections::HashMap<String, ThreadFacts> {
+    let snapshot = match JsonlThreadEventStore.read_thread_index(axon_root) {
+        Ok(Some(snapshot)) => snapshot,
+        _ => return std::collections::HashMap::new(),
+    };
+    snapshot
+        .entries
+        .into_iter()
+        .map(|entry| {
+            let facts = ThreadFacts {
+                title: entry.name,
+                provider: entry.provider,
+                model: entry.model,
+                last_turn_status: entry
+                    .last_turn_status
+                    .map(turn_status_text)
+                    .map(str::to_owned),
+                updated_at_ms: entry.updated_at_ms,
+                last_turn_at_ms: entry.last_turn_at_ms,
+            };
+            (entry.thread_id, facts)
+        })
+        .collect()
+}
+
+/// 车道下一条已登记的子代理会话。
 ///
-/// 它现在只服务 `threadTurnStatus` 这一列对账旁证：名册状态本身由运行态轮次头派生，
-/// 这条从 JSONL 索引读到的末轮状态**不再**参与 `active`/`idle` 的判断。
-fn normalize_last_turn_status(status: Option<&str>) -> Option<&str> {
-    status.map(|value| if value == "errored" { "failed" } else { value })
+/// 会话行同时给出稳定会话标识与运行实例标识：前者是名册对外的身份，后者只用于回显。
+struct LaneChildSession {
+    session_id: DaemonSessionId,
+    agent_path: String,
+    /// 运行实例标识：thread 侧事实按它从派生索引里取。
+    run_id: String,
+    /// 控制面登记过的标题；子代理会话一般不写这一列。
+    stored_title: Option<String>,
+    stored_provider: String,
+    stored_model: String,
+    last_activity_at_ms: u64,
 }
 
 /// 子会话的运行态：由它自己的轮次头派生。
@@ -51,29 +110,71 @@ fn normalize_last_turn_status(status: Option<&str>) -> Option<&str> {
 /// 运行中。
 fn roster_turn_status(
     store: &SqliteRuntimeStore,
-    runtime: Option<&SessionRuntimeRecord>,
+    session_id: &DaemonSessionId,
 ) -> RosterTurnStatus {
-    let Some(record) = runtime else {
-        return RosterTurnStatus::default();
-    };
     store
-        .interaction_turn_heads(record.session_id.as_str(), ROSTER_TURN_WINDOW)
+        .interaction_turn_heads(session_id.as_str(), ROSTER_TURN_WINDOW)
         .map_or_else(
             |_| RosterTurnStatus::default(),
             |heads| RosterTurnStatus::from_turn_heads(&heads),
         )
 }
 
-/// 车道的运行会话 ID；子代理会话挂在它下面。
-fn session_run_session_id(axon_root: &Path, session_id: &str) -> Result<String, String> {
-    let store = runtime_store(axon_root);
-    let session_id =
-        DaemonSessionId::new(session_id).map_err(|error| format!("车道标识非法：{error:?}"))?;
-    match store.get_session(&session_id) {
-        Ok(record) => Ok(record.current_run_id),
-        Err(RuntimeStoreError::NotFound(_)) => Ok(String::new()),
-        Err(error) => Err(format!("读取车道运行会话失败：{error:?}")),
+/// 本车道已登记的子代理会话；按最近活动倒序，条数有界。
+///
+/// 走 `sessions_by_kind_root`：`(kind, root_session_id)` 两列一次定位，不读任何 thread
+/// 索引，也不随全局会话数增长。
+fn lane_child_sessions(
+    store: &SqliteRuntimeStore,
+    lane_session_id: &str,
+    limit: usize,
+) -> Result<Vec<LaneChildSession>, String> {
+    let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+    let rows = store
+        .with_read_connection(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT session_id, agent_path, current_run_id, title, provider, model,
+                        last_activity_at_ms
+                   FROM sessions
+                  WHERE kind = 'subagent' AND root_session_id = ?1
+                  ORDER BY last_activity_at_ms DESC, session_id ASC
+                  LIMIT ?2",
+            )?;
+            let rows = statement.query_map(rusqlite::params![lane_session_id, limit], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                    row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+                    row.get::<_, i64>(6)?,
+                ))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .map_err(|error| format!("读取车道子代理会话失败：{error:?}"))?;
+    let mut children = Vec::with_capacity(rows.len());
+    for (session_id, agent_path, run_id, stored_title, provider, model, last_activity_at_ms) in rows
+    {
+        // 代理路径是子代理身份的一半：没有登记路径的行进不了逐字稿视图，不列。
+        let Some(agent_path) = agent_path else {
+            continue;
+        };
+        let Ok(session_id) = DaemonSessionId::new(session_id) else {
+            continue;
+        };
+        children.push(LaneChildSession {
+            session_id,
+            agent_path,
+            run_id,
+            stored_title,
+            stored_provider: provider,
+            stored_model: model,
+            last_activity_at_ms: u64::try_from(last_activity_at_ms).unwrap_or(0),
+        });
     }
+    Ok(children)
 }
 
 /// 某条车道下的子代理会话清单。
@@ -85,113 +186,102 @@ pub(super) fn session_subagents_payload(
     if session_id.is_empty() {
         return Err("车道标识不能为空".to_string());
     }
-    let run_session_id = session_run_session_id(axon_root, session_id)?;
-    if run_session_id.is_empty() {
-        return Ok(serde_json::json!({
-            "sessionId": session_id,
-            "runSessionId": serde_json::Value::Null,
-            "subagents": [],
-        }));
-    }
-    let rows = child_session_rows(axon_root, &run_session_id, MAX_SESSION_SUBAGENTS)?;
     let store = runtime_store(axon_root);
-    // 名册的 thread 标识是运行实例标识（`current_run_id`），会话行按稳定会话标识
-    // （ULID）存放：两套标识不能直接对表，先按实例反查会话，再批量读回会话行。
-    // 直接命中保留给「thread 标识就是会话标识」的旧记录。
-    let mut session_of_thread: HashMap<String, String> = HashMap::new();
-    let direct_ids: Vec<DaemonSessionId> = rows
-        .iter()
-        .filter_map(|row| DaemonSessionId::new(row.session_id.clone()).ok())
-        .collect();
-    let mut runtimes = store.sessions_by_ids(&direct_ids).unwrap_or_default();
-    for row in &rows {
-        if runtimes.contains_key(row.session_id.as_str()) {
-            session_of_thread.insert(row.session_id.clone(), row.session_id.clone());
-            continue;
-        }
-        // 实例标识查不到就是没有运行态会话：如实留空，不猜一个会话标识出来。
-        if let Ok(Some(session_id)) = store.session_id_for_run(&row.session_id) {
-            session_of_thread.insert(row.session_id.clone(), session_id.to_string());
-        }
-    }
-    let resolved_ids: Vec<DaemonSessionId> = session_of_thread
-        .values()
-        .filter(|session_id| !runtimes.contains_key(session_id.as_str()))
-        .filter_map(|session_id| DaemonSessionId::new(session_id.clone()).ok())
-        .collect();
-    if !resolved_ids.is_empty() {
-        runtimes.extend(store.sessions_by_ids(&resolved_ids).unwrap_or_default());
-    }
-    let mut subagents = Vec::with_capacity(rows.len());
-    for row in rows {
-        // 会话标识是 ULID，路径只从登记表读：子代理的 slug 不是标识的一部分。
-        let runtime = session_of_thread
-            .get(&row.session_id)
-            .and_then(|session_id| runtimes.get(session_id.as_str()));
-        // 运行侧内务子代理（自迭代、反思、语义显著度）由轮后治理派生，不是用户要的
-        // 委派：它们没有可进入的逐字稿，出现在名册里只会得到一条空视图。
-        if runtime
-            .and_then(|record| record.agent_path.as_deref())
-            .is_some_and(is_internal_agent_path)
-        {
-            continue;
-        }
-        let slug = runtime
-            .as_ref()
-            .and_then(|record| record.agent_path.as_deref())
-            .map(slug_of_agent_path)
-            .unwrap_or_default();
-        let has_runtime = runtime.is_some();
-        // 状态列存的是会话自己的终态：在跑、完成、中断、失败。界面用它回答
-        // 「这条子代理还在跑吗」，但它来自 JSONL 索引缓存，只作对账旁证：
-        // 名册的在跑判定改由运行态轮次头派生，收口后的会话不会再被索引拖着显示在跑。
-        let thread_turn_status = normalize_last_turn_status(row.status.as_deref());
-        let turn_status = roster_turn_status(&store, runtime);
-        // 匹配键只给可直接使用的那两个：gentPath 是路径本身，gentId 是它带前缀的
-        // 稳定标识；没有运行态会话行时 sessionId 如实为 null 并给出原因，调用方不必猜。
-        let agent_path = runtime
-            .as_ref()
-            .and_then(|record| record.agent_path.clone());
-        let agent_id = agent_path.as_ref().map(|path| format!("subagent:{path}"));
-        // 对外只给稳定会话标识：运行实例标识只在名册内部用来对齐 thread 行。
-        let session_id = if has_runtime {
-            session_of_thread.get(&row.session_id).cloned()
-        } else {
-            None
+    let lane = DaemonSessionId::new(session_id.to_owned())
+        .map_err(|error| format!("车道标识非法：{error:?}"))?;
+    /*
+     * 车道自己的运行实例标识随载荷下发；读不到只影响这个回显字段，不阻断名册。
+     *
+     * 名册的候选集合由会话行按 `(kind, root_session_id)` 取，与运行实例标识无关：
+     * 重建或修复过的会话可能出现运行实例为空、子会话行仍在的情况，此时名册照旧可用。
+     */
+    let run_session_id = match store.get_session(&lane) {
+        Ok(record) => record.current_run_id,
+        Err(RuntimeStoreError::NotFound(_)) => String::new(),
+        Err(error) => return Err(format!("读取车道运行会话失败：{error:?}")),
+    };
+    // 运行侧内务子代理（自迭代、反思、语义显著度）由轮后治理派生，不是用户要的
+    // 委派：它们没有可进入的逐字稿，出现在名册里只会得到一条空视图。
+    let children = lane_child_sessions(&store, session_id, MAX_SESSION_SUBAGENTS)?
+        .into_iter()
+        .filter(|child| !is_internal_agent_path(&child.agent_path))
+        .collect::<Vec<_>>();
+    /*
+     * thread 侧事实一次读齐：只读一份派生索引，在内存里按 thread 标识过滤。
+     *
+     * 不逐子会话读 thread 分片：那是一次整文件读加全量投影，子代理一多、历史一长，
+     * 这个轮询端点就会退化成 O(子代理数 × 各自历史长度)，而名册只需要几个标量。
+     */
+    let thread_facts = thread_facts_by_thread(axon_root);
+    let mut roster = children
+        .into_iter()
+        .map(|child| {
+            let turn_status = roster_turn_status(&store, &child.session_id);
+            (child, turn_status)
+        })
+        .collect::<Vec<_>>();
+    roster.sort_by(|left, right| {
+        let key = |entry: &(LaneChildSession, RosterTurnStatus)| {
+            thread_facts
+                .get(&entry.0.run_id)
+                .map_or(entry.0.last_activity_at_ms, |facts| facts.updated_at_ms)
         };
+        key(right)
+            .cmp(&key(left))
+            .then_with(|| left.0.session_id.as_str().cmp(right.0.session_id.as_str()))
+    });
+    roster.truncate(MAX_SESSION_SUBAGENTS);
+    let mut subagents = Vec::with_capacity(roster.len());
+    for (child, turn_status) in roster {
+        let slug = slug_of_agent_path(&child.agent_path);
+        // thread 侧事实优先，索引里没有这条 thread 时才回落到控制面登记值。
+        let facts = thread_facts.get(&child.run_id);
+        let title = facts
+            .and_then(|facts| facts.title.clone())
+            .or_else(|| child.stored_title.clone());
+        let provider = facts.map_or_else(
+            || child.stored_provider.clone(),
+            |facts| facts.provider.clone(),
+        );
+        let model = facts.map_or_else(|| child.stored_model.clone(), |facts| facts.model.clone());
+        let updated_at_ms = facts.map_or(child.last_activity_at_ms, |facts| facts.updated_at_ms);
+        let thread_turn_status = facts.and_then(|facts| facts.last_turn_status.clone());
+        let last_turn_at_ms = facts.and_then(|facts| facts.last_turn_at_ms);
         subagents.push(serde_json::json!({
-            "sessionId": session_id.map_or(serde_json::Value::Null, serde_json::Value::String),
-            "agentPath": agent_path,
-            "agentId": agent_id,
-            "unavailableReason": if has_runtime {
-                serde_json::Value::Null
-            } else {
-                serde_json::Value::String("no-runtime-session".to_owned())
-            },
+            "sessionId": child.session_id.as_str(),
+            "agentPath": child.agent_path,
+            "agentId": format!("subagent:{}", child.agent_path),
+            // 行来自已登记的会话，运行态一定存在：原因码留空，字段保留给旧客户端。
+            "unavailableReason": serde_json::Value::Null,
             "slug": slug,
-            "title": row.title,
-            "model": row.model,
-            "provider": row.provider,
-            "updatedAtMs": row.updated_at_ms,
-            "hasRuntime": has_runtime,
+            "title": title,
+            "model": model,
+            "provider": provider,
+            "updatedAtMs": updated_at_ms,
+            "hasRuntime": true,
             "status": turn_status.status.as_str(),
             "lastTurnStatus": turn_status
                 .last_turn_status
                 .map(RosterLastTurnStatus::as_str),
+            // thread 事件里的末轮状态只作对账旁证，可能与运行态轮次头不同（索引会滞后）。
             "threadTurnStatus": thread_turn_status,
-            "lastTurnAtMs": row.last_turn_at_ms,
+            "lastTurnAtMs": last_turn_at_ms,
         }));
     }
     Ok(serde_json::json!({
         "sessionId": session_id,
-        "runSessionId": run_session_id,
+        "runSessionId": if run_session_id.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::String(run_session_id)
+        },
         "subagents": subagents,
     }))
 }
 
 #[cfg(test)]
-#[path = "workbench_http_subagents_tests.rs"]
-mod workbench_http_subagents_tests;
+#[path = "workbench_http_subagents_lane_tests.rs"]
+mod lane_tests;
 
 #[cfg(test)]
 mod roster_turn_heads_tests {
@@ -200,8 +290,9 @@ mod roster_turn_heads_tests {
     use axon_domain::{InteractionId, InteractionRecord};
     use axon_session::{
         InteractionStore as _, JsonlThreadEventStore, NewSessionRequest, SessionKind,
-        SessionTrustScope, StartEmptyThreadCommand, StartTurnCommand, ThreadService,
-        ThreadSettings, ThreadSource, Turn, TurnStatus, new_interaction_id, new_session_id,
+        SessionRuntimeRecord, SessionTrustScope, StartEmptyThreadCommand, StartTurnCommand,
+        ThreadService, ThreadSettings, ThreadSource, Turn, TurnStatus, new_interaction_id,
+        new_session_id,
     };
 
     use super::*;
@@ -364,7 +455,7 @@ mod roster_turn_heads_tests {
         assert_eq!(
             settled_row["threadTurnStatus"].as_str(),
             Some("active"),
-            "索引侧的末轮状态只作对账旁证，必须如实透出它仍写着 active"
+            "thread 侧的末轮状态只作对账旁证，必须如实透出它仍写着 active"
         );
 
         let running_row = of(&running.session_id);

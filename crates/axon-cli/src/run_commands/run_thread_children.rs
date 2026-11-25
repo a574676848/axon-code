@@ -1,13 +1,12 @@
-//! 子代理名册与来源标注：父会话关系、状态与标题全部取自 thread 事件面。
+//! 子代理来源标注与内务判定。
 //!
-//! 名册不再有第二份投影库：`ThreadSummary` 直接给出父会话、标题、模型、状态与末轮
-//! 时间，一次投影回答名册的全部问题。
+//! 名册本身已改由会话索引回答（见 `workbench_http_subagents`）：按 `(kind, root_session_id)`
+//! 直接取本车道的子会话，不再把整份 thread 索引读出来过滤。这里只保留两件事：判定一条
+//! agent 路径是否属于运行侧内务，以及在子代理起跑时把来源写进 thread 事件面。
 
 use std::path::Path;
 
-use axon_session::{
-    AnnotateChildOriginCommand, JsonlThreadEventStore, ThreadListQuery, ThreadService, TurnStatus,
-};
+use axon_session::{AnnotateChildOriginCommand, JsonlThreadEventStore, ThreadService};
 
 use super::run_session_store::resolved_axon_root;
 
@@ -32,24 +31,6 @@ pub(crate) const CHILD_SESSION_ORIGIN_DELEGATED: &str = "delegated";
 /// 运行时动作，否则每个跑过一轮的会话都会长出一条并不存在的「子代理」。
 pub(crate) const CHILD_SESSION_ORIGIN_INTERNAL: &str = "internal";
 
-/// 名册一次投影的 thread 上限：名册只服务单条车道的子会话。
-const CHILD_SESSION_SCAN_LIMIT: usize = 4096;
-
-/// 子代理会话在名册里的一行。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ChildSessionRow {
-    pub(crate) session_id: String,
-    /// 线程标题；尚未命名的会话为空。
-    pub(crate) title: Option<String>,
-    pub(crate) provider: String,
-    pub(crate) model: String,
-    /// 末轮状态：active / completed / interrupted / failed；没有轮次时为空。
-    pub(crate) status: Option<String>,
-    pub(crate) updated_at_ms: u64,
-    /// 末轮记录时间；没有轮次时为空。
-    pub(crate) last_turn_at_ms: Option<u64>,
-}
-
 /// 记录子会话来源：子代理起跑时写一次，重复标注以最后一次为准。
 pub(super) fn record_child_origin(
     config_path: &Path,
@@ -69,81 +50,6 @@ pub(super) fn record_child_origin(
             origin: origin.to_owned(),
         },
     )
-}
-
-/// 某条会话直接派生的子代理名册；按最近活动倒序。
-///
-/// 走 thread 派生索引：名册只要「全体会话的少量标量」，逐会话解析整条历史会让这个
-/// 界面轮询变成 O(语料)。索引缺失时回退整表投影（正确但慢，属于缓存未建立的冷启动）。
-pub(crate) fn child_session_rows(
-    root: &Path,
-    parent_session_id: &str,
-    limit: usize,
-) -> Result<Vec<ChildSessionRow>, String> {
-    let parent_session_id = parent_session_id.trim();
-    if parent_session_id.is_empty() || limit == 0 {
-        return Ok(Vec::new());
-    }
-    let store = JsonlThreadEventStore;
-    let explained = store.read_thread_index(root)?.map(|snapshot| {
-        snapshot
-            .entries
-            .into_iter()
-            .filter(|entry| entry.parent_thread_id.as_deref() == Some(parent_session_id))
-            .filter(|entry| entry.child_origin.as_deref() != Some(CHILD_SESSION_ORIGIN_INTERNAL))
-            .map(|entry| ChildSessionRow {
-                session_id: entry.thread_id,
-                title: entry.name,
-                provider: entry.provider,
-                model: entry.model,
-                status: entry.last_turn_status.map(turn_status_text),
-                updated_at_ms: entry.updated_at_ms,
-                last_turn_at_ms: entry.last_turn_at_ms,
-            })
-            .collect::<Vec<_>>()
-    });
-    let mut rows = match explained {
-        Some(rows) => rows,
-        None => {
-            let page = ThreadService::new(JsonlThreadEventStore).list_thread_page(
-                root,
-                &ThreadListQuery {
-                    limit: CHILD_SESSION_SCAN_LIMIT,
-                    ..ThreadListQuery::default()
-                },
-            )?;
-            page.threads
-                .into_iter()
-                .filter(|summary| summary.parent_thread_id.as_deref() == Some(parent_session_id))
-                .filter(|summary| {
-                    summary.child_origin.as_deref() != Some(CHILD_SESSION_ORIGIN_INTERNAL)
-                })
-                .map(|summary| ChildSessionRow {
-                    session_id: summary.thread_id,
-                    title: summary.name,
-                    provider: summary.provider,
-                    model: summary.model,
-                    status: summary.last_turn_status.map(turn_status_text),
-                    updated_at_ms: summary.updated_at_ms,
-                    last_turn_at_ms: summary.last_turn_at_ms,
-                })
-                .collect::<Vec<_>>()
-        }
-    };
-    rows.sort_by_key(|row| std::cmp::Reverse(row.updated_at_ms));
-    rows.truncate(limit);
-    Ok(rows)
-}
-
-/// 末轮状态回到运行侧口径的字符串。
-fn turn_status_text(status: TurnStatus) -> String {
-    match status {
-        TurnStatus::Active => "active",
-        TurnStatus::Completed => "completed",
-        TurnStatus::Interrupted => "interrupted",
-        TurnStatus::Failed => "failed",
-    }
-    .to_owned()
 }
 
 #[cfg(test)]

@@ -11,14 +11,14 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use axon_daemon::{GatewayHttpResponse, GatewayHttpRouteHandler};
-use axon_session::{RuntimeStore as _, SqliteRuntimeStore};
+use axon_session::RuntimeStore as _;
 use serde_json::{Value, json};
 
 /// 会话路由前缀。
 const SESSIONS_PATH: &str = "/api/v1/sessions";
 /// 会话清单的扫描上限：工作区过滤在内存里做，扫描窗口必须明显大于单页上限，
 /// 否则先截断再过滤会让「该工作区有会话」在长列表尾部时返回空页。
-const SESSION_SCAN_LIMIT: i64 = 4_096;
+pub(crate) const SESSION_SCAN_LIMIT: i64 = 4_096;
 /// TTFT 直方图桶上界（毫秒），与 `session_metrics` 的投影口径保持一致。
 const TTFT_BOUNDS_MS: [u64; 15] = [
     1, 2, 5, 10, 20, 50, 100, 200, 500, 1_000, 2_000, 5_000, 10_000, 30_000, 60_000,
@@ -367,93 +367,10 @@ impl SessionListRow {
 
 /// 读取会话清单：置顶优先、再按最近活动倒序。
 ///
-/// 待答提问数在这里补：`user_questions` 落在 outbox 库，与清单不是同一个文件，并不进
-/// 那条 SQL。整份清单只多一次聚合，不随会话数增长；读失败按「没有待答」处理，角标
-/// 缺失比整份清单不可用轻。
-pub(crate) fn read_session_rows(
-    store: &SqliteRuntimeStore,
-) -> Result<Vec<SessionListRow>, axon_session::RuntimeStoreError> {
-    let mut rows = store.with_read_connection(read_sessions)?;
-    let pending = store.pending_question_counts().unwrap_or_default();
-    for row in &mut rows {
-        row.pending_question_count = pending.get(&row.session_id).copied().unwrap_or(0);
-    }
-    Ok(rows)
-}
+/// 读模型本体在 `sessions_list_read_model`：一条会话主查询加一条批量聚合查询，两次
+/// 往返覆盖整页会话。这里只把入口留在原处，`axon sessions list` 与工作台投影共用它。
+pub(crate) use self::sessions_list_read_model::read_session_rows;
 
-fn read_sessions(connection: &rusqlite::Connection) -> rusqlite::Result<Vec<SessionListRow>> {
-    let mut statement = connection.prepare(
-        "SELECT s.session_id, s.cwd, s.status, s.pinned, s.archived, s.workspace_id, s.title,
-                s.last_activity_at_ms,
-                COALESCE(m.turn_count, 0), COALESCE(m.total_active_ms, 0),
-                COALESCE(m.ttft_max_ms, 0), COALESCE(m.jobs_running, 0),
-                m.ttft_histogram_json,
-                (SELECT i.content FROM inbox AS i WHERE i.session_id = s.session_id
-                 ORDER BY i.received_at_ms ASC, i.interaction_id ASC LIMIT 1),
-                (SELECT i.scope_json FROM inbox AS i WHERE i.session_id = s.session_id
-                 ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT 1),
-                COALESCE((SELECT CASE WHEN TRIM(i.client) = '' THEN i.source_channel ELSE i.client END
-                          FROM inbox AS i WHERE i.session_id = s.session_id
-                          ORDER BY i.received_at_ms ASC, i.interaction_id ASC LIMIT 1), ''),
-                COALESCE((SELECT json_extract(i.reply_route_json, '$.destination')
-                          FROM inbox AS i WHERE i.session_id = s.session_id
-                          ORDER BY i.received_at_ms ASC, i.interaction_id ASC LIMIT 1), ''),
-                COALESCE((SELECT CASE WHEN TRIM(i.client) = '' THEN i.source_channel ELSE i.client END
-                          FROM inbox AS i WHERE i.session_id = s.session_id
-                          ORDER BY i.received_at_ms DESC, i.interaction_id DESC LIMIT 1), ''),
-                s.trust_scope,
-                (SELECT COUNT(*) FROM inbox AS i WHERE i.session_id = s.session_id),
-                s.provider, s.model, s.model_name,
-                -- 运行态：该会话名下仍在跑的轮次数。判据与领域一致（见 SessionListRow::running）。
-                (SELECT COUNT(*) FROM inbox AS i JOIN work_items AS w ON w.inbox_id = i.interaction_id
-                 WHERE i.session_id = s.session_id AND w.status = 'running')
-         FROM sessions AS s
-         LEFT JOIN session_metrics AS m ON m.session_id = s.session_id
-         WHERE s.kind = 'primary'
-         ORDER BY s.pinned DESC, s.last_activity_at_ms DESC, s.session_id ASC
-         LIMIT ?1",
-    )?;
-    let rows = statement.query_map([SESSION_SCAN_LIMIT], |row| {
-        let cwd: String = row.get(1)?;
-        let stored_workspace: Option<String> = row.get(5)?;
-        let stored_title: Option<String> = row.get(6)?;
-        let ttft_histogram_json: Option<String> = row.get(12)?;
-        let first_content: Option<String> = row.get(13)?;
-        let scope_json: Option<String> = row.get(14)?;
-        let trust_scope: String = row.get(18)?;
-        let workspace_id = stored_workspace
-            .filter(|value| !value.is_empty())
-            .or_else(|| scope_json.as_deref().and_then(workspace_of_scope));
-        Ok(SessionListRow {
-            session_id: row.get(0)?,
-            title: display_session_title(stored_title, first_content, &cwd),
-            status: row.get(2)?,
-            pinned: row.get::<_, i64>(3)? != 0,
-            archived: row.get::<_, i64>(4)? != 0,
-            workspace_id,
-            last_activity_at_ms: u64::try_from(row.get::<_, i64>(7)?).unwrap_or(0),
-            turn_count: u64::try_from(row.get::<_, i64>(8)?).unwrap_or(0),
-            total_active_ms: u64::try_from(row.get::<_, i64>(9)?).unwrap_or(0),
-            ttft_max_ms: u64::try_from(row.get::<_, i64>(10)?).unwrap_or(0),
-            open_job_count: u64::try_from(row.get::<_, i64>(11)?).unwrap_or(0),
-            ttft_p50_ms: ttft_histogram_json.as_deref().and_then(median_of_histogram),
-            channel: row.get(15)?,
-            destination: row.get(16)?,
-            last_channel: row.get(17)?,
-            audience: audience_label(&trust_scope),
-            interaction_count: u64::try_from(row.get::<_, i64>(19)?).unwrap_or(0),
-            provider: row.get::<_, Option<String>>(20)?.unwrap_or_default(),
-            model: row.get::<_, Option<String>>(21)?.unwrap_or_default(),
-            model_name: row.get(22)?,
-            running: row.get::<_, i64>(23)? > 0,
-            // 待答提问在 outbox 库，由 read_session_rows 在清单之外补上。
-            pending_question_count: 0,
-        })
-    })?;
-    rows.collect()
-}
-
-/// 受众边界的展示标签：表里存的是 `trust_scope` 取值域。
 /// 会话标题：控制面登记优先，其次首条入站正文，最后回落到工作目录。
 ///
 /// 清单与索引页共用同一口径，避免同一条会话在两个入口显示成不同的名字。
@@ -468,7 +385,8 @@ pub(crate) fn display_session_title(
         .unwrap_or_else(|| cwd.to_owned())
 }
 
-fn audience_label(trust_scope: &str) -> String {
+/// 受众边界的展示标签：表里存的是 `trust_scope` 取值域。
+pub(crate) fn audience_label(trust_scope: &str) -> String {
     match trust_scope {
         "private" => "私密",
         "group_workspace" => "群聊工作区",
@@ -479,7 +397,7 @@ fn audience_label(trust_scope: &str) -> String {
 }
 
 /// 从作用域 JSON 中取出 Workspace 标识；全局作用域返回 `None`。
-fn workspace_of_scope(scope_json: &str) -> Option<String> {
+pub(crate) fn workspace_of_scope(scope_json: &str) -> Option<String> {
     let parsed: serde_json::Value = serde_json::from_str(scope_json).ok()?;
     match &parsed {
         serde_json::Value::Object(map) => map
@@ -514,7 +432,7 @@ fn clip_title(content: &str) -> String {
 }
 
 /// 由直方图求 TTFT 中位数：取累计样本过半所在桶的中点。
-fn median_of_histogram(histogram_json: &str) -> Option<u64> {
+pub(crate) fn median_of_histogram(histogram_json: &str) -> Option<u64> {
     let counts: Vec<u64> = serde_json::from_str(histogram_json).ok()?;
     let buckets: BTreeMap<usize, u64> = counts
         .into_iter()
@@ -558,3 +476,11 @@ fn bucket_midpoint(index: usize) -> u64 {
 #[cfg(test)]
 #[path = "sessions_http_adapter_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "sessions_list_read_model_equivalence_tests.rs"]
+mod equivalence_tests;
+
+/// 会话清单读模型：一条会话主查询加一条批量聚合查询。
+#[path = "sessions_list_read_model.rs"]
+mod sessions_list_read_model;
