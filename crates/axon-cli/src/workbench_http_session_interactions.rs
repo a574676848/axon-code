@@ -233,11 +233,11 @@ fn build_page(
     let session_elapsed_ms = session_readings::settled_elapsed_ms(axon_root, session_id)
         .map_or(serde_json::Value::Null, serde_json::Value::from);
     /*
-     * 会话级计划快照：本次索引扫描窗口里最近一次 `update_plan`。
+     * 会话级计划快照：日志尾部最近一次 `update_plan`。
      *
      * 计划坞是会话级事实，不能只靠「回放刚好读到那一帧」才出现；随索引一起下发之后，
-     * 打开会话首屏就能立起当前进度。扫描窗口之外的计划（比本页更早的轮次）仍为空，
-     * 那是这一档读取的边界，不用加扫来换。
+     * 打开会话首屏就能立起当前进度。定向取从尾部倒着走，碰到最近一条即停，因此计划
+     * 落在两千帧之前也照样下发。
      */
     let session_plan = facts.plan.as_ref().map_or(serde_json::Value::Null, |plan| {
         serde_json::to_value(plan).unwrap_or(serde_json::Value::Null)
@@ -256,7 +256,8 @@ fn build_page(
         "session": row_facts.as_ref().map(|facts| facts.capability.clone()),
         "interactions": interactions,
         "totalRecords": interactions.len(),
-        // 会话级后台作业清单：与打开哪一轮无关，重开会话时据此还原标题栏的作业读数。
+        // 会话级后台作业清单：与打开哪一轮无关，按事件类型从日志尾部定向取，
+        // 重开会话时据此还原标题栏的作业读数。
         "jobs": facts.jobs,
         "sessionUsage": session_usage,
         "sessionElapsedMs": session_elapsed_ms,

@@ -1,9 +1,10 @@
-//! 一页历史的补帧契约：投影优先，投影覆盖不到的轮次由事件日志定向补，会话级事实走
-//! 有界尾扫。
+//! 一页历史的补帧契约：投影优先，投影覆盖不到的轮次由事件日志定向补，会话级事实按
+//! 事件类型从尾部定向取。
 //!
 //! 断言的是不变式而不是某一次扫描路径：页里有一轮还没收口时，其他轮次的答案与读数
 //! 照样齐全；把尾扫窗口压到 0 之后它们依然齐全，说明这些事实来自按交互定向补帧，
-//! 与窗口宽度无关，页内出现未收口的轮次不会把代价放大成整段回放。
+//! 与窗口宽度无关，页内出现未收口的轮次不会把代价放大成整段回放。计划与作业同理：
+//! 它们落在尾窗之外时仍必须读全，不能让长会话整段丢掉计划快照与后台作业清单。
 
 use std::path::PathBuf;
 
@@ -14,7 +15,7 @@ use axon_domain::{
 use axon_eventlog::{RuntimeEventKind, RuntimeEventRecord};
 use axon_session::{InteractionStore as _, RuntimeStore as _, SqliteRuntimeStore};
 
-use super::{page_facts, page_facts_within};
+use super::{SESSION_TAIL_MAX_FRAMES, page_facts, page_facts_within};
 
 struct Fixture {
     root: PathBuf,
@@ -138,6 +139,13 @@ impl Fixture {
             .with_interaction(interaction_id);
         self.writer.append_batch(&[record]).expect("写入事件");
     }
+
+    /// 落一条会话级事件：计划与作业都不属于任何一轮，因此不带交互归属。
+    fn append_session_level(&mut self, kind: RuntimeEventKind, payload: serde_json::Value) {
+        let sequence = self.writer.next_sequence();
+        let record = RuntimeEventRecord::new(sequence, 1_000 + sequence, kind, payload);
+        self.writer.append_batch(&[record]).expect("写入事件");
+    }
 }
 
 /// 一份完整的 `turn_metrics` 载荷；缺字段会让反序列化整体失败。
@@ -214,11 +222,14 @@ fn running_turn_keeps_the_page_facts_without_a_wider_window() {
     );
 
     /*
-     * 尾扫窗口压到 0：会话级事实随之为空，但逐轮答案与读数必须一条不少。
-     * 它们只能来自按交互定向补帧，与尾扫窗口的宽度无关。
+     * 尾扫窗口压到 0：逐轮答案与读数必须一条不少，它们只能来自按交互定向补帧，
+     * 与尾扫窗口的宽度无关。这条会话本来就没有计划帧，因此计划快照照旧为空。
      */
     let no_window = page_facts_within(&fixture.root, &fixture.session_id, &ids, 0);
-    assert!(no_window.plan.is_none(), "窗口为 0 时不再有会话级计划快照");
+    assert!(
+        no_window.plan.is_none(),
+        "这条会话没有计划帧，计划快照恒为空"
+    );
     assert_eq!(
         no_window.answers.get(&logged).map(String::as_str),
         Some("日志里的结论"),
@@ -233,4 +244,128 @@ fn running_turn_keeps_the_page_facts_without_a_wider_window() {
         no_window.answers.get(&projected).map(String::as_str),
         Some("投影里的结论")
     );
+}
+
+/// 落一帧计划更新：`planUpdate` 是 wire 帧，载荷按协议类型解析。
+fn append_plan_update(fixture: &mut Fixture, interaction_id: &str, title: &str) {
+    fixture.append_session_level(
+        RuntimeEventKind::Other("wire_event".to_owned()),
+        serde_json::json!({
+            "interactionId": interaction_id,
+            "kind": {
+                "type": "planUpdate",
+                "payload": {
+                    "partId": "plan:1",
+                    "title": title,
+                    "steps": [{ "step": "审计现状", "status": "completed" }],
+                },
+            },
+        }),
+    );
+}
+
+/// 落一条作业启动事件。
+fn append_job_started(fixture: &mut Fixture, job_id: &str, kind: &str, started_at_ms: u64) {
+    fixture.append_session_level(
+        RuntimeEventKind::JobStarted,
+        serde_json::json!({
+            "jobId": job_id,
+            "kind": kind,
+            "owner": "fixture-owner",
+            "startedAtMs": started_at_ms,
+        }),
+    );
+}
+
+/// 落一条作业收口事件。
+fn append_job_completed(
+    fixture: &mut Fixture,
+    job_id: &str,
+    status: &str,
+    elapsed_ms: u64,
+    exit_code: i32,
+) {
+    fixture.append_session_level(
+        RuntimeEventKind::JobCompleted,
+        serde_json::json!({
+            "jobId": job_id,
+            "status": status,
+            "elapsedMs": elapsed_ms,
+            "exitCode": exit_code,
+        }),
+    );
+}
+
+/// 垫一段远超尾窗宽度的过程帧，把此前写入的会话级事实推出任何固定尾窗。
+fn pad_beyond_the_tail_window(fixture: &mut Fixture, interaction_id: &str) {
+    for _ in 0..(SESSION_TAIL_MAX_FRAMES + 64) {
+        fixture.append_running_frame(interaction_id);
+    }
+}
+
+/// 计划与作业落在尾窗之外时仍必须读全：会话级事实不随尾窗宽度丢失。
+#[test]
+fn session_facts_survive_far_older_than_the_tail_window() {
+    let mut fixture = Fixture::new();
+    let projected = fixture.append_interaction("投影已经覆盖的轮次");
+    fixture.seed_projection(&projected, "投影里的结论", 900);
+    // 计划与作业都停在两千帧之前：只读尾窗的路径一定整段丢掉它们。
+    append_plan_update(&mut fixture, &projected, "整理历史页");
+    append_job_started(&mut fixture, "job-7", "shell", 1_500);
+    append_job_completed(&mut fixture, "job-7", "completed", 4_200, 0);
+    pad_beyond_the_tail_window(&mut fixture, &projected);
+    let tail = fixture.append_interaction("尾部轮次");
+    fixture.append_completed(&tail, "尾部结论", 500);
+
+    let ids = [projected.as_str(), tail.as_str()];
+    let facts = page_facts(&fixture.root, &fixture.session_id, &ids);
+
+    assert_eq!(
+        facts.plan.as_ref().map(|plan| plan.title.as_str()),
+        Some("整理历史页"),
+        "计划快照必须从尾部定向取到，不能因为落在两千帧之前就整段丢失"
+    );
+    let job = facts
+        .jobs
+        .iter()
+        .find(|row| row.job_id == "job-7")
+        .expect("作业必须出现在会话级清单里");
+    assert_eq!(job.kind, "shell", "启动态给出作业类型");
+    assert_eq!(job.started_at_ms, Some(1_500), "启动态给出启动时刻");
+    assert_eq!(job.status.as_deref(), Some("completed"), "终态必须取到");
+    assert_eq!(job.elapsed_ms, Some(4_200), "终态给出后端实测耗时");
+    assert_eq!(job.exit_code, Some(0), "终态给出退出码");
+}
+
+/// 很久以前启动、最近才收口的作业：启动事实与终态必须合成同一行。
+#[test]
+fn job_started_far_back_merges_with_a_recent_completion() {
+    let mut fixture = Fixture::new();
+    let projected = fixture.append_interaction("投影已经覆盖的轮次");
+    fixture.seed_projection(&projected, "投影里的结论", 900);
+    append_job_started(&mut fixture, "job-9", "subagent", 2_500);
+    pad_beyond_the_tail_window(&mut fixture, &projected);
+    // 收口落在尾窗内，启动留在尾窗之外：两段事实必须按同一作业标识合并成一行。
+    append_job_completed(&mut fixture, "job-9", "timeout", 9_000, 124);
+
+    let facts = page_facts(&fixture.root, &fixture.session_id, &[projected.as_str()]);
+    let matched: Vec<_> = facts
+        .jobs
+        .iter()
+        .filter(|row| row.job_id == "job-9")
+        .collect();
+    assert_eq!(matched.len(), 1, "同一作业只能出现一行");
+    let job = matched[0];
+    assert_eq!(
+        job.kind, "subagent",
+        "启动态类型在尾窗之外，必须由定向取补上"
+    );
+    assert_eq!(job.started_at_ms, Some(2_500), "启动时刻同样来自定向取");
+    assert_eq!(
+        job.status.as_deref(),
+        Some("timeout"),
+        "终态来自尾窗内的收口帧"
+    );
+    assert_eq!(job.elapsed_ms, Some(9_000));
+    assert_eq!(job.exit_code, Some(124));
 }
