@@ -73,23 +73,36 @@ pub struct EventLogWriter {
 }
 
 /// 一批追加内部的分段耗时，单位微秒。
+///
+/// 六段口径与写路径一一对应：对齐（撕裂尾修复与索引重建）、编码（JSON 行与 zstd 压缩）、
+/// 打开（日志与索引句柄）、写帧（`write_all` 与 `flush`）、fsync、索引写。等锁与持锁总量
+/// 由 [`EventLogWriter::append_batch_reusing`] 单独记录，两者合起来才能把一次慢追加归因。
 #[derive(Debug, Default, Clone, Copy)]
 struct AppendSegments {
+    /// 与磁盘重新对齐：撕裂尾修复、索引重建、尾号重算。
+    align_us: u128,
+    /// JSON 行与 zstd 帧编码。
+    encode_us: u128,
     /// 首次写入时打开日志与索引句柄。
     open_us: u128,
     /// 写帧并 flush。
     write_us: u128,
     /// 逐帧 `sync_data`。
     fsync_us: u128,
+    /// 旁挂帧索引的条目写入。
+    index_us: u128,
 }
 
 impl AppendSegments {
     fn summary(&self) -> String {
         format!(
-            "打开={:.1}ms 写帧={:.1}ms fsync={:.1}ms",
+            "对齐={:.1}ms 编码={:.1}ms 打开={:.1}ms 写帧={:.1}ms fsync={:.1}ms 索引={:.1}ms",
+            self.align_us as f64 / 1000.0,
+            self.encode_us as f64 / 1000.0,
             self.open_us as f64 / 1000.0,
             self.write_us as f64 / 1000.0,
-            self.fsync_us as f64 / 1000.0
+            self.fsync_us as f64 / 1000.0,
+            self.index_us as f64 / 1000.0
         )
     }
 }
@@ -164,7 +177,9 @@ impl EventLogWriter {
         let before = self.bytes_len;
         let index_before = self.index_bytes;
         if !self.header_written {
+            let encode_started = std::time::Instant::now();
             let frame = encode_frame(&self.header.encode_line()?)?;
+            self.segments.encode_us += encode_started.elapsed().as_micros();
             if let Err(error) = self.write_frame(&frame, None, 0) {
                 self.rollback(before, index_before);
                 return Err(error);
@@ -177,7 +192,9 @@ impl EventLogWriter {
             plain.extend_from_slice(&event.encode_line()?);
             plain.push(b'\n');
         }
+        let encode_started = std::time::Instant::now();
         let frame = encode_frame(&plain)?;
+        self.segments.encode_us += encode_started.elapsed().as_micros();
         // 该帧首条事件的序号：索引按它二分，让读路径直接落在这一帧上。
         let first_sequence = events.first().map(|event| event.sequence);
         // 整批同属一个交互时记下指纹，读侧据此只解压该交互的帧；跨交互批次记 0。
@@ -224,6 +241,7 @@ impl EventLogWriter {
             if let Some(index_file) = self.index_file.as_mut() {
                 // 索引是派生数据：只交给操作系统，不为它多付一次 `fsync`。崩溃后
                 // 覆盖长度与日志对不上，下一次打开按日志重建即可。
+                let index_started = std::time::Instant::now();
                 index::append(
                     index_file,
                     &mut index_bytes,
@@ -235,6 +253,7 @@ impl EventLogWriter {
                     },
                     covered,
                 )?;
+                self.segments.index_us += index_started.elapsed().as_micros();
             }
             // 内存索引与磁盘索引同一顺序维护：常驻句柄下一次追加要据此判断尾号与偏移，
             // 不再回头读整份索引文件。
@@ -497,7 +516,9 @@ impl EventLogWriter {
             _ => false,
         };
         if length_changed || modification_changed || self.next_sequence != expected_next {
+            let align_started = std::time::Instant::now();
             self.resync(expected_next)?;
+            self.segments.align_us += align_started.elapsed().as_micros();
         }
         self.next_sequence = expected_next;
         let outcome = self.append_batch(events);
