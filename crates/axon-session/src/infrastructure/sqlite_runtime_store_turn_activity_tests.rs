@@ -75,6 +75,55 @@ fn terminal_batch_projects_answer_and_metrics_into_one_row() {
     assert!(row.metrics_json.is_some(), "读数与终态同批落库");
 }
 
+/// 工具名随终态帧到达，投影直接落库，不再回扫事件日志。
+///
+/// 缺 `toolNames` 的老帧按「没有工具调用」落库：投影路径的一次日志解压都不做，
+/// 升级前收口的轮次早已投影过，不受影响。
+#[test]
+fn tool_names_come_from_the_terminal_frame_without_a_log_rescan() {
+    let (store, session_id) = fixture();
+    let with_names = InteractionId::new("01TURNACTIVITY000000000003").expect("interaction id");
+    let events = [
+        (
+            "turn_completed".to_owned(),
+            serde_json::json!({
+                "interactionId": with_names.as_str(),
+                "response": "带工具名",
+                "toolNames": ["read_file", "grep"],
+            })
+            .to_string(),
+        ),
+        metrics(with_names.as_str()),
+    ];
+    super::turn_activity_projection::project_turn_activity(&store, &session_id, &events, 45)
+        .expect("投影必须成功");
+
+    let legacy = InteractionId::new("01TURNACTIVITY000000000004").expect("interaction id");
+    let legacy_events = [terminal(legacy.as_str(), "老帧"), metrics(legacy.as_str())];
+    super::turn_activity_projection::project_turn_activity(&store, &session_id, &legacy_events, 46)
+        .expect("老帧投影必须成功");
+
+    let found = store
+        .turn_activities_for(session_id.as_str(), &[with_names.as_str(), legacy.as_str()])
+        .expect("读投影");
+    assert_eq!(
+        found
+            .get(with_names.as_str())
+            .expect("终态帧那行必须存在")
+            .tool_names,
+        vec!["read_file".to_owned(), "grep".to_owned()],
+        "工具名必须来自终态帧"
+    );
+    assert!(
+        found
+            .get(legacy.as_str())
+            .expect("老帧那行必须存在")
+            .tool_names
+            .is_empty(),
+        "缺 toolNames 时按没有工具调用落库，不再回扫日志"
+    );
+}
+
 #[test]
 fn repeated_projection_updates_in_place_and_missing_reads_as_absent() {
     let (store, session_id) = fixture();
