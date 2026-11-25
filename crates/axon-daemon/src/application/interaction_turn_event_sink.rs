@@ -384,6 +384,16 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
         tool_names::observe(&self.tool_names, event);
     }
 
+    /// 本轮已累积的工具名快照。
+    ///
+    /// 失败终态由 runner 自己组装、不走 sink 的打标路径，用它把工具名带进载荷。
+    pub(super) fn tool_names_snapshot(&self) -> Vec<String> {
+        self.tool_names
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     /// 终态帧带上本轮工具名，供逐轮事实投影直接读取。
     fn terminal_frame_with_tool_names(&self, event: &RuntimeEvent) -> Result<RuntimeEvent, String> {
         tool_names::terminal_frame(&self.tool_names, event)

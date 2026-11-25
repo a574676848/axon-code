@@ -297,6 +297,11 @@ pub(super) struct FailedTurnTerminalInput<'a> {
     pub(super) recorded_at_ms: u64,
     /// 本轮降级告警（含人格装配告警）；失败路径同样要透传。
     pub(super) warnings: &'a [String],
+    /// 本轮已发生的工具调用名。
+    ///
+    /// 失败终态由 runner 自己组装，不走 sink 的终态打标；这里显式带上，投影才能把
+    /// 「跑过工具但失败了」的轮次记成有工具调用，而不是当成纯问答。
+    pub(super) tool_names: &'a [String],
 }
 
 pub(super) fn failed_turn_terminal_events(
@@ -359,6 +364,16 @@ pub(super) fn failed_turn_terminal_events(
     // 结构化失败只在这里出现一次：正文留一句人话，字段留给界面画卡。
     if !input.failure.is_empty() {
         payload["failure"] = input.failure.to_payload();
+    }
+    // 工具名与正常收口同口径：投影据此判定这一轮确实调用过工具。
+    if !input.tool_names.is_empty() {
+        payload["toolNames"] = serde_json::Value::Array(
+            input
+                .tool_names
+                .iter()
+                .map(|name| serde_json::Value::String(name.clone()))
+                .collect(),
+        );
     }
     let completed = RuntimeEvent {
         event_type: TURN_COMPLETED_EVENT.to_owned(),
@@ -485,6 +500,7 @@ mod tests {
             transport_context: serde_json::json!({ "channel": "desktop" }),
             recorded_at_ms: 1_000,
             warnings: &[],
+            tool_names: &[],
         })
         .expect("失败终态事件应可构造");
 
@@ -507,6 +523,43 @@ mod tests {
         );
     }
 
+    /// 失败终态也要带工具名：这一轮跑过工具、随后失败时，投影与界面都不能当成纯问答。
+    #[test]
+    fn terminal_payload_carries_tool_names_when_the_turn_used_tools() {
+        let error = provider_failure(
+            r#"{"category":"provider_transport","code":"upstream_503","redactedMessage":"上游返回 503"}"#,
+        );
+        let (kind, response, report) = classify_turn_failure(&error);
+        let names = vec!["read_file".to_owned(), "grep".to_owned()];
+        let events = failed_turn_terminal_events(FailedTurnTerminalInput {
+            action_id: "action-1",
+            action_kind: "user_input",
+            session_id: "session-1",
+            kind,
+            response: &response,
+            failure: report,
+            transport_context: serde_json::json!({ "channel": "desktop" }),
+            recorded_at_ms: 1_000,
+            warnings: &[],
+            tool_names: &names,
+        })
+        .expect("失败终态事件应可构造");
+
+        let payload: serde_json::Value = serde_json::from_str(
+            &events
+                .iter()
+                .find(|event| event.event_type == TURN_COMPLETED_EVENT)
+                .expect("必须发布终态事件")
+                .payload_json,
+        )
+        .expect("载荷是 JSON");
+        assert_eq!(
+            payload["toolNames"],
+            serde_json::json!(["read_file", "grep"]),
+            "失败终态必须带上本轮工具名"
+        );
+    }
+
     #[test]
     fn terminal_payload_carries_persona_warnings() {
         let error = provider_failure(
@@ -524,6 +577,7 @@ mod tests {
             transport_context: serde_json::json!({ "channel": "desktop" }),
             recorded_at_ms: 1_000,
             warnings: &warnings,
+            tool_names: &[],
         })
         .expect("失败终态事件应可构造");
 
@@ -564,6 +618,7 @@ mod tests {
             transport_context: serde_json::json!({ "channel": "desktop" }),
             recorded_at_ms: 1_000,
             warnings: &[],
+            tool_names: &[],
         })
         .expect("失败终态事件应可构造");
         let payload: serde_json::Value = serde_json::from_str(

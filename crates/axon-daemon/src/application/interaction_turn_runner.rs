@@ -131,6 +131,9 @@ where
                 let _ = sink.flush();
                 let message = error.into_message();
                 let (kind, response, report) = classify_turn_failure(&message);
+                // 失败终态由这里自己组装：把本轮已发生的工具名一并带上，
+                // 投影才不会把「跑过工具但失败了」的轮次记成纯问答。
+                let tool_names = sink.tool_names_snapshot();
                 let events = failed_turn_terminal_events(FailedTurnTerminalInput {
                     action_id: &action_id,
                     action_kind: &action_kind,
@@ -142,6 +145,7 @@ where
                     recorded_at_ms: self.clock.now_ms(),
                     // 失败回执里可能带着 CLI 的降级告警，原样透传给客户端。
                     warnings: &failure_warnings(&message),
+                    tool_names: &tool_names,
                 })
                 .map_err(runtime_error)?;
                 self.persist_and_publish(
