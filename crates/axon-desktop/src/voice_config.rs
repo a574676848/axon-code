@@ -18,15 +18,25 @@ use crate::ipc::{ConfigReadResponse, ConfigWriteResponse};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VoiceChannelDto {
+    /// 渠道名称，段内唯一。
     pub name: String,
+    /// 是否参与语音路由。
     pub enabled: bool,
+    /// 协议类型，复用 provider 协议族。
     pub protocol: String,
+    /// API 基址。
     pub base_url: String,
+    /// API Key 环境变量名；不携带明文。
     pub api_key_env: Option<String>,
+    /// 该渠道是否已配置密钥，仅用于展示。
     pub api_key_configured: bool,
+    /// 底层传输链路。
     pub wire_transport: String,
+    /// WebSocket 地址，为空时由基址推导。
     pub websocket_url: Option<String>,
+    /// 渠道优先级。
     pub priority: i32,
+    /// 同优先级权重。
     pub weight: u32,
 }
 
@@ -34,12 +44,19 @@ pub struct VoiceChannelDto {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VoiceModelDto {
+    /// 模型路由名称，段内唯一。
     pub name: String,
+    /// 引用的渠道名称。
     pub channel: String,
+    /// 上游模型标识。
     pub id: String,
+    /// 语音角色：asr / tts / realtime。
     pub role: String,
+    /// 音色标识。
     pub voice: String,
+    /// 语速。
     pub speech_rate: i32,
+    /// 轮次检测策略。
     pub turn_detection: String,
 }
 
@@ -47,9 +64,13 @@ pub struct VoiceModelDto {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VoiceConfigDto {
+    /// 语音入口总开关。
     pub enabled: bool,
+    /// 语音车道。
     pub lane: String,
+    /// 语音渠道目录。
     pub channels: Vec<VoiceChannelDto>,
+    /// 语音模型目录。
     pub models: Vec<VoiceModelDto>,
 }
 
