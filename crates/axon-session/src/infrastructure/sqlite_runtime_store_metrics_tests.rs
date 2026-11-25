@@ -127,6 +127,65 @@ fn turn_metrics_accumulate_into_session_projection() {
     assert_eq!(snapshot.turn_histogram.len(), 16);
 }
 
+/// 同一批事件重放时不得重复累加。
+///
+/// 累加型投影没有幂等语义：闸门按「批首序号」判定，同一批（同一 `start_sequence`）投影
+/// 两次，第二次整批跳过；换一个更大的批首序号才是新的一批，必须照常累加。
+#[test]
+fn replayed_metrics_batch_is_projected_only_once() {
+    let (store, session_id) = fixture();
+    let events = timed_turn_metrics(800);
+    let project = |start_sequence: u64, now_ms: u64| {
+        super::event_log_repository::apply_projections(
+            &store,
+            &session_id,
+            start_sequence,
+            &events,
+            Some("desktop"),
+            now_ms,
+        );
+    };
+
+    project(1, 20);
+    let once = store
+        .session_metrics(&session_id)
+        .expect("读取投影")
+        .expect("投影应存在");
+    assert_eq!(once.turn_count, 1);
+    assert_eq!(once.total_active_ms, 800);
+
+    // 同一批重放：水位已停在 1，整批跳过，累计值一格都不许动。
+    project(1, 30);
+    let replayed = store
+        .session_metrics(&session_id)
+        .expect("读取投影")
+        .expect("投影应存在");
+    assert_eq!(replayed.turn_count, 1, "同一批重放不得重复计数");
+    assert_eq!(replayed.total_active_ms, 800, "同一批重放不得重复累加耗时");
+
+    // 更大的批首序号是新的一批：必须正常累加。
+    project(2, 40);
+    let advanced = store
+        .session_metrics(&session_id)
+        .expect("读取投影")
+        .expect("投影应存在");
+    assert_eq!(advanced.turn_count, 2);
+    assert_eq!(advanced.total_active_ms, 1_600);
+}
+
+/// 带耗时的单轮指标批次：耗时是累加量，批首序号是闸门判据。
+fn timed_turn_metrics(active_ms: u64) -> [(String, String); 1] {
+    let metrics = TurnMetrics {
+        turn_id: "turn-1".to_owned(),
+        active_ms,
+        ..TurnMetrics::default()
+    };
+    [(
+        "turn_metrics".to_owned(),
+        serde_json::to_string(&metrics).expect("序列化指标"),
+    )]
+}
+
 #[test]
 fn failed_turns_are_counted_separately() {
     let (store, session_id) = fixture();

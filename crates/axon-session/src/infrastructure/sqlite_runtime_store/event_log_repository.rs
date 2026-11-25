@@ -19,6 +19,10 @@ mod payload;
 #[path = "event_log_write_failure.rs"]
 mod write_failure;
 
+/// 投影水位：同一批事件只投影一次。
+#[path = "projection_watermark.rs"]
+mod projection_watermark;
+
 pub(super) fn log_error(error: axon_eventlog::EventLogError) -> RuntimeStoreError {
     RuntimeStoreError::Storage(error.to_string())
 }
@@ -127,12 +131,22 @@ fn append_events_with(
     for (record, runtime) in records.iter_mut().zip(&runtime_records) {
         record.sequence = runtime.sequence;
     }
+    // 重排会改掉分配时的序号：投影水位跟落盘的真实批首序号走，才与日志里的帧对得上。
+    let projected_from = records.first().map_or(start, |record| record.sequence);
     /*
-     * 派生表投影在锁外做：它写的是另一批表，与序号分配无关，占着会话锁只是白白
-     * 让下一条事件排队。
+     * 派生表投影持锁做：投影水位按「批首序号」单调推进，投影顺序必须与序号顺序一致，
+     * 否则后一批先把水位推高，前一批随后会被整批跳过，那批投影就悄无声息地丢了。
+     * 代价是下一条事件多等几个小写入。
      */
+    apply_projections(
+        store,
+        session_id,
+        projected_from,
+        events,
+        origin_channel.as_deref(),
+        now_ms,
+    );
     drop(write_guard);
-    apply_projections(store, session_id, events, origin_channel.as_deref(), now_ms);
     Ok(records)
 }
 
@@ -459,7 +473,16 @@ pub(super) fn write_events_at_locked(
     for (record, runtime) in records.iter_mut().zip(&runtime_records) {
         record.sequence = runtime.sequence;
     }
-    apply_projections(store, session_id, events, origin_channel.as_deref(), now_ms);
+    // 重排会改掉分配时的序号：投影水位跟落盘的真实批首序号走。
+    let projected_from = records.first().map_or(start, |record| record.sequence);
+    apply_projections(
+        store,
+        session_id,
+        projected_from,
+        events,
+        origin_channel.as_deref(),
+        now_ms,
+    );
     Ok(records)
 }
 /// 逐会话批量把已分配序号的事件写进事件面文件。
@@ -506,13 +529,20 @@ pub(super) fn write_records_locked(
 /// 投影是可重建的派生数据，失败不阻断主流程；但失败必须上报，否则「累计耗时恒 null」
 /// 这类问题只能等界面报错才发现。需要兜底时用 `rebuild_session_metrics` 整体重放。
 /// 上下文快照不走第二条写路径：这一处是它唯一的写入点。
-fn apply_projections(
+///
+/// `start_sequence` 是本批首条事件的序号，同时是本批在投影水位里的身份：同一批被重放
+/// （重试、补投）时整批跳过，累加型投影因此不会翻倍。水位只在整个投影跑完后推进。
+pub(super) fn apply_projections(
     store: &SqliteRuntimeStore,
     session_id: &DaemonSessionId,
+    start_sequence: u64,
     events: &[(String, String)],
     origin_channel: Option<&str>,
     now_ms: u64,
 ) {
+    if projection_watermark::already_projected(store, session_id, start_sequence) {
+        return;
+    }
     // 逐轮事实：收口批次里同时带着终态与它派生的指标，一次投影就够。
     super::turn_activity_projection::project_turn_activity(store, session_id, events, now_ms);
     // 会话级上下文快照：界面占用读数与剩余量现在读同一份。
@@ -537,6 +567,8 @@ fn apply_projections(
             );
         }
     }
+    // 三个投影都跑完后才推进水位：中途失败就不推进，下一批仍走完整投影。
+    projection_watermark::advance(store, session_id, start_sequence, now_ms);
 }
 
 #[cfg(test)]
