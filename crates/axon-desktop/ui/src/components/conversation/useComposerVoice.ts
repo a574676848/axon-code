@@ -18,6 +18,7 @@ import { isBlockedBySystem, readMicrophoneAccess, readVoiceRuntime, VOICE_RUNTIM
 import { VOICE_UI_ENABLED } from '../../speech/enabled';
 import { useVoicePermission, type ComposerPermissionPrompt, type VoiceMode } from './useVoicePermission';
 import { useExpiringNotice } from './composerNotice';
+import { useSpaceHold } from './useSpaceHold';
 
 /*
  * 语音控制器：听写与语音对话两种模式共用一套采集、授权与状态机。
@@ -95,6 +96,8 @@ export interface ComposerVoice {
   active: boolean;
   /** 当前相位已持续多久；待机为零。 */
   elapsedMs: number;
+  /** Space 长按唤醒进度，0 到 1；未在长按时为 0。 */
+  holdProgress: number;
   /** 授权引导；为空时不显示。 */
   permission: ComposerPermissionPrompt | null;
   /** 点击麦克风：开始语音，或关闭当前语音（关闭即定稿）。 */
@@ -588,6 +591,15 @@ export function useComposerVoice({
     }
     void startListening();
   }, [access, active, finish, phase, startListening]);
+  /*
+   * Space 长按唤醒：入口可用、待机、无授权弹窗时才允许起长按；草稿与焦点
+   * 冲突交给 useSpaceHold 内部按 spaceHold.ts 的口径判定，到点直接调 toggle。
+   */
+  const spaceHold = useSpaceHold({
+    armed: available && phase === 'idle' && access.prompt === null,
+    hasDraft: text.trim().length > 0,
+    onTrigger: toggle,
+  });
 
   /*
    * Esc 关闭语音：这是「停下」的最短路径，不必把指针移回麦克风。
@@ -644,6 +656,7 @@ export function useComposerVoice({
     error,
     active,
     elapsedMs,
+    holdProgress: spaceHold.progress,
     permission: access.prompt,
     toggle,
     finish,
