@@ -133,7 +133,7 @@ where
                 let (kind, response, report) = classify_turn_failure(&message);
                 // 失败终态由这里自己组装：把本轮已发生的工具名一并带上，
                 // 投影才不会把「跑过工具但失败了」的轮次记成纯问答。
-                let tool_names = sink.tool_names_snapshot();
+                let tool_names = sink.tool_names();
                 let events = failed_turn_terminal_events(FailedTurnTerminalInput {
                     action_id: &action_id,
                     action_kind: &action_kind,

@@ -195,13 +195,21 @@ impl<R: ProviderTurnRunner> AgentTurnExecutor<R> {
                 &result.wire_events,
             )?;
         }
-        let response_payload = serde_json::json!({
+        let mut response_payload = serde_json::json!({
             "actionId": action.action_id,
             "kind": action.kind,
             "response": result.response,
             "transportContext": transport_context,
         })
         .to_string();
+        /*
+         * 成功轮次的终态由执行器自己组装，sink 收不到这条 `turn_completed`，因此这里
+         * 主动把工具名补上：投影据此直接落库，不必回扫本轮事件日志。清单为空（没有
+         * 工具调用，或执行器没接 sink）时保持原载荷不变。
+         */
+        if let Some(sink) = sink {
+            response_payload = with_tool_names(response_payload, sink.tool_names());
+        }
         let next_execution = result.continuation.map(|item| NextExecutionRequest {
             goal_id: action.goal_id.clone(),
             parent_execution_id: axon_domain::ExecutionId::new(action.action_id.as_str()).ok(),
@@ -317,6 +325,25 @@ fn remote_control_response(preview: &str, _session_id: &str) -> String {
         "queue" => "队列查询已完成。".to_owned(),
         _ => format!("{REMOTE_CONTROL_RESPONSE_PREFIX}{preview}"),
     }
+}
+
+/// 把工具名注入终态载荷；空清单或载荷不可解析时原样返回。
+///
+/// 成功轮次的终态由执行器自己组装、不经过 sink 的分派路径，工具名因此要在这里补。
+/// 投影读到 `toolNames` 就直接落库，读不到才回扫事件日志。
+fn with_tool_names(payload_json: String, names: Vec<String>) -> String {
+    if names.is_empty() {
+        return payload_json;
+    }
+    let Ok(mut payload) = serde_json::from_str::<serde_json::Value>(&payload_json) else {
+        return payload_json;
+    };
+    if !payload.is_object() {
+        return payload_json;
+    }
+    payload["toolNames"] =
+        serde_json::Value::Array(names.into_iter().map(serde_json::Value::String).collect());
+    serde_json::to_string(&payload).unwrap_or(payload_json)
 }
 
 #[cfg(test)]

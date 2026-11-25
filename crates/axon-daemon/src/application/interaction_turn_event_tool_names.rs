@@ -37,6 +37,14 @@ pub(super) fn observe(tool_names: &Mutex<Vec<String>>, event: &RuntimeEvent) {
     }
 }
 
+/// 本轮已累积工具名的快照；失败终态与执行器都用它补载荷。
+pub(super) fn snapshot(tool_names: &Mutex<Vec<String>>) -> Vec<String> {
+    tool_names
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
 /// 终态帧带上本轮工具名，供逐轮事实投影直接读取，不必回扫事件日志。
 ///
 /// 载荷仍是 JSON 对象，只多一个 `toolNames` 数组；旧读者忽略未知字段，新读者拿它

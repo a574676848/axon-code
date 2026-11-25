@@ -97,14 +97,16 @@ $jobs = 1..$Runs | ForEach-Object {
 
 $walls = New-Object System.Collections.Generic.List[double]
 $activeWindows = 0
-$fullParallelWindows = 0
+$droppedWindows = 0
+$atLeastRunsWindows = 0
 $elapsed = [System.Diagnostics.Stopwatch]::StartNew()
 while ($elapsed.Elapsed.TotalSeconds -lt $Seconds) {
   $state = (& curl.exe -s -H "Authorization: Bearer $token" "$api/sessions") | ConvertFrom-Json
   $running = ($state.sessions | Where-Object { $_.running }).Count
   if ($running -ge 1) {
     $wall = [System.Diagnostics.Stopwatch]::StartNew()
-    $perCall = & curl.exe -s -o NUL -o NUL -o NUL -o NUL -w "%{time_total}`n" --parallel --parallel-max 4 `
+    # curl 的 -w 按传输完成顺序输出，因此每行带 url_effective，按 URL 归桶而不是按下标。
+    $perCall = & curl.exe -s -o NUL -o NUL -o NUL -o NUL -w "%{url_effective} %{time_total}`n" --parallel --parallel-max 4 `
       -H "Authorization: Bearer $token" `
       "$api/sessions" `
       "$api/sessions/$Session/interactions" `
@@ -112,13 +114,22 @@ while ($elapsed.Elapsed.TotalSeconds -lt $Seconds) {
       "$api/sessions/$Session/live"
     $wall.Stop()
     $walls.Add($wall.Elapsed.TotalMilliseconds)
-    $lines = @($perCall | Where-Object { $_ -match '^\d' })
-    if ($lines.Count -eq $endpoints.Count) {
-      for ($index = 0; $index -lt $endpoints.Count; $index++) {
-        $buckets[$endpoints[$index]].Add([double]$lines[$index] * 1000)
+    $sample = @{}
+    foreach ($line in $perCall) {
+      if ($line -match '^(\S+)\s+([\d.]+)$') {
+        $sample[$Matches[1]] = [double]$Matches[2] * 1000
       }
     }
-    if ($running -ge $Runs) { $fullParallelWindows++ }
+    $resolved = 0
+    foreach ($name in $endpoints) {
+      $key = if ($name -eq 'sessions') { "$api/sessions" } else { "$api/sessions/$Session/$name" }
+      if ($sample.ContainsKey($key)) {
+        $buckets[$name].Add($sample[$key])
+        $resolved++
+      }
+    }
+    if ($resolved -ne $endpoints.Count) { $droppedWindows++ }
+    if ($running -ge $Runs) { $atLeastRunsWindows++ }
     $activeWindows++
   }
   if ((Get-Job -State Running).Count -eq 0 -and $activeWindows -gt 0) { break }
@@ -133,9 +144,10 @@ if ($wallArray.Count -eq 0) {
   exit 1
 }
 
-Write-Output ("active_windows={0} full_parallel_windows={1} wall_p50={2:N1}ms wall_p95={3:N1}ms wall_max={4:N1}ms" -f `
+Write-Output ("active_windows={0} dropped_windows={1} at_least_runs_running={2} wall_p50={3:N1}ms wall_p95={4:N1}ms wall_max={5:N1}ms" -f `
   $activeWindows,
-  $fullParallelWindows,
+  $droppedWindows,
+  $atLeastRunsWindows,
   (Measure-Percentile $wallArray 0.5),
   (Measure-Percentile $wallArray 0.95),
   ($wallArray | Measure-Object -Maximum).Maximum)

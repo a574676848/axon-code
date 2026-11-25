@@ -493,3 +493,31 @@ fn streaming_execution_projects_canonical_terminal_events_before_turn_completed(
         "实时 wire 事件不得在收口阶段重复持久化"
     );
 }
+
+#[test]
+fn terminal_payload_gains_tool_names_when_the_sink_reports_them() {
+    let payload = r#"{"actionId":"a","kind":"user_input","response":"完成"}"#.to_owned();
+    let injected = with_tool_names(payload, vec!["read_file".to_owned(), "grep".to_owned()]);
+    let value: serde_json::Value = serde_json::from_str(&injected).expect("仍是 JSON");
+    assert_eq!(
+        value["toolNames"],
+        serde_json::json!(["read_file", "grep"]),
+        "终态载荷必须带上本轮工具名"
+    );
+    assert_eq!(value["response"], "完成", "原有字段不得被改动");
+}
+
+#[test]
+fn terminal_payload_is_unchanged_without_tool_names_or_when_unparseable() {
+    let payload = r#"{"actionId":"a"}"#.to_owned();
+    assert_eq!(
+        with_tool_names(payload.clone(), Vec::new()),
+        payload,
+        "没有工具调用时载荷必须原样返回"
+    );
+    assert_eq!(
+        with_tool_names("not json".to_owned(), vec!["read_file".to_owned()]),
+        "not json",
+        "载荷不可解析时不得改写内容"
+    );
+}

@@ -57,6 +57,14 @@ pub trait TurnEventSink: Send + Sync {
         Ok(())
     }
 
+    /// 本 turn 已经发生的工具调用名，按首次出现顺序去重。
+    ///
+    /// 终态载荷由执行器自己组装，投影需要这份清单才能不解压事件日志；默认返回空，
+    /// 不实现它只是退化为按日志回扫，不影响正确性。
+    fn tool_names(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// 返回本 turn 的可选性能 recorder；默认关闭且不产生额外计时。
     fn performance_recorder(&self) -> Option<std::sync::Arc<dyn TurnPerformanceRecorder>> {
         None
