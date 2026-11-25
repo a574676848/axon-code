@@ -65,6 +65,12 @@ pub(super) struct RuntimeTurnEventSink<'a, S, P, C> {
     last_usage_payload: Mutex<Option<Value>>,
     /// 待落库的过程读数：同一条 provider 流只保留最后一条，收口时一次写入。
     pending_replay_copy: Mutex<Option<PendingReplayCopy>>,
+    /// 本轮用过的工具名，按首次出现顺序去重。
+    ///
+    /// 工具调用帧在过程批里逐条到达，而逐轮事实投影只在收口批触发；过去靠「收口时把
+    /// 这一轮自己解压一遍」凑工具名，等于把 O(轮长) 的读放进写路径。这里改成随帧累积，
+    /// 收口时直接把结果塞进终态载荷，投影侧不必再回读事件日志。
+    tool_names: Mutex<Vec<String>>,
     /// 已落库的用量快照：同值不再重复写，省掉一次事务。
     last_committed_usage: Mutex<Option<Value>>,
     /// 本轮生成账本：provider 流式窗口与累计输出。
@@ -150,6 +156,7 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
             subagent_session_sinks,
             last_usage_payload: Mutex::new(None),
             pending_replay_copy: Mutex::new(None),
+            tool_names: Mutex::new(Vec::new()),
             last_committed_usage: Mutex::new(None),
             generation_watch: Mutex::new(TurnGenerationWatch::default()),
             started_at_ms: std::time::SystemTime::now()
@@ -312,6 +319,7 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
     {
         for event in events {
             self.observe_generation_event(event);
+            self.observe_tool_name(event);
             match classify_frame(&event.payload_json) {
                 FrameClass::LivePart { key, kind } => {
                     self.publish_live_frame(event, Some((key, kind)))?;
@@ -340,7 +348,13 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
                     } else {
                         None
                     };
-                    self.commit_and_publish_slice(std::slice::from_ref(event), metrics)?;
+                    // 终态帧带上本轮累积的工具名，投影侧因此不再回扫这一轮的帧。
+                    let committed = if terminal {
+                        self.terminal_frame_with_tool_names(event)?
+                    } else {
+                        event.clone()
+                    };
+                    self.commit_and_publish_slice(std::slice::from_ref(&committed), metrics)?;
                     if terminal {
                         // 轮次已收口：可补发的读数到此作废，留着只会被下一次订阅
                         // 补发出去，把上一轮的阶段当成新一轮的现状。
@@ -361,6 +375,65 @@ impl<'a, S, P, C> RuntimeTurnEventSink<'a, S, P, C> {
             }
         }
         Ok(())
+    }
+
+    /// 记录本帧里的工具名（工具调用帧）。
+    ///
+    /// 只认 `kind.type == "toolCall"` 的 wire 帧：名字在 `kind.payload.toolName`。重复的
+    /// 名字只留第一次，顺序即首次出现顺序，与逐轮事实里的展示口径一致。
+    fn observe_tool_name(&self, event: &RuntimeEvent) {
+        let Ok(payload) = serde_json::from_str::<serde_json::Value>(&event.payload_json) else {
+            return;
+        };
+        let Some(kind) = payload.get("kind") else {
+            return;
+        };
+        if kind.get("type").and_then(serde_json::Value::as_str) != Some("toolCall") {
+            return;
+        }
+        let Some(name) = kind
+            .get("payload")
+            .and_then(|payload| payload.get("toolName"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|name| !name.is_empty())
+        else {
+            return;
+        };
+        let mut names = self
+            .tool_names
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !names.iter().any(|known| known == name) {
+            names.push(name.to_owned());
+        }
+    }
+
+    /// 终态帧带上本轮工具名，供逐轮事实投影直接读取，不必回扫事件日志。
+    ///
+    /// 载荷仍是 JSON 对象，只多一个 `toolNames` 数组；旧读者忽略未知字段，新读者拿它
+    /// 直接写投影，写路径因此不再有「每轮解压自己的帧」这一笔读放大。
+    fn terminal_frame_with_tool_names(&self, event: &RuntimeEvent) -> Result<RuntimeEvent, String> {
+        let names = self
+            .tool_names
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if names.is_empty() {
+            return Ok(event.clone());
+        }
+        let mut payload: serde_json::Value = serde_json::from_str(&event.payload_json)
+            .map_err(|error| format!("解析终态载荷失败：{error}"))?;
+        let serde_json::Value::Object(map) = &mut payload else {
+            return Ok(event.clone());
+        };
+        map.insert(
+            "toolNames".to_owned(),
+            serde_json::Value::Array(names.into_iter().map(serde_json::Value::String).collect()),
+        );
+        let mut annotated = event.clone();
+        annotated.payload_json = serde_json::to_string(&payload)
+            .map_err(|error| format!("序列化终态载荷失败：{error}"))?;
+        Ok(annotated)
     }
 
     /// 投递一帧实时事件；正文增量同时进入累积缓冲。

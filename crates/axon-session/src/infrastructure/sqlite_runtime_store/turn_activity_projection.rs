@@ -22,6 +22,7 @@ pub(super) fn project_turn_activity(
     now_ms: u64,
 ) {
     let mut terminal: Option<(String, Option<String>)> = None;
+    let mut terminal_tool_names: Option<Vec<String>> = None;
     let mut metrics_json: Option<String> = None;
     for (event_type, payload_json) in events {
         match event_type.as_str() {
@@ -36,6 +37,21 @@ pub(super) fn project_turn_activity(
                 else {
                     continue;
                 };
+                // 收口批里带了本轮工具名时直接用：写路径不再回扫这一轮的帧。
+                if let Some(names) = payload
+                    .get("toolNames")
+                    .and_then(serde_json::Value::as_array)
+                {
+                    let names = names
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .filter(|name| !name.is_empty())
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>();
+                    if !names.is_empty() {
+                        terminal_tool_names = Some(names);
+                    }
+                }
                 let response = payload
                     .get("response")
                     .and_then(serde_json::Value::as_str)
@@ -51,7 +67,9 @@ pub(super) fn project_turn_activity(
     let Some((interaction_id, answer_text)) = terminal else {
         return;
     };
-    let tool_names = tool_names_for(store, session_id, &interaction_id);
+    // 老记录没有 toolNames 字段：退回按这一次交互的有界扫描，语义与改造前一致。
+    let tool_names =
+        terminal_tool_names.unwrap_or_else(|| tool_names_for(store, session_id, &interaction_id));
     let activity = TurnActivity {
         session_id: session_id.as_str().to_owned(),
         interaction_id,
