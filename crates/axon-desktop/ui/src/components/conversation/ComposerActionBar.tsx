@@ -97,24 +97,6 @@ export const ComposerActionBar: React.FC<ComposerActionBarProps> = ({
         </button>
       )}
 
-      {!compact && VOICE_UI_ENABLED && (
-        <button
-          type="button"
-          aria-label={voiceActive ? '结束语音输入' : '开始语音输入'}
-          aria-pressed={voiceActive}
-          title={voiceActive ? '结束语音输入' : '开始语音输入'}
-          disabled={!voiceAvailable}
-          onClick={onToggleVoice}
-          className={`shrink-0 w-7 h-7 rounded-sm flex items-center justify-center transition-colors duration-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 ${
-            voiceActive
-              ? 'bg-active text-text-primary'
-              : 'text-text-secondary hover:bg-hover hover:text-text-primary'
-          }`}
-        >
-          <MicrophoneIcon size={16} />
-        </button>
-      )}
-
       {hintVisible && (
         <span className="shrink-0 pl-1 text-2xs text-text-tertiary select-none">
           {hintText}
@@ -137,6 +119,24 @@ export const ComposerActionBar: React.FC<ComposerActionBarProps> = ({
           onModelChange={(value) => onModelChange?.(value)}
           onReasoningEffortChange={(value) => onReasoningEffortChange?.(value)}
         />
+      )}
+
+      {!compact && VOICE_UI_ENABLED && (
+        <button
+          type="button"
+          aria-label={voiceActive ? '结束语音输入' : '开始语音输入'}
+          aria-pressed={voiceActive}
+          title={voiceActive ? '结束语音输入' : '开始语音输入'}
+          disabled={!voiceAvailable}
+          onClick={onToggleVoice}
+          className={`shrink-0 w-7 h-7 rounded-sm flex items-center justify-center transition-colors duration-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 ${
+            voiceActive
+              ? 'bg-active text-text-primary'
+              : 'text-text-secondary hover:bg-hover hover:text-text-primary'
+          }`}
+        >
+          <MicrophoneIcon size={16} />
+        </button>
       )}
 
       <button
