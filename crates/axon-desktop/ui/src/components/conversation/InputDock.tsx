@@ -14,7 +14,7 @@ import { ComposerCandidateLayer } from './ComposerCandidateLayer';
 import { composerOptionId } from './ComposerCandidates';
 import { ComposerActionBar } from './ComposerActionBar';
 import { ComposerTextArea } from './ComposerTextArea';
-import { ComposerVoiceLayer } from './ComposerVoiceLayer';
+import { ComposerVoiceBar, ComposerVoiceLayer } from './ComposerVoiceLayer';
 import { useComposerVoice } from './useComposerVoice';
 import { useExpiringNotice } from './composerNotice';
 import { useComposerAttachments } from './useComposerAttachments';
@@ -449,6 +449,8 @@ export const InputDock: React.FC<InputDockProps> = ({
                   dragging ? 'border-focus bg-hover' : 'border-border'
                 }`}
               >
+                {/* 语音态带长在坞内：录音时坞自身变形，不在坞外另挂一条横条。 */}
+                {!compact && <ComposerVoiceBar voice={voice} />}
                 {!compact && (links.links.length > 0 || attachments.length > 0) && (
                   <ComposerTray
                     links={links.links}

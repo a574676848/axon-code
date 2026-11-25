@@ -3,104 +3,79 @@ import { AlertCircleIcon, MicrophoneIcon } from '../../icons';
 import type { ComposerPermissionPrompt, ComposerVoice } from './useComposerVoice';
 import type { VoicePhase } from '../../speech/voiceProtocol';
 import { VOICE_UI_ENABLED } from '../../speech/enabled';
-import { formatElapsedClock } from '../../conversation/format';
 import { VoiceWave } from './VoiceWave';
-import { ComposerStatusCell } from './ComposerStatusCell';
 import { Banner, StateDot } from '../ui/surfaces';
 import { Button } from '../ui/controls';
 import { Dialog } from '../ui/overlays';
 
 /*
- * 语音的三层呈现：输入坞上方的录音条、贴在上沿的中间结果浮层，与原生授权引导。
+ * 语音在界面上的呈现分两处：输入坞内部的语音态带，与覆盖其上的授权引导。
  *
- * 录音条借用成熟语音输入产品的形态：一条 44px 的下沉面横条，左侧是实测振幅驱动的
- * 声波与计时，右侧只放两个动作，「停止并识别」与「取消」。停止会把识别结果写进
- * 输入坞，取消则整句丢弃，草稿保持原样；两种结果都不直接发送。
+ * 语音不是外挂于输入坞的横条，而是输入坞自身的形态变化：非待机时，坞内顶部长出
+ * 一条状态带，并且同一时刻只强调一个焦点。四态各有专属标识与一个词，远看分得清，
+ * 近看不必在计时、标签、声波之间做阅读理解。识别中的文字出现时直接成为那一态的焦点。
  *
- * 中间结果用固定 20px 的浮层，不参与布局，partial 频繁覆盖时输入坞不会跳动。
  * 授权引导用应用内原生对话框而不是浏览器权限条：说清是一次性说明还是系统拦截，
  * 并在后者给出一键打开系统麦克风设置与重新检测。
  */
 
-/** 录音条上的动作词：一句就够，不重复「聆听 / 正在录音」。 */
-const BAR_LABEL: Record<Exclude<VoicePhase, 'idle'>, string> = {
-  arming: '准备中',
-  listening: '录音中',
-  thinking: '整理中',
-  speaking: '朗读中',
-  interrupted: '已打断',
-};
-
-/** 录音条上的补充说明：只说下一步能做什么。 */
-const BAR_HINT: Record<Exclude<VoicePhase, 'idle'>, string> = {
-  arming: '',
-  listening: '',
-  thinking: '识别结果会写进输入框',
-  speaking: '',
-  interrupted: '',
-};
-
 /** 准备期超过这个时长就说明是冷启动：给出诚实的等待预期。 */
 const COLD_START_HINT_MS = 3_000;
 
+/** 每个相位的唯一焦点：一个标识族加一个词；accent 表示正在进行、值得看。 */
+interface VoiceFocus {
+  label: string;
+  glyph: 'wave' | 'spin' | 'dot';
+  accent: boolean;
+}
+
+/** 四态可辨：准备与思考用转圈，聆听与朗读用声波，再靠词与语气分开。 */
+const PHASE_FOCUS: Record<Exclude<VoicePhase, 'idle'>, VoiceFocus> = {
+  arming: { label: '准备中', glyph: 'spin', accent: true },
+  listening: { label: '聆听中', glyph: 'wave', accent: true },
+  thinking: { label: '整理中', glyph: 'spin', accent: false },
+  speaking: { label: '朗读中', glyph: 'wave', accent: true },
+  interrupted: { label: '已打断', glyph: 'dot', accent: false },
+};
+
 /**
- * 语音录音条；待机不占高度。
+ * 输入坞内的语音态带；待机不渲染，不占高度。
  *
- * 只讲用户能感知的事实：在做什么、还能做什么。丢帧这类内部指标不进这一条。
- * 外壳与工作状态行共用 `ComposerStatusCell`，两格同高同形，只在语气上分开。
+ * 单一焦点：聆听时让给实时转写，冷启动超时让给连接预期，其余相位就是那一态的词。
+ * 计时不再与状态并列，听写的 120 秒上限极少触发，这一刻真正要说的是「正在发生什么」。
  */
 export const ComposerVoiceBar: React.FC<{ voice: ComposerVoice }> = ({ voice }) => {
   if (voice.phase === 'idle') return null;
-  const recording = voice.phase === 'listening';
+  const focus = PHASE_FOCUS[voice.phase];
   const partial = voice.partial.trim();
-  const hint =
-    voice.phase === 'arming' && voice.elapsedMs >= COLD_START_HINT_MS
-      ? '首次连接语音提供方，正在准备'
-      : partial.length > 0
-        ? partial
-        : BAR_HINT[voice.phase];
+  const primary =
+    voice.phase === 'listening' && partial.length > 0
+      ? partial
+      : voice.phase === 'arming' && voice.elapsedMs >= COLD_START_HINT_MS
+        ? '正在连接语音提供方'
+        : focus.label;
+  const ink = focus.accent ? 'text-text-link' : 'text-text-tertiary';
   return (
-    <ComposerStatusCell
+    <div
       role="status"
       aria-live="polite"
       data-voice-status={voice.phase}
-      className="mb-1.5"
-      glyph={
-        /* 录音中：一枚品牌色小点加实测振幅声波，说明这一条正在收声。 */
-        recording ? (
-          <span className="flex items-center gap-1.5 text-text-link">
-            <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden="true" />
-            <VoiceWave active size="xs" />
-          </span>
-        ) : (
-          /* 准备与收口期改用全站那一枚进行态转圈，与工作状态行坐在同一个落点上。 */
-          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-text-link/10">
-            <StateDot state="ongoing" tone="accent" />
-          </span>
-        )
-      }
-      hint={
-        recording || voice.phase === 'thinking' || voice.phase === 'arming' ? 'Esc 关闭' : undefined
-      }
+      className="flex min-w-0 items-center gap-2 px-3 pb-1 pt-2 text-meta"
     >
-      <span className="shrink-0 text-meta font-medium text-text-primary">
-        {BAR_LABEL[voice.phase]}
+      <span className={`flex h-4 w-4 shrink-0 items-center justify-center ${ink}`} aria-hidden="true">
+        {focus.glyph === 'wave' ? (
+          <VoiceWave active={voice.phase === 'listening'} size="xs" />
+        ) : focus.glyph === 'spin' ? (
+          <StateDot state="ongoing" tone={focus.accent ? 'accent' : 'default'} />
+        ) : (
+          <span className="h-1.5 w-1.5 rounded-full bg-current" />
+        )}
       </span>
-      <span className="shrink-0 text-meta tabular-nums text-text-tertiary">
-        {formatElapsedClock(voice.elapsedMs)}
+      <span className={`min-w-0 flex-1 truncate ${ink} ${focus.accent ? 'font-medium' : ''}`}>
+        {primary}
       </span>
-      {/*
-        识别中的文字就长在这一条上：它属于「这次录音」的一部分，
-        不该另起一块浮层，也不该等到停止后才出现。
-      */}
-      <span
-        className={`min-w-0 flex-1 truncate text-meta ${
-          partial.length > 0 ? 'text-text-prose' : 'text-text-tertiary'
-        }`}
-      >
-        {hint}
-      </span>
-    </ComposerStatusCell>
+      {voice.phase === 'listening' && <span className="shrink-0 text-text-tertiary">Esc 关闭</span>}
+    </div>
   );
 };
 /** 失败结论用 Banner 表达，入口随后由控制器复位。 */
@@ -159,13 +134,16 @@ export const ComposerVoicePermissionDialog: React.FC<{
   );
 };
 
-/** 输入坞里的语音组合：失败回执、录音条与授权引导。 */
+/**
+ * 坞外的语音覆盖层：失败回执与授权引导。
+ * 语音态带 `ComposerVoiceBar` 长在输入坞内部，由 InputDock 直接渲染，
+ * 因为它是坞自身的形态变化，不是挂在坞外的另一条横条。
+ */
 export const ComposerVoiceLayer: React.FC<{ voice: ComposerVoice }> = ({ voice }) => {
   if (!VOICE_UI_ENABLED) return null;
   return (
     <>
       {voice.error !== null && <ComposerVoiceError message={voice.error} />}
-      <ComposerVoiceBar voice={voice} />
       {voice.permission !== null && (
         <ComposerVoicePermissionDialog
           prompt={voice.permission}
