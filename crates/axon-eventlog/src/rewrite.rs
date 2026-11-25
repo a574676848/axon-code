@@ -48,6 +48,9 @@ pub fn rewrite_log(
     // 与追加路径共用同一把锁：重写期间不允许别的写者往旧文件尾部追加，
     // 否则 rename 之后那些帧会凭空消失。
     let _lock = ExclusiveLock::acquire(&path.with_extension("lock"))?;
+    // 重写会整体替换文件：先丢弃本进程的常驻写句柄，否则 Windows 上它持有的句柄
+    // 会让 rename 报共享冲突，重写永远走不成功。
+    crate::writer_registry::forget_session_log(&path);
     write_locked(log, header, records)
 }
 
@@ -67,6 +70,7 @@ where
 {
     let path = log.path();
     let _lock = ExclusiveLock::acquire(&path.with_extension("lock"))?;
+    crate::writer_registry::forget_session_log(&path);
     if !path.is_file() {
         return Ok(None);
     }
@@ -93,6 +97,7 @@ pub fn rewrite_log_if_unchanged(
     validate_sequences(records)?;
     let path = log.path();
     let _lock = ExclusiveLock::acquire(&path.with_extension("lock"))?;
+    crate::writer_registry::forget_session_log(&path);
     if !path.is_file() {
         return Ok(None);
     }
@@ -206,6 +211,8 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), EventLogError> {
         let _ = std::fs::remove_file(&temporary);
         return Err(error.into());
     }
+    // 日志已被整体替换：任何还指向旧文件偏移的常驻句柄都必须失效。
+    crate::writer_registry::forget_session_log(path);
     Ok(())
 }
 

@@ -91,6 +91,16 @@ pub(crate) fn load(log_path: &Path, log_len: u64) -> Option<FrameIndex> {
         entries.push(entry);
         previous = Some(entry);
     }
+    /*
+     * 覆盖长度齐、条目却少一条的索引会「看起来新鲜」：掉电时覆盖长度所在的第一页可能
+     * 先落盘，而新条目所在页未落盘。这样的索引会让尾号退到上一帧，恢复路径据此写出
+     * 重号。因此末条必须正好封住覆盖长度，否则整份索引不可信，按日志重建。
+     */
+    if let Some(last) = entries.last()
+        && last.end() != covered
+    {
+        return None;
+    }
     Some(FrameIndex::new(entries))
 }
 

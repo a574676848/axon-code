@@ -19,6 +19,7 @@ mod read;
 mod record;
 mod rewrite;
 mod tail;
+mod writer_registry;
 
 pub use append::{EventLogWriter, append_once};
 pub use error::EventLogError;

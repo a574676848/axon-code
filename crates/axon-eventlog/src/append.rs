@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::EventLog;
 use crate::error::EventLogError;
 use crate::format::{Header, encode_frame, scan_frames, tail_ends_on_frame_boundary};
-use crate::index::{self, FrameIndexEntry, record_interaction_tag};
+use crate::index::{self, FrameIndex, FrameIndexEntry, record_interaction_tag};
 use crate::lock::ExclusiveLock;
 use crate::read::read_tail_record;
 use crate::record::RuntimeEventRecord;
@@ -41,11 +41,27 @@ pub struct EventLogWriter {
     index_bytes: u64,
     /// 索引不可用（打不开或走不下去）：只影响读侧快慢，不影响事件落盘。
     index_disabled: bool,
-    _lock: ExclusiveLock,
+    /// 排他锁：常驻复用的句柄在批次之间释放，写时再取；一次性句柄整段持有。
+    lock: Option<ExclusiveLock>,
     header: Header,
     next_sequence: u64,
     header_written: bool,
     bytes_len: u64,
+    /// 常驻内存的帧索引：打开时加载一次，此后每写一帧只追加条目。
+    ///
+    /// 这是常驻写者省掉「每批两次整份索引读」的关键：条目由写路径自己维护，
+    /// 读路径仍以磁盘索引为准，两者的一致性由「日志只追加」这一前提加长度核对保证。
+    index_state: Option<FrameIndex>,
+    /// 句柄代际：日志被整体重写后，注册表会把代际推进一格。
+    ///
+    /// 仅靠「文件长度 + 尾号」判不出「文件已被换成另一份、恰好等长」这种情况，
+    /// 代际是那条路径上唯一可靠的失效信号。一次性句柄恒为注册表给的同一代际。
+    generation: u64,
+    /// 上次写入后的文件修改时刻，用来识别「等长替换」。
+    ///
+    /// 重写日志会改变修改时刻，即使新旧字节数恰好相同；只看长度会让常驻句柄把帧
+    /// 写进已经被换掉的那份文件，调用方还会拿到成功。`None` 表示尚未取样。
+    modified: Option<std::time::SystemTime>,
 }
 
 impl EventLogWriter {
@@ -73,11 +89,14 @@ impl EventLogWriter {
             index_file: None,
             index_bytes: 0,
             index_disabled: false,
-            _lock: lock,
+            lock: Some(lock),
             header,
             next_sequence,
             header_written,
             bytes_len,
+            index_state: None,
+            generation: 0,
+            modified: None,
         })
     }
 
@@ -180,6 +199,16 @@ impl EventLogWriter {
                     covered,
                 )?;
             }
+            // 内存索引与磁盘索引同一顺序维护：常驻句柄下一次追加要据此判断尾号与偏移，
+            // 不再回头读整份索引文件。
+            self.index_state
+                .get_or_insert_with(FrameIndex::default)
+                .push(FrameIndexEntry {
+                    first_sequence,
+                    offset,
+                    len,
+                    interaction_tag,
+                });
             self.index_bytes = index_bytes;
         }
         self.bytes_len = covered;
@@ -231,6 +260,13 @@ impl EventLogWriter {
         }
         self.bytes_len = before;
         self.index_bytes = index_before;
+        /*
+         * header 帧也被截掉了：下次写入必须重新补写。回滚到 0 之外的偏移说明 header
+         * 仍在，保持原状态即可。
+         */
+        if before == 0 {
+            self.header_written = false;
+        }
     }
 }
 
@@ -284,10 +320,17 @@ impl EventLogWriter {
     ) -> Result<Self, EventLogError> {
         let path = log.path();
         let lock = ExclusiveLock::acquire(&path.with_extension("lock"))?;
+        let mut index_state = None;
         let (bytes_len, header_written) = if path.exists() {
             let len = std::fs::metadata(&path)?.len();
             let repaired = repair_torn_tail(&path, len)?;
             ensure_index(&path, repaired)?;
+            /*
+             * 索引只在这里完整加载一次：常驻句柄此后按「写一帧追加一条」维护内存副本，
+             * 不再回头读整份索引。旧实现里同一份索引在每次 append 里要被读两遍，
+             * 长会话下这两次读就是写路径上最大的固定开销。
+             */
+            index_state = index::load(&path, repaired);
             (repaired, repaired > 0)
         } else {
             (0, false)
@@ -303,18 +346,171 @@ impl EventLogWriter {
                 actual: durable_tail.unwrap_or(0),
             });
         }
+        let modified = std::fs::metadata(&path)
+            .ok()
+            .and_then(|metadata| metadata.modified().ok());
         Ok(Self {
             path,
             file: None,
             index_file: None,
             index_bytes: 0,
             index_disabled: false,
-            _lock: lock,
+            lock: Some(lock),
             header: Header::new(log.session_id(), created_at_ms, None),
             next_sequence: expected_next,
             header_written,
             bytes_len,
+            index_state,
+            generation: 0,
+            modified,
         })
+    }
+}
+
+impl EventLogWriter {
+    /// 以「可复用」方式打开：校验完成后立即释放排他锁。
+    ///
+    /// 常驻写者用它在建句柄时付一次完整校验（撕裂尾修复、索引加载、尾号核对），
+    /// 之后每次追加由 [`Self::append_batch_reusing`] 短暂取锁。锁仍然只覆盖一次追加，
+    /// 因此多进程之间「先到先写、后到按尾号校验」的语义与一次性句柄完全一致。
+    pub(crate) fn open_reusable(
+        log: &EventLog,
+        expected_next: u64,
+        created_at_ms: u64,
+        generation: u64,
+    ) -> Result<Self, EventLogError> {
+        let mut writer = Self::open_at(log, expected_next, created_at_ms)?;
+        writer.generation = generation;
+        writer.release_lock();
+        Ok(writer)
+    }
+
+    /// 释放排他锁，留下可复用的句柄与常驻索引。
+    fn release_lock(&mut self) {
+        self.lock = None;
+    }
+
+    /// 复用句柄追加一批：短暂取锁、核对磁盘、写帧、释放锁。
+    ///
+    /// 核对只用一次 `metadata` 与内存里的尾号：
+    /// - 文件长度与内存记录一致且序号相接时，说明没有别的进程插写，直接落盘；
+    /// - 任一不符时重新与磁盘对齐（修复撕裂尾、重建索引、重算尾号），再按对齐结果
+    ///   决定接受还是返回 [`EventLogError::SequenceTailMismatch`]。
+    pub fn append_batch_reusing(
+        &mut self,
+        expected_next: u64,
+        generation: u64,
+        events: &[RuntimeEventRecord],
+    ) -> Result<u64, EventLogError> {
+        // 代际不符说明日志已被整体重写：旧句柄指向的文件已经不是当前日志。
+        if self.generation != generation {
+            return Err(EventLogError::StaleHandle);
+        }
+        if self.lock.is_none() {
+            self.lock = Some(ExclusiveLock::acquire(&self.path.with_extension("lock"))?);
+        }
+        let outcome = self.append_locked(expected_next, events);
+        self.release_lock();
+        outcome
+    }
+
+    /// 持锁状态下的追加主体；错误路径由调用方统一释放锁。
+    fn append_locked(
+        &mut self,
+        expected_next: u64,
+        events: &[RuntimeEventRecord],
+    ) -> Result<u64, EventLogError> {
+        let metadata = std::fs::metadata(&self.path).ok();
+        let actual_len = metadata.as_ref().map(|meta| meta.len()).unwrap_or(0);
+        let actual_modified = metadata.as_ref().and_then(|meta| meta.modified().ok());
+        /*
+         * 三项判据缺一不可：长度发现追加，修改时刻发现「等长替换」（重写日志会改变
+         * 修改时刻），尾号发现控制面与文件的不同步。只看长度会让等长重写后的常驻
+         * 句柄继续写旧文件，且调用方拿到成功。
+         */
+        let length_changed = actual_len != self.bytes_len;
+        let modification_changed = match (self.modified, actual_modified) {
+            (Some(known), Some(actual)) => known != actual,
+            _ => false,
+        };
+        if length_changed || modification_changed || self.next_sequence != expected_next {
+            self.resync(expected_next)?;
+        }
+        self.next_sequence = expected_next;
+        let outcome = self.append_batch(events);
+        if outcome.is_ok() {
+            self.modified = self
+                .file
+                .as_ref()
+                .and_then(|file| file.metadata().ok())
+                .and_then(|meta| meta.modified().ok());
+        }
+        outcome
+    }
+
+    /// 重新与磁盘对齐：修复撕裂尾、重建索引、重算尾号。
+    fn resync(&mut self, expected_next: u64) -> Result<(), EventLogError> {
+        // 重新对齐要重新打开文件与索引句柄：旧句柄的写入位置与索引字节数都已失效。
+        self.file = None;
+        self.index_file = None;
+        self.index_disabled = false;
+        let len = std::fs::metadata(&self.path)
+            .map(|meta| meta.len())
+            .unwrap_or(0);
+        let repaired = repair_torn_tail(&self.path, len)?;
+        ensure_index(&self.path, repaired)?;
+        self.index_state = index::load(&self.path, repaired);
+        /*
+         * 索引只覆盖「已落盘的数据帧」：覆盖长度必须正好等于修复后的文件长度。
+         * `index::load` 已经这样校验，这里再核一次是防御性自检，避免将来放宽校验后
+         * 常驻索引带着过期偏移继续被写路径使用。
+         */
+        if self
+            .index_state
+            .as_ref()
+            .is_some_and(|state| state.covered_len() != repaired)
+        {
+            self.index_state = None;
+        }
+        self.index_bytes = std::fs::metadata(index::index_path(&self.path))
+            .map(|meta| meta.len())
+            .unwrap_or(0);
+        if repaired == 0 {
+            // 空日志：0 与 1 都是合规起点，与 `open_at` 同一口径。
+            if expected_next > 1 {
+                return Err(EventLogError::SequenceTailMismatch {
+                    expected: expected_next,
+                    actual: 0,
+                });
+            }
+            self.header_written = false;
+            self.bytes_len = 0;
+            self.next_sequence = expected_next;
+            self.modified = std::fs::metadata(&self.path)
+                .ok()
+                .and_then(|metadata| metadata.modified().ok());
+            return Ok(());
+        }
+        let (header, durable_next) = restore_metadata(&self.path, repaired)?;
+        self.header = header;
+        self.header_written = true;
+        self.bytes_len = repaired;
+        /*
+         * 无论接受还是拒绝，句柄都要反映磁盘上的真实尾号：拒绝路径上如果把它留在旧值，
+         * 下一次追加会因为「尾号不等」再走一遍对齐，并发冲突时就会反复付全量重建的代价，
+         * 表现为活锁。这里先落真实尾号，再由调用方按返回的错误重算并重试。
+         */
+        self.next_sequence = durable_next;
+        self.modified = std::fs::metadata(&self.path)
+            .ok()
+            .and_then(|metadata| metadata.modified().ok());
+        if durable_next != expected_next {
+            return Err(EventLogError::SequenceTailMismatch {
+                expected: expected_next,
+                actual: durable_next.saturating_sub(1),
+            });
+        }
+        Ok(())
     }
 }
 
@@ -375,6 +571,5 @@ pub fn append_once(
     created_at_ms: u64,
     events: &[RuntimeEventRecord],
 ) -> Result<u64, EventLogError> {
-    let mut writer = EventLogWriter::open_at(log, next_sequence, created_at_ms)?;
-    writer.append_batch(events)
+    crate::writer_registry::append_to_session(log, next_sequence, created_at_ms, events)
 }

@@ -112,6 +112,19 @@ impl FrameIndex {
         self.entries.last().copied()
     }
 
+    /// 追加一条已落盘帧的条目。
+    ///
+    /// 供常驻写句柄使用：句柄打开时把索引整体加载一次，此后每写一帧只把新条目接在
+    /// 内存里，不再回头读整份索引文件。条目必须按日志顺序追加，偏移由调用方保证连续。
+    pub(crate) fn push(&mut self, entry: FrameIndexEntry) {
+        self.entries.push(entry);
+    }
+
+    /// 已覆盖的日志长度：末条数据帧的结束偏移，空索引时为 0。
+    pub(crate) fn covered_len(&self) -> u64 {
+        self.last().map_or(0, |entry| entry.end())
+    }
+
     /// header 帧的结束偏移；没有数据帧时等于整个日志长度。
     pub(crate) fn header_end(&self, log_len: u64) -> u64 {
         self.entries.first().map_or(log_len, |entry| entry.offset)
