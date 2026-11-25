@@ -77,6 +77,19 @@ fn observe_failure(
             ));
             true
         }
+        /*
+         * 句柄代际失效：日志刚被整体重写，常驻句柄已经指向被替换的文件。
+         * 这类失败必须重试：重新打开的句柄会读新文件，重试即成功；直接上报就等于
+         * 在重写窗口里丢掉这一批事件。
+         */
+        axon_eventlog::EventLogError::StaleHandle => {
+            report_structured(&format!(
+                "事件日志句柄已随重写作废，已重新打开待重试: session_id={} expected_next={}",
+                session_id.as_str(),
+                expected_next
+            ));
+            true
+        }
         axon_eventlog::EventLogError::Io(_)
         | axon_eventlog::EventLogError::Codec(_)
         | axon_eventlog::EventLogError::SequenceGap { .. }
