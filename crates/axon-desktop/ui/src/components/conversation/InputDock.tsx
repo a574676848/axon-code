@@ -535,6 +535,7 @@ export const InputDock: React.FC<InputDockProps> = ({
                   working={working !== null}
                   voiceAvailable={voice.available}
                   voiceActive={voice.active}
+                  voiceHoldProgress={voice.holdProgress}
                   onToggleVoice={voice.toggle}
                   onPickAttachment={() => {
                     setLocalError(null);
