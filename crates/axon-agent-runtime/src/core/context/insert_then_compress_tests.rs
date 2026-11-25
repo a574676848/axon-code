@@ -604,6 +604,31 @@ fn commit_failure_keeps_the_current_history_for_the_next_turn() {
 
 mod insert_then_compress_projection_tests;
 
+/// 换窗时稳定前缀按内容去重：每开一个新窗口都会重新注入一组，不去重就会逐窗累积。
+///
+/// 反向判据：摘掉 `dedup_stable_messages`，这条用例立刻失败（真机窗口 10 实测 84 条里
+/// 72 条是 9 组重复，单这一项约 114K tokens）。
+#[test]
+fn fresh_window_collapses_the_repeated_stable_prefix() {
+    let checkpoint = crate::CanonicalCheckpoint::parse(&checkpoint_summary("任务", "- none"), &[])
+        .expect("摘要应通过完整性门禁");
+    let stable = AgentModelMessage::context(
+        "developer",
+        "<user-agents-context>全局规则</user-agents-context>",
+    );
+    let messages = vec![stable.clone(), stable.clone(), stable];
+
+    let compacted =
+        crate::insert_then_compress::rebuild_with_digest_for_test(&messages, &checkpoint, None);
+
+    let kept = compacted
+        .messages
+        .iter()
+        .filter(|message| message.content.contains("<user-agents-context>"))
+        .count();
+    assert_eq!(kept, 1, "同一份稳定前缀只能留一份，否则窗口越换越大");
+}
+
 #[test]
 fn fresh_window_injects_the_rollover_digest_note() {
     let checkpoint = crate::CanonicalCheckpoint::parse(&checkpoint_summary("任务", "- none"), &[])

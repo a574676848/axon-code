@@ -29,11 +29,11 @@ impl FreshWindowContext {
     ///
     /// 调用方必须传入与归档、token 计量同源的规范化历史，本函数不再重复规范化。
     pub(super) fn capture_from_normalized(provider_messages: &[AgentModelMessage]) -> Self {
-        let stable_messages = provider_messages
-            .iter()
-            .filter(|message| is_cross_workspace_stable_message(message))
-            .cloned()
-            .collect();
+        let stable_messages = dedup_stable_messages(
+            provider_messages
+                .iter()
+                .filter(|message| is_cross_workspace_stable_message(message)),
+        );
         let active_turn_tail = active_turn_tail(provider_messages);
         Self {
             stable_messages,
@@ -66,6 +66,30 @@ fn rollover_note_text(digest: Option<&str>) -> String {
         text.push_str(digest);
     }
     text
+}
+
+/// 稳定前缀按内容去重，保留首次出现。
+///
+/// 每开一个新窗口都会重新注入一组稳定前缀，而换窗时 `is_cross_workspace_stable_message`
+/// 会把此前累积的每一组都判成稳定消息。不去重的话，第 N 个窗口的 replacement 会带上 N 份
+/// 几乎相同的 workspace 规则与工具协议：真机窗口 10 实测 84 条里 72 条是 9 组重复，单这一
+/// 项就约 114K tokens，新窗口的 baseline 随窗口数线性膨胀，估算水位越往后越早越过换窗线。
+///
+/// 只折叠逐字段完全相同的消息：内容真的变过（例如协议版本更新）时两组都会留下，宁可多带
+/// 一份，也不静默丢掉新的事实。
+fn dedup_stable_messages<'a>(
+    messages: impl Iterator<Item = &'a AgentModelMessage>,
+) -> Vec<AgentModelMessage> {
+    let mut unique: Vec<AgentModelMessage> = Vec::new();
+    for message in messages {
+        let duplicate = unique
+            .iter()
+            .any(|kept| kept.role == message.role && kept.content == message.content);
+        if !duplicate {
+            unique.push(message.clone());
+        }
+    }
+    unique
 }
 
 /// 换窗后从旧窗口带入的消息范围。
@@ -110,11 +134,11 @@ pub(super) fn build_fresh_window_history_from_normalized(
     let mut messages = captured_context
         .map(|context| context.stable_messages.clone())
         .unwrap_or_else(|| {
-            provider_messages
-                .iter()
-                .filter(|message| is_cross_workspace_stable_message(message))
-                .cloned()
-                .collect()
+            dedup_stable_messages(
+                provider_messages
+                    .iter()
+                    .filter(|message| is_cross_workspace_stable_message(message)),
+            )
         });
     messages.push(AgentModelMessage::conversation_checkpoint(format!(
         "{WINDOW_ROLLOVER_CHECKPOINT_PREFIX}\n{}",
