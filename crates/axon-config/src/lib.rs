@@ -26,6 +26,8 @@ mod keys;
 mod keys_specs;
 #[path = "schema/sections.rs"]
 mod sections;
+#[path = "voice.rs"]
+pub mod voice;
 #[path = "validation/validators.rs"]
 mod validators;
 #[cfg(test)]
@@ -52,6 +54,7 @@ pub use sections::{
     AgentConfig, ChannelBalancerConfig, MemoryConfig, MemoryEmbeddingConfig, RemoteConfig,
     RemoteGatewayConfig, SkillsConfig, TuiConfig, VisionConfig,
 };
+pub use voice::{VoiceChannelConfig, VoiceConfig, VoiceModelConfig};
 pub use setup::*;
 
 /// OpenAI 默认协议（映射到 Responses API）。
@@ -356,6 +359,8 @@ pub struct AxonConfig {
     pub providers: Vec<ProviderConfig>,
     /// 模型目录。
     pub models: Vec<ModelConfig>,
+    /// 语音配置（独立 `[voice]` 段，默认关闭）。
+    pub voice: VoiceConfig,
 }
 
 /// 模型 provider 配置。
@@ -662,6 +667,7 @@ fn record_default_keys(report: &mut ConfigLoadReport) {
     report.record(ConfigSourceKind::BuiltInDefault, "remote");
     report.record(ConfigSourceKind::BuiltInDefault, "vision");
     report.record(ConfigSourceKind::BuiltInDefault, "memory");
+    report.record(ConfigSourceKind::BuiltInDefault, "voice");
 }
 
 fn record_default_keys_as_user(report: &mut ConfigLoadReport) {
@@ -671,6 +677,7 @@ fn record_default_keys_as_user(report: &mut ConfigLoadReport) {
     report.record(ConfigSourceKind::User, "remote");
     report.record(ConfigSourceKind::User, "vision");
     report.record(ConfigSourceKind::User, "memory");
+    report.record(ConfigSourceKind::User, "voice");
 }
 
 /// 运行态数据目录名。

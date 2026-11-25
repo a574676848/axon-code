@@ -46,6 +46,49 @@ model = ""
 # 禁用的 Skill 名称集合；可选值：任意 Skill name 字符串；默认值：[]。
 disabled = []
 
+# 语音配置（独立 [voice] 段；默认整段关闭，与 UI feature flag 联动）。
+[voice]
+# 语音总开关；可选值：true、false；默认值：false。开启前需先配置 channels/models。
+enabled = false
+# 语音车道；可选值：cascade（级联 STT→run→TTS）、realtime（端到端）、auto；默认值："cascade"。
+channel_balancer = "cascade"
+
+# 语音渠道（同构于 [[providers]]，复用主备/熔断语义）。
+[[voice.channels]]
+# 渠道名称，段内唯一，供 voice.models[].channel 引用；默认值：""（必须填写）。
+name = "volc-tts"
+# 是否参与语音渠道路由；可选值：true、false；默认值：true。
+enabled = true
+# 渠道协议；可选值：dashscope、volcengine-ark-multimodal 等 provider 协议族；默认值："volcengine-ark-multimodal"。
+protocol = "volcengine-ark-multimodal"
+# API 基址；默认值：按协议推导。
+base_url = "wss://openspeech.bytedance.com"
+# API key 环境变量名；密钥不写配置文件，只放 .env；默认值：无。
+api_key_env = "ARK_KEY"
+# 底层传输；可选值：http、websocket；默认值："websocket"。
+wire_transport = "websocket"
+# 渠道优先级；默认值：0。
+priority = 100
+# 同优先级权重；默认值：1。
+weight = 1
+
+# 语音模型（同构于 [[models]]，另加 role/voice/speech_rate/turn_detection）。
+[[voice.models]]
+# 模型路由名称，段内唯一；默认值：""（必须填写）。
+name = "volc-tts-seed20"
+# 引用的渠道名称；默认值：""（必须填写且指向已配置渠道）。
+channel = "volc-tts"
+# 上游模型标识；默认值：""（必须填写）。
+id = "seed-tts-2.0"
+# 语音角色；可选值：asr、tts、realtime；默认值："asr"。
+role = "tts"
+# 音色标识；role 为 tts/realtime 时必填；默认值：""。
+voice = "zh_female_shuangkuaisisi_uranus_bigtts"
+# 语速；可选范围：-50..=100；默认值：0。
+speech_rate = 20
+# 轮次检测；可选值：server_vad、smart_turn_v2、manual；默认值："server_vad"。
+turn_detection = "server_vad"
+
 [[providers]]
 # Provider 名称；可选值：非空且全局唯一字符串；默认值：""（必须填写）。
 name = "openai"
