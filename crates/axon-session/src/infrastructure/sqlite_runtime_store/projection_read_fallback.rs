@@ -156,7 +156,13 @@ pub(super) fn freshen_snapshot(
     let started = Instant::now();
     let path = store.event_log(session_id).path();
     if !axon_eventlog::index_is_fresh(&path) {
-        report(LogKind::Skipped, session_id, lag, started, "边车索引不可用");
+        report(
+            LogKind::Failed,
+            session_id,
+            lag,
+            started,
+            "边车索引不可用，本次按投影值返回",
+        );
         return projected;
     }
     match latest_usage_reading(&path) {
@@ -253,7 +259,13 @@ pub(super) fn freshen_metrics(
     let path = store.event_log(session_id).path();
     // 边车索引不可用时定向读会退化成整文件解帧，直接按投影值返回。
     if !axon_eventlog::index_is_fresh(&path) {
-        report(LogKind::Skipped, session_id, lag, started, "边车索引不可用");
+        report(
+            LogKind::Failed,
+            session_id,
+            lag,
+            started,
+            "边车索引不可用，本次按投影值返回",
+        );
         return projected;
     }
     match metrics_after_watermark(store, session_id, lag, projected.as_ref()) {
@@ -378,8 +390,6 @@ impl SqliteRuntimeStore {
 enum LogKind {
     /// 回源发生。
     Observed,
-    /// 索引不可用，本次按投影值返回。
-    Skipped,
     /// 回源失败或读不全，本次退回投影值。
     Failed,
 }
@@ -389,7 +399,6 @@ impl LogKind {
     const fn tag(self) -> &'static str {
         match self {
             Self::Observed => "完成",
-            Self::Skipped => "跳过",
             Self::Failed => "失败",
         }
     }
@@ -417,7 +426,7 @@ fn report(
     );
     match kind {
         LogKind::Failed => axon_logger::warning(&line),
-        LogKind::Observed | LogKind::Skipped => axon_logger::debug(&line),
+        LogKind::Observed => axon_logger::debug(&line),
     }
 }
 

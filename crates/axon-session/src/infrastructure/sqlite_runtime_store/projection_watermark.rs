@@ -264,6 +264,23 @@ pub(super) fn detect_log_rewrite(store: &SqliteRuntimeStore, session_id: &Daemon
     if i64::try_from(metadata.len()).ok() == Some(len) && log_mtime_ns(&metadata) == mtime {
         return false;
     }
+    /*
+     * stat 之后再看一次事件水位：另一进程的追加可能正好落在前面的 SELECT 与这次 stat
+     * 之间，那种长度变化是正常追加，不是日志被替换。
+     */
+    let still_current = store.connection().and_then(|connection| {
+        connection
+            .query_row(
+                "SELECT last_event_sequence FROM sessions WHERE session_id = ?1",
+                params![session_id.as_str()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(storage)
+    });
+    if !matches!(still_current, Ok(Some(value)) if value == event_tail) {
+        return false;
+    }
     let marked = store.connection().and_then(|connection| {
         connection
             .execute(
@@ -299,6 +316,35 @@ pub(super) fn log_mtime_ns(metadata: &std::fs::Metadata) -> i64 {
         .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|elapsed| i64::try_from(elapsed.as_nanos()).unwrap_or(i64::MAX))
         .unwrap_or(0)
+}
+
+/// 刷新日志身份的长度与修改时刻，但不改水位。
+///
+/// 供「重写了日志但序号集合不变」的路径调用（正文分级、修复重排）：这些重写会让
+/// 长度与修改时刻变化，不刷新的话启动对账会把它们当成日志被替换，白做一次整会话重建。
+pub(super) fn refresh_log_identity(store: &SqliteRuntimeStore, session_id: &DaemonSessionId) {
+    let path = store.event_log(session_id).path();
+    let Ok(metadata) = std::fs::metadata(&path) else {
+        return;
+    };
+    let len = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
+    let mtime_ns = log_mtime_ns(&metadata);
+    let written = store.connection().and_then(|connection| {
+        connection
+            .execute(
+                "UPDATE projection_log_identity SET log_len=?2, log_mtime_ns=?3 \
+                  WHERE session_id=?1 AND projected_tail >= 0",
+                params![session_id.as_str(), len, mtime_ns],
+            )
+            .map(|_| ())
+            .map_err(storage)
+    });
+    if let Err(error) = written {
+        report(&format!(
+            "日志身份刷新失败，下次启动可能多一次重建: session={} error={error}",
+            session_id.as_str()
+        ));
+    }
 }
 
 /// 读取水位；没有这一行（从未投影过）时返回 `None`。

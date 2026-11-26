@@ -31,6 +31,14 @@ mod projection_worker;
 #[path = "projection_rebuild.rs"]
 mod projection_rebuild;
 
+/// 刷投影身份：正文分级与修复重排共用。
+pub(super) fn refresh_projection_identity(
+    store: &SqliteRuntimeStore,
+    session_id: &DaemonSessionId,
+) {
+    projection_watermark::refresh_log_identity(store, session_id);
+}
+
 pub(super) fn log_error(error: axon_eventlog::EventLogError) -> RuntimeStoreError {
     RuntimeStoreError::Storage(error.to_string())
 }

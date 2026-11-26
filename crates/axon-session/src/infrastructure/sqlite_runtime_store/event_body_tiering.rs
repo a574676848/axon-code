@@ -175,6 +175,8 @@ impl SqliteRuntimeStore {
             ));
             return Ok(None);
         };
+        // 重写不改序号集合，投影仍然有效；只刷新身份，避免启动对账把它当成日志被替换。
+        super::event_log_repository::refresh_projection_identity(self, session_id);
         Ok(Some(EventBodyTieringReport {
             tiered_interactions: stats.tiered_interactions,
             tiered_frames: stats.tiered_frames,
