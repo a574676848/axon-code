@@ -4,6 +4,7 @@
 
 use std::collections::BTreeSet;
 use std::path::Path;
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
@@ -23,7 +24,15 @@ const MEMORY_SQLITE_WAL_INIT_BACKOFF_MS: u64 = 20;
 const MEMORY_SQLITE_SCHEMA_INIT_RETRIES: usize = 8;
 const MEMORY_SQLITE_SCHEMA_INIT_BACKOFF_MS: u64 = 150;
 /// 初始化 schema 与 WAL。
+///
+/// 同进程内先串行化：多个线程同时首次打开同一个库，本质是同一进程在自相争抢写锁；
+/// 串行后每个线程都在前一个提交之后进入，不会互相拖垮。跨进程竞争仍交给有界重试，
+/// 并且每次等待之后先确认对方是否已经建完——建完就直接复用，不再抢写锁。
 pub(super) fn initialize_schema(connection: &Connection) -> AxonResult<()> {
+    static SCHEMA_INIT_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = SCHEMA_INIT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut attempt = 0;
     loop {
         match initialize_schema_once(connection) {
@@ -38,9 +47,31 @@ pub(super) fn initialize_schema(connection: &Connection) -> AxonResult<()> {
                 thread::sleep(Duration::from_millis(
                     MEMORY_SQLITE_SCHEMA_INIT_BACKOFF_MS * attempt as u64,
                 ));
+                if schema_is_current(connection) {
+                    return Ok(());
+                }
             }
         }
     }
+}
+
+/// 判断 schema 是否已由别的连接建好。
+///
+/// 只在撞锁等待之后使用：此刻对方多半已经提交，读一眼 `user_version` 与必需列即可复用，
+/// 避免在 Windows 上反复抢写锁（那里的 `BEGIN IMMEDIATE` 撞锁有时走不到 busy_timeout
+/// 就直接返回 `database is locked`，重试再多也只是空转）。
+fn schema_is_current(connection: &Connection) -> bool {
+    let version_ready = connection
+        .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+        .is_ok_and(|version| version == MEMORY_SQLITE_SCHEMA_VERSION);
+    if !version_ready {
+        return false;
+    }
+    record_table_columns(connection).is_ok_and(|columns| {
+        REQUIRED_MEMORY_RECORD_COLUMNS
+            .iter()
+            .all(|column| columns.contains(*column))
+    })
 }
 
 /// 单次初始化尝试；撞锁重试由 [`initialize_schema`] 负责。
