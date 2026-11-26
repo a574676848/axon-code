@@ -117,6 +117,12 @@ pub struct VoiceSetupCommand {
     /// 轮次检测策略。
     #[arg(long, value_enum)]
     pub turn_detection: Option<VoiceTurnDetectionArg>,
+    /// 把 SOUL.md 渲染成语音版人格落盘，并让 realtime 模型引用它。
+    #[arg(long)]
+    pub persona_sync: bool,
+    /// 人格落盘路径，相对 Axon 主目录；默认 data/voice/persona.md。
+    #[arg(long)]
+    pub persona_file: Option<String>,
     /// 重置整个 `[voice]` 段为默认值。
     #[arg(long)]
     pub reset: bool,
@@ -141,5 +147,6 @@ impl VoiceSetupCommand {
             || self.speaker.is_some()
             || self.rate.is_some()
             || self.turn_detection.is_some()
+            || self.persona_sync
     }
 }

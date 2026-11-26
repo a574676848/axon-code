@@ -2,9 +2,11 @@
 
 use std::path::Path;
 
+use axon_config::voice::VOICE_ROLE_REALTIME;
 use axon_config::{
     AxonConfig, ConfigLoader, VoiceChannelConfig, VoiceConfig, VoiceModelConfig, to_toml_string,
 };
+use axon_persona::{SoulDocument, render_voice_instructions};
 use serde::Serialize;
 
 use super::bootstrap::SetupTransaction;
@@ -16,6 +18,7 @@ use crate::{OutputFormat, VoiceSetupCommand};
 pub(super) fn apply_voice_mutation(
     config: &mut AxonConfig,
     command: &VoiceSetupCommand,
+    axon_root: &Path,
 ) -> Result<Vec<String>, String> {
     let mut changed = Vec::new();
 
@@ -112,10 +115,72 @@ pub(super) fn apply_voice_mutation(
         changed.push(format!("voice.model.{name}"));
     }
 
+    if command.persona_sync {
+        changed.extend(sync_persona(
+            config,
+            command.persona_file.as_deref(),
+            axon_root,
+        )?);
+    }
+
     config
         .voice
         .validate()
         .map_err(|error| format!("语音配置校验失败：{error:?}"))?;
+    Ok(changed)
+}
+
+/// 人格文件的默认落点，相对 Axon 主目录。
+const DEFAULT_PERSONA_FILE: &str = "data/voice/persona.md";
+
+/// 把 `SOUL.md` 渲染成语音版人格并落盘，再让 realtime 模型引用它。
+///
+/// 没有 realtime 模型时只落文件并给出提示：人格先备好，等车道配好再挂。
+fn sync_persona(
+    config: &mut AxonConfig,
+    target: Option<&str>,
+    axon_root: &Path,
+) -> Result<Vec<String>, String> {
+    let soul_path = axon_root.join("SOUL.md");
+    let raw = std::fs::read_to_string(&soul_path)
+        .map_err(|error| format!("读取 SOUL.md 失败（{}）：{error}", soul_path.display()))?;
+    let soul = SoulDocument::parse(&raw).map_err(|error| format!("SOUL.md 解析失败：{error}"))?;
+    let instructions = render_voice_instructions(&soul.core);
+
+    let relative = target
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_PERSONA_FILE);
+    let output = if Path::new(relative).is_absolute() {
+        std::path::PathBuf::from(relative)
+    } else {
+        axon_root.join(relative)
+    };
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("创建人格目录失败（{}）：{error}", parent.display()))?;
+    }
+    std::fs::write(&output, &instructions)
+        .map_err(|error| format!("写人格文件失败（{}）：{error}", output.display()))?;
+
+    let mut changed = vec![format!("voice.persona={relative}")];
+    let mut mounted = false;
+    for model in config
+        .voice
+        .models
+        .iter_mut()
+        .filter(|model| model.role == VOICE_ROLE_REALTIME)
+    {
+        // 直填的 instructions 优先于文件，挂载时必须清掉，否则文件形同虚设。
+        model.instructions = String::new();
+        model.instructions_file = Some(relative.to_owned());
+        mounted = true;
+    }
+    if !mounted {
+        changed.push(format!(
+            "voice.persona 未挂载：没有 role = \"{VOICE_ROLE_REALTIME}\" 的模型，配好车道后再跑一次"
+        ));
+    }
     Ok(changed)
 }
 
@@ -136,8 +201,13 @@ pub(super) fn run_voice_setup(
     };
 
     let mut candidate = loaded.config.clone();
+    // 人格文件与配置同源：先解析一次 Axon 根，供 `--persona-sync` 复用。
+    let axon_root = match axon_config::runtime_axon_root_path(&path) {
+        Ok(root) => root,
+        Err(error) => return format_error_result(format, &format!("{error:?}"), Vec::new()),
+    };
     let changed = if command.has_mutation() {
-        match apply_voice_mutation(&mut candidate, command) {
+        match apply_voice_mutation(&mut candidate, command, &axon_root) {
             Ok(changed) => changed,
             Err(error) => return format_error_result(format, &error, Vec::new()),
         }
@@ -298,7 +368,8 @@ mod tests {
             "smart-turn",
         ]);
         let mut config = AxonConfig::default();
-        let changed = apply_voice_mutation(&mut config, &command).unwrap();
+        let changed =
+            apply_voice_mutation(&mut config, &command, std::path::Path::new(".")).unwrap();
 
         assert!(config.voice.is_enabled());
         assert_eq!(config.voice.lane(), "cascade");
@@ -329,7 +400,7 @@ mod tests {
             "tts",
         ]);
         let mut config = AxonConfig::default();
-        assert!(apply_voice_mutation(&mut config, &command).is_err());
+        assert!(apply_voice_mutation(&mut config, &command, std::path::Path::new(".")).is_err());
     }
 
     #[test]
@@ -346,7 +417,7 @@ mod tests {
         let config = AxonConfig::default();
         let mut candidate = config.clone();
         assert!(
-            apply_voice_mutation(&mut candidate, &command)
+            apply_voice_mutation(&mut candidate, &command, std::path::Path::new("."))
                 .unwrap()
                 .is_empty()
         );

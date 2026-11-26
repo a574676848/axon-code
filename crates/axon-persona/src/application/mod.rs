@@ -2,9 +2,11 @@
 
 pub mod render;
 pub mod style_candidate;
+pub mod voice_instructions;
 
 pub use render::{
     exceeds_hard_limit, exceeds_hard_limit_len, exceeds_soft_limit, exceeds_soft_limit_len,
     render_dynamic, render_stable,
 };
 pub use style_candidate::{StyleCandidateError, validate_style_candidate};
+pub use voice_instructions::{VOICE_INSTRUCTIONS_MAX_BYTES, render_voice_instructions};

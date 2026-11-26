@@ -34,6 +34,7 @@ const EMPTY_MODEL: VoiceModelDto = {
   speechRate: 0,
   turnDetection: 'server_vad',
   instructions: '',
+  instructionsFile: null,
 };
 
 /** 语音设置页：整段读取、逐项编辑、一次落盘。 */

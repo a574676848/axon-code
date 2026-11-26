@@ -74,6 +74,11 @@ pub(crate) fn run_setup(
         Ok(p) => p,
         Err(e) => return format_error_result(out_format, e, Vec::new()),
     };
+    // TUI 语音页与 `--persona-sync` 共用同一份 Axon 根，一次解析、全程复用。
+    let axon_root = match axon_config::runtime_axon_root_path(&path) {
+        Ok(root) => root,
+        Err(e) => return format_error_result(out_format, &format!("{e:?}"), Vec::new()),
+    };
     let env_path = env_path_for_config(&path);
 
     let agent_config = match load_agent_setup_config(command.agent_config.as_deref()) {
@@ -123,7 +128,11 @@ pub(crate) fn run_setup(
         };
         // TUI 语音页收集的参数并入同一份候选配置，走同一条确认与事务链路。
         if let Some(voice) = &interactive_input.voice {
-            match setup_voice::apply_voice_mutation(&mut plan_result.candidate_config, voice) {
+            match setup_voice::apply_voice_mutation(
+                &mut plan_result.candidate_config,
+                voice,
+                &axon_root,
+            ) {
                 Ok(changes) => plan_result.changed_summary.extend(changes),
                 Err(e) => {
                     transaction.cleanup();

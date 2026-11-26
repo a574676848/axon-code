@@ -14,8 +14,8 @@ pub mod application;
 pub mod constants;
 pub mod domain;
 pub use application::{
-    exceeds_hard_limit, exceeds_hard_limit_len, exceeds_soft_limit, exceeds_soft_limit_len,
-    render_dynamic, render_stable,
+    VOICE_INSTRUCTIONS_MAX_BYTES, exceeds_hard_limit, exceeds_hard_limit_len, exceeds_soft_limit,
+    exceeds_soft_limit_len, render_dynamic, render_stable, render_voice_instructions,
 };
 pub mod infrastructure;
 
