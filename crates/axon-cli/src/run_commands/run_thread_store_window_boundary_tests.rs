@@ -257,6 +257,82 @@ fn boundary_beyond_every_turn_falls_back_to_the_latest_turn() {
     );
 }
 
+/// 未定序残留轮必须补号并收口，否则换窗边界永远比真实轮次差一拍。
+///
+/// 反向判据：去掉 `number_unnumbered_turns` 的调用，这条用例拿到的仍是 seq=0。
+#[test]
+fn unnumbered_residual_turns_get_sequenced_and_settled() {
+    let root = temp_root("unnumbered-turns");
+    std::fs::create_dir_all(&root).unwrap();
+    let service = ThreadService::new(JsonlThreadEventStore);
+    let thread_id = "thread-unnumbered";
+    let record = session_record("问题", "回答", 400);
+    service
+        .start_empty_thread(
+            &root,
+            StartEmptyThreadCommand {
+                thread_id: thread_id.to_owned(),
+                session_root_id: thread_id.to_owned(),
+                parent_thread_id: None,
+                forked_from_thread_id: None,
+                source: ThreadSource::CliRun,
+                ephemeral: false,
+                settings: settings_from_record(&record),
+                created_at_ms: 400,
+            },
+        )
+        .unwrap();
+
+    let first = Turn {
+        turn_id: format!("{thread_id}-turn-assistant:first"),
+        ..turn_from_record(&record, 0).unwrap()
+    };
+    service
+        .append_turn_at_tail(
+            &root,
+            AppendTurnCommand {
+                thread_id: thread_id.to_owned(),
+                recorded_at_ms: 500,
+                turn: first,
+            },
+        )
+        .unwrap();
+
+    // 残留：起跑写了但没收口，序号仍是 0，与首轮撞号。
+    let orphan = Turn {
+        turn_id: format!("{thread_id}-turn-assistant:orphan"),
+        status: TurnStatus::Active,
+        ..turn_from_record(&record, 0).unwrap()
+    };
+    service
+        .append_turn_at_tail(
+            &root,
+            AppendTurnCommand {
+                thread_id: thread_id.to_owned(),
+                recorded_at_ms: 600,
+                turn: orphan,
+            },
+        )
+        .unwrap();
+
+    let detail = service.read_thread(&root, thread_id).unwrap();
+    let numbered = number_unnumbered_turns(&service, &root, thread_id, &detail).unwrap();
+    assert_eq!(numbered, 1, "只给首轮之外的未定序轮补号");
+
+    let after = service.read_thread(&root, thread_id).unwrap();
+    let settled = after
+        .turns
+        .iter()
+        .find(|turn| turn.turn_id.ends_with("assistant:orphan"))
+        .expect("残留轮仍在");
+    assert_eq!(settled.sequence, 1, "补号从 max+1 开始");
+    assert_eq!(
+        settled.status,
+        TurnStatus::Interrupted,
+        "停在 Active 的残留必须收成 Interrupted"
+    );
+}
+
 /// 起跑占位轮（序号恒为 0）不参与轮序计算：换窗边界不会因此退化成 0。
 ///
 /// 这是 `next_sequence` 自身的口径；接线层的反向判据在

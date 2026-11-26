@@ -22,6 +22,9 @@ pub(super) use model_history::thread_model_history_json;
 #[path = "run_thread_mirror_turn.rs"]
 mod mirror_turn;
 pub(super) use mirror_turn::mirror_existing_turn;
+#[path = "run_thread_resume_repair.rs"]
+mod resume_repair;
+use resume_repair::number_unnumbered_turns;
 
 /// 恢复会话所需的事实：全部来自 thread 文件的 settings 与最近一轮 turn metadata。
 ///
@@ -458,9 +461,23 @@ fn prepare_run_session_inner(
     // 崩溃遗留的 active turn 必须在装配模型历史之前收口：否则第一次 provider 请求会带着
     // 「有 tool_calls 却没有 tool 结果」的悬空历史，必然被拒一次。
     repair_open_turn_before_restore(&service, &root, run_session_id)?;
-    let detail = service
+    let mut detail = service
         .read_thread(&root, run_session_id)
         .map_err(|error| format!("会话历史读取失败：{run_session_id}，{error}"))?;
+    match number_unnumbered_turns(&service, &root, run_session_id, &detail) {
+        Ok(0) => {}
+        Ok(numbered) => {
+            axon_logger::warning(&format!(
+                "thread {run_session_id} 有 {numbered} 条未定序轮次已补号并收口；重读历史后再装配"
+            ));
+            detail = service
+                .read_thread(&root, run_session_id)
+                .map_err(|error| format!("补号后重读会话失败：{run_session_id}，{error}"))?;
+        }
+        Err(error) => axon_logger::warning(&format!(
+            "thread {run_session_id} 未定序轮次补号失败，按现有轮次继续恢复：{error}"
+        )),
+    }
     if detail.compacted_history.is_none()
         && let Some(window_number) =
             window_number_exceeds_first(config_path, &identities.session_id)?
