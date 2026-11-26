@@ -18,9 +18,11 @@ Axon 的语音把「说话」当作输入方式，把「朗读」当作输出方
 
 **语音界面入口已全部开放**：桌面端的麦克风按钮、录音条、自动朗读开关、消息朗读按钮、设置里的语音输入设备与语音播报、人设页的音色选择都正常显示。
 
-**端到端 realtime 车道已接入**：daemon 用一条 WebSocket 直连阿里百炼 realtime 服务，上行 16 kHz PCM，下行 24 kHz PCM 在 daemon 内降到 16 kHz 后交给桌面端播放。配好 `AXON_VOICE_REALTIME_API_KEY`（或 `DASHSCOPE_API_KEY`）即自动启用；缺凭据时如实回落，不假装就绪。
+**端到端 realtime 车道已接入**：daemon 用一条 WebSocket 直连阿里百炼 realtime 服务，上行 16 kHz PCM，下行 24 kHz PCM 在 daemon 内降到 16 kHz 后交给桌面端播放。端点与模型来自 `[voice]` 段里 `role = "realtime"` 的模型；没有配置时按进程环境兜底（`AXON_VOICE_REALTIME_API_KEY` 或 `DASHSCOPE_API_KEY`），仍缺凭据就如实回落，不假装就绪。
 
-**级联车道尚未接入**：没有 realtime 凭据时，语音会话一建立即收到 `provider_unavailable` 并关闭连接；三个合成接口（`/tts`、`/cue`、`/preview`）统一返回 409 `provider_unavailable`，不产出音频；音色清单与运行态读数照常可读。
+**合成已接入火山方舟 Agent Plan**：daemon 直连 `wss://openspeech.bytedance.com/api/v3/plan/tts/unidirectional/stream`，文本进、WAV 出；`/tts`、`/cue`、`/preview` 三个接口按裸 WAV 下发，桌面端沿用既有播放模型。端点、资源标识与音色来自 `[voice]` 段里 `role = "tts"` 的模型，凭据按渠道的 `api_key_env` 解析（方舟填 `ARK_KEY`）。
+
+**流式识别尚未接入**：`/api/v1/voice` 建会话仍依赖端到端车道，没有它时如实回 `provider_unavailable` 并关闭连接；级联识别（方舟 `bigmodel_nostream`）留待后续增量，配置面已预留 `role = "asr"` 的模型。
 
 ---
 
@@ -79,9 +81,11 @@ Axon 的语音把「说话」当作输入方式，把「朗读」当作输出方
 
 ## 6. 配置面
 
-`[voice]` 段与桌面设置页负责用户层配置，字段与校验见[配置参考指南](./configuration.md)。
+`[voice]` 段是唯一真值源：daemon 启动时把它映射成运行参数注入网关，会话与合成两条能力都从这一份快照读取；桌面设置页与 `axon setup voice` 改的是同一段。字段与校验见[配置参考指南](./configuration.md)。
 
-daemon 侧的 realtime 车道由环境变量驱动，缺凭据时整条车道不启用：
+角色分工：`role = "realtime"` 的模型决定会话车道，`role = "tts"` 的模型决定合成渠道，`role = "asr"` 预留给后续的流式识别。缺配置或凭据时该能力如实报不可用，不拿空值去连。
+
+没有任何 `[voice]` 配置时，按环境变量兜底（仅用于开发机与排障）：
 
 | 变量 | 作用 | 默认值 |
 | --- | --- | --- |
@@ -96,6 +100,11 @@ daemon 侧的 realtime 车道由环境变量驱动，缺凭据时整条车道不
 | `AXON_VOICE_REALTIME_SILENCE_MS` | VAD 静音判定 `200..=6000` | `800` |
 | `AXON_VOICE_REALTIME_VAD_THRESHOLD` | VAD 阈值 `-1..=1` | `0.5` |
 | `AXON_VOICE_REALTIME_TURN_DETECTION` | 轮次检测策略：`manual` 为按键说话，其余为服务端 VAD | `server_vad` |
+| `AXON_VOICE_TTS_API_KEY` | 合成凭据；缺省回退 `ARK_KEY` | 无 |
+| `AXON_VOICE_TTS_URL` | 合成端点 | 方舟 Agent Plan 单向流式地址 |
+| `AXON_VOICE_TTS_RESOURCE_ID` | 合成资源标识 | `seed-tts-2.0` |
+| `AXON_VOICE_TTS_SPEAKER` | 合成音色 | `zh_female_shuangkuaisisi_uranus_bigtts` |
+| `AXON_VOICE_TTS_SPEECH_RATE` | 合成语速 `-50..=100`，越界忽略 | `0`（服务端默认） |
 
 采样率、帧长与超时仍是协议常量，不开放给用户调整；`AXON_RUNTIME_ROOT` 不影响语音。
 

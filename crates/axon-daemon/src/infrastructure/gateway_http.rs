@@ -39,7 +39,11 @@ mod gateway_voice_turn;
 mod gateway_voice_turn_stream;
 #[path = "gateway_voice_worker.rs"]
 mod gateway_voice_worker;
-
+#[path = "voice_tts_volc.rs"]
+mod voice_tts_volc;
+pub use gateway_voice_provider::{Lane, RealtimeEndpoint, VoiceRuntime};
+pub use gateway_voice_realtime_protocol::{SessionConfig, TurnDetection};
+pub use voice_tts_volc::VolcTtsConfig;
 pub use super::gateway_http_handler::{GatewayHttpResponse, GatewayHttpRouteHandler};
 pub use gateway_voice::VoiceTimeouts;
 
@@ -118,6 +122,8 @@ pub(super) struct GatewayHttpState {
     pub(super) voice_metrics: Arc<gateway_voice_metrics::VoiceMetrics>,
     /// 语音会话超时口径。
     pub(super) voice_timeouts: gateway_voice::VoiceTimeouts,
+    /// 语音运行参数快照：由 CLI 从 `[voice]` 段映射注入，缺省走环境变量兜底。
+    pub(super) voice_runtime: Arc<gateway_voice_provider::VoiceRuntime>,
     /// 测试注入的宿主传输工厂；生产恒为 `None`。
     #[cfg(test)]
     pub(super) voice_host: Option<gateway_voice_worker::HostLauncher>,
@@ -156,6 +162,7 @@ pub struct HttpGatewayAdapter {
     route_handler: Option<Arc<dyn GatewayHttpRouteHandler>>,
     log_sink: Option<Arc<dyn LogSink>>,
     voice_timeouts: gateway_voice::VoiceTimeouts,
+    voice_runtime: gateway_voice_provider::VoiceRuntime,
     /// 测试注入的宿主传输工厂；生产恒为 `None`。
     #[cfg(test)]
     voice_host: Option<gateway_voice_worker::HostLauncher>,
@@ -185,6 +192,7 @@ impl HttpGatewayAdapter {
             route_handler: None,
             log_sink: None,
             voice_timeouts: gateway_voice::VoiceTimeouts::production(),
+            voice_runtime: gateway_voice_provider::VoiceRuntime::from_env(),
             #[cfg(test)]
             voice_host: None,
         }
@@ -208,6 +216,16 @@ impl HttpGatewayAdapter {
     #[must_use]
     pub fn with_voice_timeouts(mut self, timeouts: VoiceTimeouts) -> Self {
         self.voice_timeouts = timeouts;
+        self
+    }
+
+    /// 注入语音运行参数（渠道、模型、音色与凭据的唯一来源）。
+    #[must_use]
+    pub fn with_voice_runtime(
+        mut self,
+        runtime: gateway_voice_provider::VoiceRuntime,
+    ) -> Self {
+        self.voice_runtime = runtime;
         self
     }
 
@@ -275,6 +293,7 @@ impl GatewayAdapter for HttpGatewayAdapter {
             readings: Arc::new(Semaphore::new(READING_CONCURRENCY)),
             voice_metrics: Arc::new(gateway_voice_metrics::VoiceMetrics::default()),
             voice_timeouts: self.voice_timeouts,
+            voice_runtime: Arc::new(self.voice_runtime.clone()),
             #[cfg(test)]
             voice_host: self.voice_host.clone(),
         });

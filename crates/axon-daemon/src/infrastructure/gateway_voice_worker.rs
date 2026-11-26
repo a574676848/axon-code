@@ -370,8 +370,13 @@ impl super::GatewayHttpState {
             spawn_worker(session_id, out, warmup, metrics)
         }
         #[cfg(not(test))]
-        match super::gateway_voice_provider::lane() {
-            Lane::Realtime => super::gateway_voice_realtime::spawn_realtime(out, warmup, metrics),
+        match self.voice_runtime.lane() {
+            Lane::Realtime => super::gateway_voice_realtime::spawn_realtime(
+                &self.voice_runtime,
+                out,
+                warmup,
+                metrics,
+            ),
             Lane::Cascade => spawn_worker(session_id, out, warmup, metrics),
         }
     }

@@ -144,6 +144,7 @@ mod upgrade_commands;
 mod usage_statistics;
 pub mod user_question;
 mod workbench_http_adapter;
+mod voice_runtime_config;
 
 use std::{
     fmt::Write as _,

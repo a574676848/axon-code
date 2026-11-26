@@ -61,8 +61,8 @@ name = "volc-tts"
 enabled = true
 # 渠道协议；可选值：dashscope、volcengine-ark-multimodal 等 provider 协议族；默认值："volcengine-ark-multimodal"。
 protocol = "volcengine-ark-multimodal"
-# API 基址；默认值：按协议推导。
-base_url = "wss://openspeech.bytedance.com"
+# API 基址；合成走完整端点（Agent Plan 单向流式通道），只填主机名连不上。
+base_url = "wss://openspeech.bytedance.com/api/v3/plan/tts/unidirectional/stream"
 # API key 环境变量名；密钥不写配置文件，只放 .env；默认值：无。
 api_key_env = "ARK_KEY"
 # 底层传输；可选值：http、websocket；默认值："websocket"。
@@ -87,6 +87,41 @@ voice = "zh_female_shuangkuaisisi_uranus_bigtts"
 # 语速；可选范围：-50..=100；默认值：0。
 speech_rate = 20
 # 轮次检测；可选值：server_vad、smart_turn_v2、manual；默认值："server_vad"。
+turn_detection = "server_vad"
+
+# 识别渠道：与合成分开配置——两者端点路径不同，不能共用一个 base_url。
+[[voice.channels]]
+# 渠道名称，段内唯一，供 voice.models[].channel 引用；默认值：""（必须填写）。
+name = "volc-asr"
+# 是否参与语音渠道路由；可选值：true、false；默认值：true。
+enabled = true
+# 渠道协议；默认值："volcengine-ark-multimodal"。
+protocol = "volcengine-ark-multimodal"
+# API 基址；识别走完整端点（Agent Plan 流式识别）。
+base_url = "wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_nostream"
+# API key 环境变量名；方舟的语音与视觉共用同一把 key。
+api_key_env = "ARK_KEY"
+# 底层传输；默认值："websocket"。
+wire_transport = "websocket"
+# 渠道优先级；默认值：0。
+priority = 100
+# 同优先级权重；默认值：1。
+weight = 1
+
+[[voice.models]]
+# 模型路由名称，段内唯一；默认值：""（必须填写）。
+name = "volc-asr-seed20"
+# 引用的渠道名称；默认值：""（必须填写且指向已配置渠道）。
+channel = "volc-asr"
+# 上游资源标识；识别用 volc.seedasr.sauc.duration（模型名 doubao-seed-asr-2.0 由实现内置）。
+id = "volc.seedasr.sauc.duration"
+# 语音角色；可选值：asr、tts、realtime；默认值："asr"。
+role = "asr"
+# 音色标识；role 为 asr 时留空。
+voice = ""
+# 语速；role 为 asr 时不用。
+speech_rate = 0
+# 轮次检测；识别车道不用。
 turn_detection = "server_vad"
 
 [[providers]]

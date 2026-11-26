@@ -11,7 +11,7 @@
 
 use super::gateway_voice_metrics::VoiceMetrics;
 use super::gateway_voice_out_frames::{error_json, state_json};
-use super::gateway_voice_provider::{Lane, RealtimeEndpoint, realtime_endpoint};
+use super::gateway_voice_provider::{Lane, RealtimeEndpoint, VoiceRuntime};
 use super::gateway_voice_realtime_protocol::{
     APPEND_CHUNK_BYTES, CANCEL_JSON, CLEAR_JSON, COMMIT_JSON, FINISH_JSON, Resampler24kTo16k,
     ServerEvent, audio_append_json, merge_transcript, parse_server_event, playback_chunks,
@@ -45,12 +45,15 @@ const STAGE_WORKER: &str = "worker";
 /// 返回 `(错误帧, 是否已开始会话)`。凭据缺失时如实报 `provider_unavailable`。
 #[cfg_attr(test, allow(dead_code))]
 pub(super) fn spawn_realtime(
+    runtime: &VoiceRuntime,
     out: tokio_mpsc::UnboundedSender<VoiceOut>,
     warmup: Duration,
     metrics: Arc<VoiceMetrics>,
 ) -> Result<Arc<VoiceWorker>, (String, bool)> {
-    let endpoint = realtime_endpoint().map_err(|code| (error_json(code, STAGE_ARMING), false))?;
-    Ok(spawn_realtime_with(endpoint, out, warmup, metrics))
+    let Some(endpoint) = runtime.realtime() else {
+        return Err((error_json("provider_unavailable", STAGE_ARMING), false));
+    };
+    Ok(spawn_realtime_with(endpoint.clone(), out, warmup, metrics))
 }
 
 /// 用给定端点拉起会话；测试直接注入本地端点，不依赖进程环境变量。

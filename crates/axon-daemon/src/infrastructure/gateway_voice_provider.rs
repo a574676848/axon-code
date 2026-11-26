@@ -5,12 +5,15 @@
 //! 实现了 [`HostTransport`] 的传输，并给出预热要请求的族与模型标识，
 //! daemon 其余模块不需要改动。
 //!
-//! 端到端 realtime 是另一条车道：它不需要预热的族与模型，而是一个 WS 连接
-//! 直连百炼，配置在这里统一读取。两条车道由 [`lane`] 裁决，缺凭据时如实回落
-//! 到级联并报「提供方不可用」，不假装就绪。
+//! 运行参数由 [`VoiceRuntime`] 承载：用户层 `[voice]` 段经 CLI 映射后注入，
+//! 未注入时按进程环境兜底。两条车道都由这一份快照裁决，运行期不再反复读
+//! 环境变量，配置改动只在下次启动生效——行为可预期优先于热更新。
 
 use super::gateway_voice_realtime_protocol::{SessionConfig, TurnDetection};
 use super::gateway_voice_worker::BoxedTransport;
+use super::voice_tts_volc::{
+    DEFAULT_TTS_ENDPOINT, DEFAULT_TTS_RESOURCE_ID, DEFAULT_TTS_SPEAKER, VolcTtsConfig,
+};
 
 /// 一次会话的提供方通道：传输、预热请求的族与模型标识。
 pub(super) struct ProviderSession {
@@ -22,19 +25,21 @@ pub(super) struct ProviderSession {
     pub(super) model: String,
 }
 
-/// 打开一次会话的提供方通道。
+/// 打开一次级联会话的提供方通道。
 ///
 /// # Errors
 ///
-/// 返回对外错误码。当前没有配置任何级联云端提供方，恒为 `provider_unavailable`。
+/// 返回对外错误码。级联车道的流式识别尚未接入，恒为 `provider_unavailable`；
+/// 合成与 realtime 两条路径分别由 [`VoiceRuntime::tts`] 与
+/// [`VoiceRuntime::realtime`] 承载，不经过这里。
 pub(super) fn open() -> Result<ProviderSession, &'static str> {
     Err("provider_unavailable")
 }
 
 /// 语音车道。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Lane {
-    /// 级联：ASR → 文本回合 → TTS。尚未接入云端提供方。
+pub enum Lane {
+    /// 级联：ASR → 文本回合 → TTS。尚未接入云端流式识别。
     Cascade,
     /// 端到端 realtime：一条 WS 连接完成识别、生成与合成。
     Realtime,
@@ -42,39 +47,111 @@ pub(super) enum Lane {
 
 /// realtime 车道的连接参数与会话配置。
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct RealtimeEndpoint {
+pub struct RealtimeEndpoint {
     /// 完整 WS 地址，已带 `model` 查询参数。
-    pub(super) url: String,
+    pub url: String,
     /// `Authorization: Bearer` 的凭据。
-    pub(super) api_key: String,
+    pub api_key: String,
     /// 上报给运行态与 `ready` 帧的模型标识。
-    pub(super) model: String,
+    pub model: String,
     /// 会话配置。
-    pub(super) session: SessionConfig,
+    pub session: SessionConfig,
 }
 
-/// 运行车道：realtime 配置齐全即走 realtime，否则如实回落到级联。
-#[cfg_attr(test, allow(dead_code))]
-pub(super) fn lane() -> Lane {
-    if realtime_endpoint().is_ok() {
-        Lane::Realtime
-    } else {
-        Lane::Cascade
+impl RealtimeEndpoint {
+    /// 用用户配置里的最小字段构造。
+    ///
+    /// 提示词走产品默认，语速留给服务端：`[voice]` 段的语速是合成语义
+    /// （-50..=100），与 realtime 的倍率语义（0.5..=2.0）不同，不能互相搬运。
+    #[must_use]
+    pub fn from_config(
+        base_url: &str,
+        api_key: String,
+        model: String,
+        voice: String,
+        language: &str,
+        turn_detection: &str,
+    ) -> Self {
+        let url = with_model_query(base_url, &model);
+        Self {
+            url,
+            api_key,
+            model,
+            session: SessionConfig {
+                voice,
+                instructions: DEFAULT_REALTIME_INSTRUCTIONS.to_owned(),
+                speech_rate: None,
+                language: language.to_owned(),
+                turn_detection: TurnDetection::from_code(turn_detection),
+                max_history_turns: None,
+            },
+        }
+    }
+}
+
+/// 语音运行参数快照：一次装配、全会话只读。
+#[derive(Debug, Clone, PartialEq)]
+pub struct VoiceRuntime {
+    realtime: Option<RealtimeEndpoint>,
+    tts: Option<VolcTtsConfig>,
+}
+
+impl VoiceRuntime {
+    /// 按进程环境兜底装配。
+    ///
+    /// 用户层 `[voice]` 段未注入时走这条路径：凭据齐全才认为车道可用，
+    /// 缺凭据如实返回空，不拿空串去连。
+    #[must_use]
+    pub fn from_env() -> Self {
+        Self {
+            realtime: realtime_from_env(),
+            tts: tts_from_env(),
+        }
+    }
+
+    /// 用已解析的部件装配。
+    #[must_use]
+    pub fn new(realtime: Option<RealtimeEndpoint>, tts: Option<VolcTtsConfig>) -> Self {
+        Self { realtime, tts }
+    }
+
+    /// realtime 车道参数；缺凭据时为 `None`。
+    #[must_use]
+    pub fn realtime(&self) -> Option<&RealtimeEndpoint> {
+        self.realtime.as_ref()
+    }
+
+    /// 合成渠道参数；缺凭据时为 `None`。
+    #[must_use]
+    pub fn tts(&self) -> Option<&VolcTtsConfig> {
+        self.tts.as_ref()
+    }
+
+    /// 运行车道：realtime 配置齐全即走 realtime，否则如实回落到级联。
+    #[must_use]
+    pub fn lane(&self) -> Lane {
+        if self.realtime.is_some() {
+            Lane::Realtime
+        } else {
+            Lane::Cascade
+        }
+    }
+
+    /// realtime 车道的模型标识；不可用时为空。
+    #[must_use]
+    pub fn realtime_model(&self) -> Option<String> {
+        self.realtime
+            .as_ref()
+            .map(|endpoint| endpoint.model.clone())
     }
 }
 
 /// 读取 realtime 配置。
-///
-/// # Errors
-///
-/// 缺少 API key 时返回 `provider_unavailable`：宁可报不可用，也不拿空凭据去连。
-pub(super) fn realtime_endpoint() -> Result<RealtimeEndpoint, &'static str> {
-    let Some(api_key) = first_env(&[ENV_REALTIME_API_KEY, ENV_DASHSCOPE_API_KEY]) else {
-        return Err("provider_unavailable");
-    };
+fn realtime_from_env() -> Option<RealtimeEndpoint> {
+    let api_key = first_env(&[ENV_REALTIME_API_KEY, ENV_DASHSCOPE_API_KEY])?;
     let model = env_or(ENV_REALTIME_MODEL, DEFAULT_REALTIME_MODEL);
     let base = env_or(ENV_REALTIME_URL, DEFAULT_REALTIME_BASE_URL);
-    Ok(RealtimeEndpoint {
+    Some(RealtimeEndpoint {
         url: with_model_query(&base, &model),
         api_key,
         model,
@@ -101,10 +178,19 @@ pub(super) fn realtime_endpoint() -> Result<RealtimeEndpoint, &'static str> {
     })
 }
 
-/// realtime 车道的模型标识；不可用时为空。
-#[cfg_attr(test, allow(dead_code))]
-pub(super) fn realtime_model() -> Option<String> {
-    realtime_endpoint().ok().map(|endpoint| endpoint.model)
+/// 读取合成渠道参数：语音专用变量优先，回退到方舟通用凭据。
+fn tts_from_env() -> Option<VolcTtsConfig> {
+    // 方舟的 Agent Plan 用同一把 ARK 凭据签语音，这里按「专用 → 通用」顺序取。
+    let api_key = first_env(&[ENV_TTS_API_KEY, ENV_ARK_KEY, ENV_VOLC_API_KEY])?;
+    Some(VolcTtsConfig {
+        endpoint: env_or(ENV_TTS_URL, DEFAULT_TTS_ENDPOINT),
+        api_key,
+        resource_id: env_or(ENV_TTS_RESOURCE_ID, DEFAULT_TTS_RESOURCE_ID),
+        speaker: env_or(ENV_TTS_SPEAKER, DEFAULT_TTS_SPEAKER),
+        speech_rate: env_number::<i32>(ENV_TTS_SPEECH_RATE)
+            .filter(|rate| (-50..=100).contains(rate))
+            .unwrap_or(0),
+    })
 }
 
 /// 默认端点：百炼北京区 realtime 服务。
@@ -143,6 +229,21 @@ const ENV_REALTIME_VAD_THRESHOLD: &str = "AXON_VOICE_REALTIME_VAD_THRESHOLD";
 /// 轮次检测策略覆盖：`manual` 为按键说话，缺省走服务端 VAD。
 const ENV_REALTIME_TURN_DETECTION: &str = "AXON_VOICE_REALTIME_TURN_DETECTION";
 
+/// 合成专用凭据变量名。
+const ENV_TTS_API_KEY: &str = "AXON_VOICE_TTS_API_KEY";
+/// 方舟 Agent Plan 通用凭据：语音与时序模型共用同一把。
+const ENV_ARK_KEY: &str = "ARK_KEY";
+/// 火山引擎通用凭据。
+const ENV_VOLC_API_KEY: &str = "VOLC_API_KEY";
+/// 合成端点覆盖。
+const ENV_TTS_URL: &str = "AXON_VOICE_TTS_URL";
+/// 合成资源标识覆盖。
+const ENV_TTS_RESOURCE_ID: &str = "AXON_VOICE_TTS_RESOURCE_ID";
+/// 合成音色覆盖。
+const ENV_TTS_SPEAKER: &str = "AXON_VOICE_TTS_SPEAKER";
+/// 合成语速覆盖。
+const ENV_TTS_SPEECH_RATE: &str = "AXON_VOICE_TTS_SPEECH_RATE";
+
 fn env_or(name: &str, fallback: &str) -> String {
     std::env::var(name)
         .ok()
@@ -173,4 +274,53 @@ fn with_model_query(base: &str, model: &str) -> String {
     }
     let separator = if base.contains('?') { '&' } else { '?' };
     format!("{base}{separator}model={model}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Lane, VoiceRuntime, with_model_query};
+    use super::super::voice_tts_volc::VolcTtsConfig;
+
+    fn tts_config() -> VolcTtsConfig {
+        VolcTtsConfig {
+            endpoint: "wss://example.invalid/tts".to_owned(),
+            api_key: "key".to_owned(),
+            resource_id: "seed-tts-2.0".to_owned(),
+            speaker: "speaker".to_owned(),
+            speech_rate: 0,
+        }
+    }
+
+    #[test]
+    fn runtime_without_realtime_falls_back_to_cascade() {
+        let runtime = VoiceRuntime::new(None, Some(tts_config()));
+        assert_eq!(runtime.lane(), Lane::Cascade);
+        assert!(runtime.realtime().is_none());
+        assert!(runtime.tts().is_some(), "合成与 realtime 相互独立");
+        assert!(runtime.realtime_model().is_none());
+    }
+
+    #[test]
+    fn runtime_without_tts_still_reports_its_lane() {
+        let runtime = VoiceRuntime::new(None, None);
+        assert_eq!(runtime.lane(), Lane::Cascade);
+        assert!(runtime.tts().is_none(), "缺凭据必须如实为空");
+    }
+
+    #[test]
+    fn model_query_is_appended_once() {
+        assert_eq!(
+            with_model_query("wss://host/path", "m1"),
+            "wss://host/path?model=m1"
+        );
+        assert_eq!(
+            with_model_query("wss://host/path?x=1", "m1"),
+            "wss://host/path?x=1&model=m1"
+        );
+        assert_eq!(
+            with_model_query("wss://host/path?model=fixed", "m1"),
+            "wss://host/path?model=fixed",
+            "端点自带 model 时不再拼第二个"
+        );
+    }
 }

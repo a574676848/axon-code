@@ -192,8 +192,10 @@ mod tests {
 
     #[test]
     fn dto_roundtrip_never_carries_api_key_plaintext() {
-        let mut config = VoiceConfig::default();
-        config.enabled = true;
+        let mut config = VoiceConfig {
+            enabled: true,
+            ..VoiceConfig::default()
+        };
         config.channels.push(VoiceChannelConfig {
             name: "volc-tts".to_owned(),
             api_key: Some("secret-value".to_owned()),

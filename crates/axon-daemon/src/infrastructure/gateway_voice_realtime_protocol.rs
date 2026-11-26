@@ -24,7 +24,7 @@ pub(super) const DEFAULT_SILENCE_MS: u32 = 800;
 
 /// 轮次检测策略。
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) enum TurnDetection {
+pub enum TurnDetection {
     /// 服务端 VAD 自动断句。
     ServerVad {
         /// 语音起始阈值，取值 -1..=1。
@@ -45,21 +45,34 @@ impl Default for TurnDetection {
     }
 }
 
+impl TurnDetection {
+    /// 按配置码构造：`manual` 为按键说话，其余一律走服务端 VAD 的缺省阈值。
+    ///
+    /// 配置层只懂「策略名」，阈值与静音时长属于协议细节，在这里收口。
+    #[must_use]
+    pub fn from_code(code: &str) -> Self {
+        match code {
+            "manual" => Self::Manual,
+            _ => Self::default(),
+        }
+    }
+}
+
 /// 一次 realtime 会话的配置；字段与 `session.update` 一一对应。
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct SessionConfig {
+pub struct SessionConfig {
     /// 音色标识；协议规定只有会话首个 `session.update` 生效。
-    pub(super) voice: String,
+    pub voice: String,
     /// 系统提示词。
-    pub(super) instructions: String,
+    pub instructions: String,
     /// 语速，协议范围 0.5..=2.0；`None` 表示按服务端默认。
-    pub(super) speech_rate: Option<f32>,
+    pub speech_rate: Option<f32>,
     /// 输入转写语言。
-    pub(super) language: String,
+    pub language: String,
     /// 轮次检测策略。
-    pub(super) turn_detection: TurnDetection,
+    pub turn_detection: TurnDetection,
     /// 会话内保留的历史轮数，协议范围 1..=50；`None` 表示按服务端默认。
-    pub(super) max_history_turns: Option<u32>,
+    pub max_history_turns: Option<u32>,
 }
 
 impl Default for SessionConfig {

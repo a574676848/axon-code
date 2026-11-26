@@ -123,7 +123,7 @@ async fn serve_session(
     timeouts: &VoiceTimeouts,
     metrics: &Arc<VoiceMetrics>,
 ) -> bool {
-    send_json(&mut socket, ready_json()).await;
+    send_json(&mut socket, ready_json(&state.voice_runtime)).await;
     let mut started = false;
     let mut request: Option<StartRequest> = None;
     let mut connection_session_id = String::new();
