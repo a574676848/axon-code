@@ -83,6 +83,13 @@ const OrbitingSearch: React.FC = () => (
   </span>
 );
 
+/** 在跑档右上角的数量角标：等宽数字压在图标角上，中文结论仍在按钮的无障碍名称里。 */
+const RunningCountBadge: React.FC<{ count: number }> = ({ count }) => (
+  <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-surface px-0.5 font-mono text-micro leading-4 tabular-nums text-text-link hairline border-border">
+    {count}
+  </span>
+);
+
 /** 收轨态的搜索格：有会话活动时弹出动态卡片，否则维持原来的展开搜索行为。 */
 const SearchRailControl: React.FC<{
   activity: RailActivity;
@@ -109,8 +116,8 @@ const SearchRailControl: React.FC<{
           label={activityLabel(activity)}
           active={open}
           onClick={toggle}
-          badgeKey={orbiting ? undefined : cue}
-          badge={orbiting ? undefined : <ActivityMark cue={cue} />}
+          badgeKey={cue}
+          badge={orbiting ? <RunningCountBadge count={activity.runningCount} /> : <ActivityMark cue={cue} />}
         >
           {orbiting ? <OrbitingSearch /> : <SearchIcon size={14} />}
         </RailButton>
