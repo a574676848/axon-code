@@ -66,7 +66,7 @@ fn overload_window_clears_after_recovery_gap() {
 
 #[test]
 fn ready_has_contract_fields() {
-    let runtime = VoiceRuntime::new(None, None);
+    let runtime = VoiceRuntime::new(None, None, None);
     let value: serde_json::Value =
         serde_json::from_str(&ready_json(&runtime)).expect("合法 JSON");
     for field in [

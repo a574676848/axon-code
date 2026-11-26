@@ -11,6 +11,10 @@
 
 use super::gateway_voice_realtime_protocol::{SessionConfig, TurnDetection};
 use super::gateway_voice_worker::BoxedTransport;
+use super::voice_asr_volc::{
+    DEFAULT_ASR_ENDPOINT, DEFAULT_ASR_LANGUAGE, DEFAULT_ASR_MODEL, DEFAULT_ASR_RESOURCE_ID,
+    VolcAsrConfig, VolcAsrTransport,
+};
 use super::voice_tts_volc::{
     DEFAULT_TTS_ENDPOINT, DEFAULT_TTS_RESOURCE_ID, DEFAULT_TTS_SPEAKER, VolcTtsConfig,
 };
@@ -29,11 +33,15 @@ pub(super) struct ProviderSession {
 ///
 /// # Errors
 ///
-/// 返回对外错误码。级联车道的流式识别尚未接入，恒为 `provider_unavailable`；
-/// 合成与 realtime 两条路径分别由 [`VoiceRuntime::tts`] 与
-/// [`VoiceRuntime::realtime`] 承载，不经过这里。
-pub(super) fn open() -> Result<ProviderSession, &'static str> {
-    Err("provider_unavailable")
+/// 返回对外错误码。级联车道缺少识别渠道配置或握手失败时为 `provider_unavailable`。
+pub(super) fn open(runtime: &VoiceRuntime) -> Result<ProviderSession, &'static str> {
+    let config = runtime.asr().ok_or("provider_unavailable")?;
+    let transport = VolcAsrTransport::open(config).map_err(|_| "provider_unavailable")?;
+    Ok(ProviderSession {
+        transport: Box::new(transport),
+        family: "asr",
+        model: config.model.clone(),
+    })
 }
 
 /// 语音车道。
@@ -94,6 +102,7 @@ impl RealtimeEndpoint {
 pub struct VoiceRuntime {
     realtime: Option<RealtimeEndpoint>,
     tts: Option<VolcTtsConfig>,
+    asr: Option<VolcAsrConfig>,
 }
 
 impl VoiceRuntime {
@@ -106,13 +115,22 @@ impl VoiceRuntime {
         Self {
             realtime: realtime_from_env(),
             tts: tts_from_env(),
+            asr: asr_from_env(),
         }
     }
 
     /// 用已解析的部件装配。
     #[must_use]
-    pub fn new(realtime: Option<RealtimeEndpoint>, tts: Option<VolcTtsConfig>) -> Self {
-        Self { realtime, tts }
+    pub fn new(
+        realtime: Option<RealtimeEndpoint>,
+        tts: Option<VolcTtsConfig>,
+        asr: Option<VolcAsrConfig>,
+    ) -> Self {
+        Self {
+            realtime,
+            tts,
+            asr,
+        }
     }
 
     /// realtime 车道参数；缺凭据时为 `None`。
@@ -125,6 +143,12 @@ impl VoiceRuntime {
     #[must_use]
     pub fn tts(&self) -> Option<&VolcTtsConfig> {
         self.tts.as_ref()
+    }
+
+    /// 识别渠道参数；缺凭据时为 `None`。
+    #[must_use]
+    pub fn asr(&self) -> Option<&VolcAsrConfig> {
+        self.asr.as_ref()
     }
 
     /// 运行车道：realtime 配置齐全即走 realtime，否则如实回落到级联。
@@ -193,6 +217,21 @@ fn tts_from_env() -> Option<VolcTtsConfig> {
     })
 }
 
+/// 读取识别渠道参数：识别专用变量优先，回退到方舟通用凭据。
+///
+/// 端点缺省为 Agent Plan 的流式识别通道；`nostream` 指「一次连接一次请求」，
+/// 与上层「一句一收尾」的合同一致，不是禁用流式。
+fn asr_from_env() -> Option<VolcAsrConfig> {
+    let api_key = first_env(&[ENV_ASR_API_KEY, ENV_ARK_KEY, ENV_VOLC_API_KEY])?;
+    Some(VolcAsrConfig::new(
+        env_or(ENV_ASR_URL, DEFAULT_ASR_ENDPOINT),
+        api_key,
+        env_or(ENV_ASR_RESOURCE_ID, DEFAULT_ASR_RESOURCE_ID),
+        env_or(ENV_ASR_MODEL, DEFAULT_ASR_MODEL),
+        env_or(ENV_ASR_LANGUAGE, DEFAULT_ASR_LANGUAGE),
+    ))
+}
+
 /// 默认端点：百炼北京区 realtime 服务。
 const DEFAULT_REALTIME_BASE_URL: &str =
     "wss://ws-twfnk5udhmcshkby.cn-beijing.maas.aliyuncs.com/api-ws/v1/realtime";
@@ -244,6 +283,17 @@ const ENV_TTS_SPEAKER: &str = "AXON_VOICE_TTS_SPEAKER";
 /// 合成语速覆盖。
 const ENV_TTS_SPEECH_RATE: &str = "AXON_VOICE_TTS_SPEECH_RATE";
 
+/// 识别专用凭据变量名。
+const ENV_ASR_API_KEY: &str = "AXON_VOICE_ASR_API_KEY";
+/// 识别端点覆盖。
+const ENV_ASR_URL: &str = "AXON_VOICE_ASR_URL";
+/// 识别资源标识覆盖。
+const ENV_ASR_RESOURCE_ID: &str = "AXON_VOICE_ASR_RESOURCE_ID";
+/// 识别模型标识覆盖。
+const ENV_ASR_MODEL: &str = "AXON_VOICE_ASR_MODEL";
+/// 识别语言覆盖。
+const ENV_ASR_LANGUAGE: &str = "AXON_VOICE_ASR_LANGUAGE";
+
 fn env_or(name: &str, fallback: &str) -> String {
     std::env::var(name)
         .ok()
@@ -279,6 +329,7 @@ fn with_model_query(base: &str, model: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{Lane, VoiceRuntime, with_model_query};
+    use super::super::voice_asr_volc::VolcAsrConfig;
     use super::super::voice_tts_volc::VolcTtsConfig;
 
     fn tts_config() -> VolcTtsConfig {
@@ -293,7 +344,7 @@ mod tests {
 
     #[test]
     fn runtime_without_realtime_falls_back_to_cascade() {
-        let runtime = VoiceRuntime::new(None, Some(tts_config()));
+        let runtime = VoiceRuntime::new(None, Some(tts_config()), None);
         assert_eq!(runtime.lane(), Lane::Cascade);
         assert!(runtime.realtime().is_none());
         assert!(runtime.tts().is_some(), "合成与 realtime 相互独立");
@@ -302,9 +353,28 @@ mod tests {
 
     #[test]
     fn runtime_without_tts_still_reports_its_lane() {
-        let runtime = VoiceRuntime::new(None, None);
+        let runtime = VoiceRuntime::new(None, None, None);
         assert_eq!(runtime.lane(), Lane::Cascade);
         assert!(runtime.tts().is_none(), "缺凭据必须如实为空");
+    }
+
+    #[test]
+    fn asr_config_alone_keeps_the_cascade_lane() {
+        let runtime = VoiceRuntime::new(
+            None,
+            None,
+            Some(VolcAsrConfig::new(
+                "wss://example.invalid/asr",
+                "key",
+                "volc.seedasr.sauc.duration",
+                "",
+                "zh",
+            )),
+        );
+        assert_eq!(runtime.lane(), Lane::Cascade, "识别渠道本身不改变车道判定");
+        let asr = runtime.asr().expect("识别渠道应当装配出来");
+        assert_eq!(asr.model, super::DEFAULT_ASR_MODEL, "模型名缺省产品口径");
+        assert!(runtime.realtime_model().is_none());
     }
 
     #[test]

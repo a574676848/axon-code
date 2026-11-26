@@ -4,8 +4,11 @@
 //! 由 `[voice]` 段决定；daemon 收到什么就用什么。缺凭据的能力一律留空，
 //! 由 daemon 如实报 `provider_unavailable`，这里不编造默认值、不猜厂商。
 
-use axon_config::voice::{VOICE_ROLE_REALTIME, VOICE_ROLE_TTS, VoiceChannelConfig, VoiceConfig, VoiceModelConfig};
-use axon_daemon::{RealtimeEndpoint, VolcTtsConfig, VoiceRuntime};
+use axon_config::voice::{
+    VOICE_ROLE_ASR, VOICE_ROLE_REALTIME, VOICE_ROLE_TTS, VoiceChannelConfig, VoiceConfig,
+    VoiceModelConfig,
+};
+use axon_daemon::{RealtimeEndpoint, VolcAsrConfig, VolcTtsConfig, VoiceRuntime};
 
 /// 默认转写语言：与协议缺省一致。
 const DEFAULT_LANGUAGE: &str = "zh";
@@ -16,6 +19,7 @@ pub fn voice_runtime_from_config(voice: &VoiceConfig) -> VoiceRuntime {
     VoiceRuntime::new(
         realtime_endpoint(voice),
         tts_config(voice),
+        asr_config(voice),
     )
 }
 
@@ -91,11 +95,30 @@ fn tts_config(voice: &VoiceConfig) -> Option<VolcTtsConfig> {
     })
 }
 
+/// 识别渠道：`asr` 角色。
+///
+/// `id` 承载上游资源标识（方舟的 `volc.seedasr.sauc.duration`）；协议上送的
+/// 模型名由实现内置，内部路由名不冒充模型编号。
+fn asr_config(voice: &VoiceConfig) -> Option<VolcAsrConfig> {
+    let model = model_of(voice, VOICE_ROLE_ASR)?;
+    let channel = channel_of(voice, model)?;
+    let api_key = credential(channel)?;
+    let endpoint = endpoint_of(channel)?;
+    Some(VolcAsrConfig::new(
+        endpoint,
+        api_key,
+        model.id.clone(),
+        "",
+        DEFAULT_LANGUAGE,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::voice_runtime_from_config;
     use axon_config::voice::{
-        VOICE_LANE_REALTIME, VOICE_ROLE_REALTIME, VOICE_ROLE_TTS, VoiceChannelConfig, VoiceConfig,
+        VOICE_LANE_REALTIME, VOICE_ROLE_ASR, VOICE_ROLE_REALTIME, VOICE_ROLE_TTS,
+        VoiceChannelConfig, VoiceConfig,
         VoiceModelConfig,
     };
 
@@ -113,6 +136,7 @@ mod tests {
         let runtime = voice_runtime_from_config(&VoiceConfig::default());
         assert!(runtime.realtime().is_none());
         assert!(runtime.tts().is_none());
+        assert!(runtime.asr().is_none());
     }
 
     #[test]
@@ -181,5 +205,27 @@ mod tests {
             voice_runtime_from_config(&voice).tts().is_none(),
             "没有凭据就不能装配，交给 daemon 报不可用"
         );
+    }
+
+    #[test]
+    fn asr_role_maps_into识别渠道() {
+        let voice = VoiceConfig {
+            channel_balancer: VOICE_LANE_REALTIME.to_owned(),
+            channels: vec![channel("volc-asr")],
+            models: vec![VoiceModelConfig {
+                name: "volc-asr-seed20".to_owned(),
+                channel: "volc-asr".to_owned(),
+                id: "volc.seedasr.sauc.duration".to_owned(),
+                role: VOICE_ROLE_ASR.to_owned(),
+                ..VoiceModelConfig::default()
+            }],
+            ..VoiceConfig::default()
+        };
+        let runtime = voice_runtime_from_config(&voice);
+        let asr = runtime.asr().expect("识别渠道必须装配出来");
+        assert_eq!(asr.resource_id, "volc.seedasr.sauc.duration");
+        assert_eq!(asr.endpoint, "wss://example.invalid/voice");
+        assert_eq!(asr.language, "zh");
+        assert!(runtime.realtime().is_none(), "asr 角色不等于 realtime 车道");
     }
 }

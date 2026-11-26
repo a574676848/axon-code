@@ -29,8 +29,8 @@ pub use infrastructure::gateway_bridge::{
 };
 pub use infrastructure::gateway_debounce::{GATEWAY_DEBOUNCE_DEFAULT_WINDOW, GatewayDebouncer};
 pub use infrastructure::gateway_http::{
-    HttpGatewayAdapter, Lane, RealtimeEndpoint, SessionConfig, TurnDetection, VolcTtsConfig,
-    VoiceRuntime,
+    HttpGatewayAdapter, Lane, RealtimeEndpoint, SessionConfig, TurnDetection, VolcAsrConfig,
+    VolcTtsConfig, VoiceRuntime,
 };
 pub use infrastructure::gateway_http_handler::{GatewayHttpResponse, GatewayHttpRouteHandler};
 pub use infrastructure::gateway_kernel::{

@@ -7,9 +7,11 @@
 
 use super::gateway_voice_provider::VoiceRuntime;
 
-/// 端到端车道的模型标识；不可用时为空。
+/// 识别能力的模型标识：realtime 优先，其次级联车道的识别渠道；不可用时为空。
 fn asr_model(runtime: &VoiceRuntime) -> Option<String> {
-    runtime.realtime_model()
+    runtime
+        .realtime_model()
+        .or_else(|| runtime.asr().map(|config| config.model.clone()))
 }
 
 /// 合成渠道的音色标识；不可用时为空。
@@ -76,6 +78,7 @@ mod tests {
     use super::{
         degraded_detail, provider_ready, ready_json, tts_degraded_detail, tts_ready,
     };
+    use super::super::voice_asr_volc::VolcAsrConfig;
     use super::super::gateway_voice_provider::VoiceRuntime;
     use super::super::voice_tts_volc::VolcTtsConfig;
 
@@ -89,6 +92,7 @@ mod tests {
                 speaker: "speaker".to_owned(),
                 speech_rate: 0,
             }),
+            None,
         )
     }
 
@@ -106,7 +110,7 @@ mod tests {
         let runtime = tts_only();
         assert!(!provider_ready(&runtime), "没有 realtime 车道就不能建会话");
         assert!(tts_ready(&runtime), "有合成渠道就能朗读");
-        let empty = VoiceRuntime::new(None, None);
+        let empty = VoiceRuntime::new(None, None, None);
         assert!(!provider_ready(&empty));
         assert!(!tts_ready(&empty));
     }
@@ -137,7 +141,8 @@ mod tests {
     #[test]
     fn ready_keeps_every_protocol_field() {
         let value: serde_json::Value =
-            serde_json::from_str(&ready_json(&VoiceRuntime::new(None, None))).expect("合法 JSON");
+            serde_json::from_str(&ready_json(&VoiceRuntime::new(None, None, None)))
+                .expect("合法 JSON");
         assert_eq!(value["type"], "ready");
         assert_eq!(value["asrModel"], "unavailable");
         assert_eq!(value["ttsModel"], "none");
@@ -159,5 +164,25 @@ mod tests {
             assert!(value.get(field).is_some(), "ready 缺字段 {field}");
         }
         assert_eq!(value["sampleRate"], 16_000);
+    }
+
+    #[test]
+    fn cascade_provider_with_asr_reports_its_model() {
+        let runtime = VoiceRuntime::new(
+            None,
+            None,
+            Some(VolcAsrConfig::new(
+                "wss://example.invalid/asr",
+                "key",
+                "volc.seedasr.sauc.duration",
+                "",
+                "zh",
+            )),
+        );
+        assert!(provider_ready(&runtime), "级联识别渠道齐全即可建会话");
+        let value: serde_json::Value =
+            serde_json::from_str(&ready_json(&runtime)).expect("合法 JSON");
+        assert_eq!(value["asrModel"], "doubao-seed-asr-2.0");
+        assert!(value["degraded"]["detail"].is_null(), "可用时不报降级");
     }
 }

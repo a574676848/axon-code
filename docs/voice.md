@@ -22,7 +22,7 @@ Axon 的语音把「说话」当作输入方式，把「朗读」当作输出方
 
 **合成已接入火山方舟 Agent Plan**：daemon 直连 `wss://openspeech.bytedance.com/api/v3/plan/tts/unidirectional/stream`，文本进、WAV 出；`/tts`、`/cue`、`/preview` 三个接口按裸 WAV 下发，桌面端沿用既有播放模型。端点、资源标识与音色来自 `[voice]` 段里 `role = "tts"` 的模型，凭据按渠道的 `api_key_env` 解析（方舟填 `ARK_KEY`）。
 
-**流式识别尚未接入**：`/api/v1/voice` 建会话仍依赖端到端车道，没有它时如实回 `provider_unavailable` 并关闭连接；级联识别（方舟 `bigmodel_nostream`）留待后续增量，配置面已预留 `role = "asr"` 的模型。
+**级联识别已接入火山方舟 Agent Plan**：daemon 直连 `wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_nostream`，上行 16 kHz PCM 按帧封装、末帧收尾，服务端 `result.text` 与 `utterances` 时间戳翻成既有 `partial`/`final` 事件。端点与资源标识来自 `[voice]` 段里 `role = "asr"` 的模型（`id` 填 `volc.seedasr.sauc.duration`），凭据按渠道的 `api_key_env` 解析（方舟填 `ARK_KEY`）；缺凭据时建会话如实回 `provider_unavailable`。两条车道互斥：realtime 配置齐全优先走 realtime，否则回落级联。
 
 ---
 
@@ -60,7 +60,8 @@ Axon 的语音把「说话」当作输入方式，把「朗读」当作输出方
 
 `GET /api/v1/voice/status` 是语音唯一排障入口，鉴权与其他网关接口一致。关键字段：
 
-- `runtimeAvailable`：提供方是否可用；当前恒为 `false`。
+- `runtimeAvailable`：能否建立语音会话；realtime 配置齐全或级联识别渠道齐备即为 `true`。
+- `ttsAvailable`：合成渠道是否可用，与会话车道无关。
 - `degraded`：不可用原因；正常情况下为 `null`。
 - `presets`、`defaultPreset`：音色清单与默认音色。
 - `idleTimeoutSec`、`sessionTimeoutSec`、`warmupTimeoutSec`：当前生效的超时值。
@@ -70,7 +71,7 @@ Axon 的语音把「说话」当作输入方式，把「朗读」当作输出方
 
 | 错误码 | 含义 | 可重试 |
 | --- | --- | --- |
-| `provider_unavailable` | 尚未接入云端语音提供方 | 否 |
+| `provider_unavailable` | 提供方配置或凭据缺失，或建连失败 | 是（修配置后重试） |
 | `model_missing` | 所选模型不可用（提供方不支持或未配置） | 是 |
 | `model_unusable` | 提供方拒绝该模型标识 | 否 |
 | `worker_unavailable` | 语音工作通道没能建立 | 是 |
@@ -81,9 +82,9 @@ Axon 的语音把「说话」当作输入方式，把「朗读」当作输出方
 
 ## 6. 配置面
 
-`[voice]` 段是唯一真值源：daemon 启动时把它映射成运行参数注入网关，会话与合成两条能力都从这一份快照读取；桌面设置页与 `axon setup voice` 改的是同一段。字段与校验见[配置参考指南](./configuration.md)。
+`[voice]` 段是唯一真值源：daemon 启动时把它映射成运行参数注入网关，识别、合成与会话三条能力都从这一份快照读取；桌面设置页与 `axon setup voice` 改的是同一段。字段与校验见[配置参考指南](./configuration.md)。
 
-角色分工：`role = "realtime"` 的模型决定会话车道，`role = "tts"` 的模型决定合成渠道，`role = "asr"` 预留给后续的流式识别。缺配置或凭据时该能力如实报不可用，不拿空值去连。
+角色分工：`role = "realtime"` 的模型决定会话车道，`role = "tts"` 的模型决定合成渠道，`role = "asr"` 的模型决定级联识别渠道。缺配置或凭据时该能力如实报不可用，不拿空值去连。
 
 没有任何 `[voice]` 配置时，按环境变量兜底（仅用于开发机与排障）：
 
@@ -105,6 +106,11 @@ Axon 的语音把「说话」当作输入方式，把「朗读」当作输出方
 | `AXON_VOICE_TTS_RESOURCE_ID` | 合成资源标识 | `seed-tts-2.0` |
 | `AXON_VOICE_TTS_SPEAKER` | 合成音色 | `zh_female_shuangkuaisisi_uranus_bigtts` |
 | `AXON_VOICE_TTS_SPEECH_RATE` | 合成语速 `-50..=100`，越界忽略 | `0`（服务端默认） |
+| `AXON_VOICE_ASR_API_KEY` | 识别凭据；缺省回退 `ARK_KEY`、`VOLC_API_KEY` | 无 |
+| `AXON_VOICE_ASR_URL` | 识别端点 | 方舟 Agent Plan 流式识别地址 |
+| `AXON_VOICE_ASR_RESOURCE_ID` | 识别资源标识 | `volc.seedasr.sauc.duration` |
+| `AXON_VOICE_ASR_MODEL` | 上报的模型标识（协议内仍发 `bigmodel`） | `doubao-seed-asr-2.0` |
+| `AXON_VOICE_ASR_LANGUAGE` | 转写语言，`auto` 由服务端判定 | `zh` |
 
 采样率、帧长与超时仍是协议常量，不开放给用户调整；`AXON_RUNTIME_ROOT` 不影响语音。
 
@@ -112,7 +118,7 @@ Axon 的语音把「说话」当作输入方式，把「朗读」当作输出方
 
 ## 7. 已知限制
 
-- 级联车道没有真机证据：转写与合成只在进程内的脚本提供方用例中验证过编排。realtime 车道有 M0-R 探针实测证据（握手、VAD、转写、回复音频、延迟都已核对）。
+- 级联车道的识别与合成都已接入真实提供方，协议翻译有单元用例、合成做过真实冒烟；整链（真人对讲一轮）尚未在真机上验证。realtime 车道有 M0-R 探针实测证据（握手、VAD、转写、回复音频、延迟都已核对）。
 - realtime 的助手文字目前只下发 `assistant` 帧，界面接线在后续增量里。
 - `metrics.rtfP50` 当前恒为 `null`。
 - 试听接口的超时（30 秒）与协议参考值（3 秒）尚未对齐。

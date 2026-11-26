@@ -41,9 +41,12 @@ mod gateway_voice_turn_stream;
 mod gateway_voice_worker;
 #[path = "voice_tts_volc.rs"]
 mod voice_tts_volc;
+#[path = "voice_asr_volc.rs"]
+mod voice_asr_volc;
 pub use gateway_voice_provider::{Lane, RealtimeEndpoint, VoiceRuntime};
 pub use gateway_voice_realtime_protocol::{SessionConfig, TurnDetection};
 pub use voice_tts_volc::VolcTtsConfig;
+pub use voice_asr_volc::VolcAsrConfig;
 pub use super::gateway_http_handler::{GatewayHttpResponse, GatewayHttpRouteHandler};
 pub use gateway_voice::VoiceTimeouts;
 

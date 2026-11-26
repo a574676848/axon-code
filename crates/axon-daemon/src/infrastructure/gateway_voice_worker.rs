@@ -5,7 +5,7 @@
 
 use super::gateway_voice_metrics::VoiceMetrics;
 use super::gateway_voice_out_frames::{error_json, error_json_with_family, state_json};
-use super::gateway_voice_provider::{Lane, ProviderSession, open};
+use super::gateway_voice_provider::{Lane, ProviderSession, VoiceRuntime, open};
 use axon_voice_bridge::{BridgeError, HostTransport, VoiceBridge};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -292,8 +292,9 @@ pub(super) fn spawn_worker(
     out: tokio_mpsc::UnboundedSender<VoiceOut>,
     warmup: Duration,
     metrics: Arc<VoiceMetrics>,
+    runtime: &VoiceRuntime,
 ) -> Result<Arc<VoiceWorker>, (String, bool)> {
-    let session = open().map_err(|code| (error_json(code, "arming"), false))?;
+    let session = open(runtime).map_err(|code| (error_json(code, "arming"), false))?;
     Ok(spawn_worker_with(
         session,
         session_id.to_owned(),
@@ -367,7 +368,7 @@ impl super::GatewayHttpState {
         #[cfg(test)]
         {
             // 测试恒走级联脚本宿主：真实 realtime 连接只在生产运行，用例不依赖网络与凭据。
-            spawn_worker(session_id, out, warmup, metrics)
+            spawn_worker(session_id, out, warmup, metrics, &self.voice_runtime)
         }
         #[cfg(not(test))]
         match self.voice_runtime.lane() {
@@ -377,7 +378,7 @@ impl super::GatewayHttpState {
                 warmup,
                 metrics,
             ),
-            Lane::Cascade => spawn_worker(session_id, out, warmup, metrics),
+            Lane::Cascade => spawn_worker(session_id, out, warmup, metrics, &self.voice_runtime),
         }
     }
 }
