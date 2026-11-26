@@ -206,7 +206,6 @@ fn try_run_daemon_host(
         primary_turn_wake_hook(Arc::clone(&primary_turn_signal)),
     );
     // durable 落点要用同一份运行态存储：问答 sink 建在宿主之前，安装在其后。
-    // store 马上会被 host 拿走：问答与重启续跑各留一份克隆。
     let (question_store, resume_store) = (store.clone(), store.clone());
     // 关停标志先于宿主构建：后台 Worker 启动后立即依赖它判断是否需要收口。
     let workers_running = Arc::new(AtomicBool::new(true));
@@ -221,8 +220,10 @@ fn try_run_daemon_host(
         questions.primary_turn_port(),
         Arc::clone(&primary_turn_signal),
     )?;
-    host.start().map_err(|error| error.to_string())?;
+    // pid 锁先拿并抢在 host.start() 之前重排：start 内部的中断收敛会把这些执行标成终态。
+    let _pid_file = DaemonPidFileGuard::acquire(&runtime_root)?;
     requeue::requeue_running_after_restart(&resume_store, axon_time::unix_now_ms());
+    host.start().map_err(|error| error.to_string())?;
     // 指标写入通道复用宿主代际：注册必须放在 host 启动之后，未启动时拿不到 host 记录。
     // 注册后每轮指标只追加一次事件，不再与其他 Host 争抢单活跃租约。
     if let Ok(record) = host.host_record() {
@@ -230,7 +231,6 @@ fn try_run_daemon_host(
     }
     // 宿主起来之后才有 host 记录与订阅桥；迟到作答的问答帧靠它落进会话事件流。
     questions.install_durable_question_events(&host, question_store);
-    let _pid_file = DaemonPidFileGuard::acquire(&runtime_root)?;
     let server = bind_daemon_server(&endpoint, command)?;
     let cron_adapter = load_cron_adapter(command)?;
     let maintenance_signal = Arc::new(DaemonMaintenanceSignal::default());

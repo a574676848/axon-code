@@ -109,9 +109,12 @@ impl RuntimeStore for SqliteRuntimeStore {
             .map_err(storage)?;
         let now = i64_value(now_ms)?;
         // 启动瞬间不可能存在属于本进程的 running 执行：命中的都是上一个进程留下的在途轮次。
+        // 顺手清掉终态列：万一这条执行曾被别的路径标过终态，带着 terminal_kind 重排会让
+        // 调度器把它当成已收口。
         let requeued = transaction
             .execute(
-                "UPDATE work_items SET status='queued',lease_json=NULL,lease_expires_at_ms=NULL,\
+                "UPDATE work_items SET status='queued',terminal_kind=NULL,committed_at_ms=NULL,\
+                 lease_token=NULL,lease_json=NULL,lease_expires_at_ms=NULL,\
                  claimed_by=NULL,claimed_generation=NULL,retry_at_ms=NULL,updated_at_ms=?1 \
                  WHERE status='running'",
                 params![now],
