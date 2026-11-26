@@ -6,22 +6,26 @@
 //!
 //! 几何全部按**逻辑像素**落盘与恢复：DPI 变了，窗口还是同一个观感大小。
 //!
-//! 记什么、什么时候允许改写，由三条判据决定，三条都对应一类真实窗口状态：
+//! 记什么、什么时候允许改写，由四条判据决定，每条都对应一类真实窗口状态：
 //!
 //! - **最小化期间一律不改写**。最小化时系统同样会把「是否最大化」判成否，照着它记
 //!   就会把用户最大化过的窗口记成普通窗口，下次启动按最大化之前的尺寸打开。
 //! - **最大化期间不记尺寸**。满屏尺寸不是用户要的还原尺寸，记了就把还原态顶成满屏。
 //! - **最大化期间不记位置**。最大化那一瞬系统会把窗口搬到屏幕外的负坐标，
 //!   那是最大化原点而不是用户的摆放，记下来会让还原后的窗口贴着屏幕边缘被切掉。
+//! - **恢复之后的一小段不收尺寸**。无边框带系统阴影的窗口上，系统会在恢复后按自己的
+//!   外框口径把内容区补齐一圈（本机 200% 缩放下是 28 逻辑像素）。那一圈不是用户的意图，
+//!   而是「设进去的尺寸」与「长出来的尺寸」之间的固定偏移，因此只把它量成偏移记在内存里，
+//!   之后所有尺寸都按偏移折算，记忆里始终是用户真正要的尺寸。
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::{
-    AppHandle, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize,
-    WebviewWindow, WindowEvent,
+    AppHandle, LogicalPosition, LogicalSize, Manager, PhysicalPosition, WebviewWindow, WindowEvent,
 };
 
 /// 主窗口标签，与 [`crate::desktop_shell`] 保持一致。
@@ -39,6 +43,12 @@ const GEOMETRY_VERSION: u32 = 2;
 /// 350ms 是冷启动呈现时间的及格线，也是用户还不会察觉「为什么慢了一下」的上限。
 const READY_TIMEOUT_MS: u64 = 350;
 
+/// 恢复时的一圈补齐窗口：这段时间内的尺寸变化只按系统口径理解，用来量偏移。
+const RESTORE_SETTLE: Duration = Duration::from_secs(10);
+
+/// 一圈补齐的容差（逻辑像素）。超过这个幅度的变化一定是真实调整，照记不误。
+const RESTORE_DRIFT_LIMIT: f64 = 96.0;
+
 /// 恢复时的尺寸下限，与 `tauri.conf.json` 的 `minWidth` / `minHeight` 同值。
 ///
 /// 必须自己夹：无边框窗口去掉了系统可调整边框（`WS_THICKFRAME`），系统不再用
@@ -52,6 +62,23 @@ static REVEALED: AtomicBool = AtomicBool::new(false);
 
 /// 进程内唯一的几何记忆：窗口事件写、退出与关闭时读。
 static GEOMETRY: OnceLock<Mutex<WindowGeometry>> = OnceLock::new();
+
+/// 恢复现场：目标尺寸与恢复时刻，用来量「系统补齐的那一圈」。
+static RESTORE: OnceLock<Mutex<Option<RestoreBaseline>>> = OnceLock::new();
+
+/// 系统补齐的那一圈（逻辑像素，宽与高各一份），本会话内据此折算尺寸。
+static RING: OnceLock<Mutex<(f64, f64)>> = OnceLock::new();
+
+/// 一次恢复的基准：目标是哪个体积，从哪一刻开始算。
+#[derive(Debug, Clone, Copy)]
+struct RestoreBaseline {
+    /// 目标内容区宽度（逻辑像素）。
+    width: f64,
+    /// 目标内容区高度（逻辑像素）。
+    height: f64,
+    /// 恢复发起的时刻。
+    since: Instant,
+}
 
 /// 一份窗口几何：普通态（还原态）的尺寸与位置，外加两个布尔态。
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -100,11 +127,12 @@ impl WindowGeometry {
 
     /// 尺寸变化后的记忆。
     ///
-    /// 最小化会把宽高报成 0，最大化与全屏报的是满屏尺寸，三者都不是用户的还原尺寸。
+    /// 入参已经是折算过系统偏移的逻辑像素。最小化时窗口不报尺寸，最大化与全屏报的是
+    /// 满屏尺寸，三者都不该改写用户的还原尺寸。
     fn with_resize(
         self,
-        inner: PhysicalSize<u32>,
-        scale: f64,
+        width: f64,
+        height: f64,
         minimized: bool,
         maximized: bool,
         fullscreen: bool,
@@ -117,11 +145,11 @@ impl WindowGeometry {
             fullscreen,
             ..self
         };
-        if maximized || fullscreen || inner.width == 0 || inner.height == 0 {
+        if maximized || fullscreen || width <= 0.0 || height <= 0.0 {
             return next;
         }
-        next.width = f64::from(inner.width) / scale;
-        next.height = f64::from(inner.height) / scale;
+        next.width = width;
+        next.height = height;
         next
     }
 
@@ -192,7 +220,7 @@ pub fn flush(app: &AppHandle) {
 pub fn install_show_gate(app: &AppHandle) {
     let handle = app.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(READY_TIMEOUT_MS));
+        std::thread::sleep(Duration::from_millis(READY_TIMEOUT_MS));
         reveal(&handle);
     });
 }
@@ -242,7 +270,6 @@ fn apply(window: &WebviewWindow, saved: Option<WindowGeometry>) -> WindowGeometr
     let mut geometry = saved.unwrap_or_default();
     if geometry.is_recorded() {
         let (width, height) = geometry.clamped_size(widest_work_area(window));
-        let _ = window.set_size(LogicalSize::new(width, height));
         geometry.width = width;
         geometry.height = height;
         if position_is_visible(window, &geometry) {
@@ -252,6 +279,8 @@ fn apply(window: &WebviewWindow, saved: Option<WindowGeometry>) -> WindowGeometr
             geometry.x = position.0;
             geometry.y = position.1;
         }
+        let _ = window.set_size(LogicalSize::new(width, height));
+        remember_restore(width, height);
     } else if let Some((width, height)) = logical_inner_size(window) {
         geometry = WindowGeometry {
             version: GEOMETRY_VERSION,
@@ -283,8 +312,16 @@ fn watch(window: WebviewWindow) {
             let maximized = handle.is_maximized().unwrap_or(false);
             let fullscreen = handle.is_fullscreen().unwrap_or(false);
             let scale = handle.scale_factor().unwrap_or(1.0);
+            let width = f64::from(size.width) / scale;
+            let height = f64::from(size.height) / scale;
+            if let Some(ring) = ring_of_restore(width, height, Instant::now()) {
+                // 这一圈是系统补齐出来的，不是用户的意图：只把它量成偏移。
+                store_ring(ring);
+                return;
+            }
+            let (width, height) = without_ring(width, height, ring());
             let before = current();
-            let after = before.with_resize(*size, scale, minimized, maximized, fullscreen);
+            let after = before.with_resize(width, height, minimized, maximized, fullscreen);
             if after == before {
                 return;
             }
@@ -308,6 +345,60 @@ fn watch(window: WebviewWindow) {
         WindowEvent::CloseRequested { .. } => flush(handle.app_handle()),
         _ => {}
     });
+}
+
+/// 记下一次恢复的基准：目标尺寸与起算时刻。
+fn remember_restore(width: f64, height: f64) {
+    *restore()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(RestoreBaseline {
+        width,
+        height,
+        since: Instant::now(),
+    });
+}
+
+/// 这次尺寸变化是不是系统在恢复后补齐的那一圈；是就返回这一圈的偏移。
+///
+/// 判据三条都要成立：还在恢复窗口内、两块轴上的偏差都在容差内、偏差不是零
+/// （零偏差说明尺寸本来就对得上，没有偏移可量）。窗口一过就作废，
+/// 之后的任何尺寸变化都按用户的真实意图记。
+fn ring_of_restore(width: f64, height: f64, now: Instant) -> Option<(f64, f64)> {
+    let mut guard = restore()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let baseline = (*guard)?;
+    if now.saturating_duration_since(baseline.since) > RESTORE_SETTLE {
+        *guard = None;
+        return None;
+    }
+    let ring = (width - baseline.width, height - baseline.height);
+    let inside = ring.0.abs() <= RESTORE_DRIFT_LIMIT && ring.1.abs() <= RESTORE_DRIFT_LIMIT;
+    if !inside || (ring.0.abs() < 1.0 && ring.1.abs() < 1.0) {
+        return None;
+    }
+    Some(ring)
+}
+
+/// 折算：记忆里的尺寸 = 实测内容区尺寸减系统补齐的那一圈。
+fn without_ring(width: f64, height: f64, ring: (f64, f64)) -> (f64, f64) {
+    (width - ring.0, height - ring.1)
+}
+
+/// 读这一圈偏移。
+fn ring() -> (f64, f64) {
+    *RING
+        .get_or_init(|| Mutex::new((0.0, 0.0)))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// 记下这一圈偏移。
+fn store_ring(ring: (f64, f64)) {
+    *RING
+        .get_or_init(|| Mutex::new((0.0, 0.0)))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = ring;
 }
 
 /// 内容区尺寸（逻辑像素）。
@@ -379,6 +470,11 @@ fn record() -> &'static Mutex<WindowGeometry> {
     GEOMETRY.get_or_init(|| Mutex::new(WindowGeometry::default()))
 }
 
+/// 恢复基准的读写口。
+fn restore() -> &'static Mutex<Option<RestoreBaseline>> {
+    RESTORE.get_or_init(|| Mutex::new(None))
+}
+
 /// 读一份当前记忆。
 fn current() -> WindowGeometry {
     *record()
@@ -395,8 +491,12 @@ fn store(geometry: WindowGeometry) {
 
 #[cfg(test)]
 mod tests {
-    use super::{MIN_RESTORE_HEIGHT, MIN_RESTORE_WIDTH, WindowGeometry};
-    use tauri::{PhysicalPosition, PhysicalSize};
+    use super::{
+        MIN_RESTORE_HEIGHT, MIN_RESTORE_WIDTH, RESTORE_SETTLE, WindowGeometry, remember_restore,
+        ring_of_restore, without_ring,
+    };
+    use std::time::{Duration, Instant};
+    use tauri::PhysicalPosition;
 
     /// 一份 1440x900 屏、200% 缩放上的普通态窗口。
     fn base() -> WindowGeometry {
@@ -417,7 +517,7 @@ mod tests {
             maximized: true,
             ..base()
         };
-        let after = maximized.with_resize(PhysicalSize::new(0, 0), 2.0, true, false, false);
+        let after = maximized.with_resize(0.0, 0.0, true, false, false);
         assert!(after.maximized);
         assert_eq!(after.width, 620.0);
         assert_eq!(after.height, 460.0);
@@ -430,7 +530,7 @@ mod tests {
     #[test]
     fn maximizing_keeps_the_restore_size() {
         // 最大化报上来的是满屏尺寸，记下来会把还原态顶成满屏。
-        let after = base().with_resize(PhysicalSize::new(2880, 1704), 2.0, false, true, false);
+        let after = base().with_resize(1440.0, 852.0, false, true, false);
         assert!(after.maximized);
         assert_eq!(after.width, 620.0);
         assert_eq!(after.height, 460.0);
@@ -447,7 +547,7 @@ mod tests {
     #[test]
     fn resizing_and_moving_in_the_normal_state_are_recorded_in_logical_pixels() {
         let after = base()
-            .with_resize(PhysicalSize::new(1600, 1200), 2.0, false, false, false)
+            .with_resize(800.0, 600.0, false, false, false)
             .with_move(PhysicalPosition::new(400, 300), 2.0, false, false, false);
         assert_eq!((after.width, after.height), (800.0, 600.0));
         assert_eq!((after.x, after.y), (200.0, 150.0));
@@ -473,6 +573,38 @@ mod tests {
         };
         let (width, height) = huge.clamped_size(Some((1440.0, 852.0)));
         assert_eq!((width, height), (1440.0, 852.0));
+    }
+
+    #[test]
+    fn the_ring_the_system_adds_after_restore_is_measured_not_recorded() {
+        // 恢复后系统按自己的外框口径把内容区补齐一圈（本机 200% 下是 28 逻辑像素）。
+        // 这一圈只该量成偏移，不该进记忆，否则每次启动都会再放大一圈。
+        remember_restore(1200.0, 760.0);
+        let now = Instant::now();
+        assert_eq!(ring_of_restore(1200.0, 788.0, now), Some((0.0, 28.0)));
+
+        // 容差之外的变化是用户的真实调整，不当作偏移。
+        assert_eq!(ring_of_restore(1200.0, 1200.0, now), None);
+        // 恢复窗口之外的变化同样按真实调整处理。
+        assert_eq!(
+            ring_of_restore(
+                1200.0,
+                788.0,
+                now + RESTORE_SETTLE + Duration::from_millis(1)
+            ),
+            None
+        );
+        // 尺寸本来就对得上时没有偏移可量。
+        remember_restore(1200.0, 760.0);
+        assert_eq!(ring_of_restore(1200.0, 760.0, now), None);
+    }
+
+    #[test]
+    fn recorded_size_is_the_measured_size_minus_the_ring() {
+        // 用户把窗口拖到 1000 高：实际长出来的 1028 里有一圈是系统偏移，
+        // 记忆里必须记 1000，这样下次恢复仍然给出 1000。
+        assert_eq!(without_ring(1200.0, 1028.0, (0.0, 28.0)), (1200.0, 1000.0));
+        assert_eq!(without_ring(1200.0, 788.0, (0.0, 28.0)), (1200.0, 760.0));
     }
 
     #[test]

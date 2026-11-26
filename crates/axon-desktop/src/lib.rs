@@ -220,9 +220,6 @@ pub fn run() {
             },
         )
         .setup(|app| {
-            // 几何记忆先于其余窗口装配：系统材质、托盘与兜底呈现都会碰到窗口，
-            // 恢复必须在它们之前落地，并且全程窗口仍然不可见。
-            window_state::install(app.handle());
             // 注入应用句柄，使「打开文件/目录」走官方插件而不是自行拼系统命令。
             process::install_opener(app.handle().clone());
             // 会话事件经 Tauri 事件通道下发；订阅器是进程内唯一实例，
@@ -246,6 +243,9 @@ pub fn run() {
             // 材质底座在建窗之后、呈现之前建立：前端的首帧就绪信号要能问到结论。
             window_effects::install(app.handle());
             window_effects::init_window_material(app.handle());
+            // 几何恢复排在窗口外壳与材质之后：无边框窗口的 set_size 会按调用那一刻的
+            // 外框与客户区差值补偿入参，边框还没定型时恢复出来的尺寸会偏大。
+            window_state::install(app.handle());
             // 兜底呈现：前端首帧就绪信号与 350ms 超时，两条路只会显示一次。
             window_state::install_show_gate(app.handle());
             desktop_shell::install_global_shortcut(app.handle());
