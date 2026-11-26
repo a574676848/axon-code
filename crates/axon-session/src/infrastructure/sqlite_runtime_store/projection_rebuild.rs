@@ -16,6 +16,16 @@ use super::projection_watermark;
 use super::projection_worker;
 use crate::ports::RuntimeStoreError;
 
+/// 日志文件的修改时刻（纳秒）；平台不支持时按 0。
+fn log_mtime_ns(metadata: &std::fs::Metadata) -> i64 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|elapsed| i64::try_from(elapsed.as_nanos()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
+}
+
 /// 单次重放的记录数：与写路径的批次规模同量级，避免一次把整条日志读进内存。
 const REBUILD_BATCH_RECORDS: usize = 256;
 
@@ -97,6 +107,50 @@ impl SqliteRuntimeStore {
                 Ok(_) => rebuilt += 1,
                 Err(error) => axon_logger::warning(&format!(
                     "启动投影重建失败，保留原投影: session={} error={error}",
+                    session_id.as_str()
+                )),
+            }
+        }
+        Ok(rebuilt)
+    }
+
+    /// Daemon 启动时按日志身份对账：长度或修改时刻与投影时不一致，说明日志被重写、
+    /// 截断或整体替换过，投影已经与日志脱钩。返回重建的会话数。
+    pub fn reconcile_log_identities(&self) -> Result<usize, RuntimeStoreError> {
+        let rows = self.with_read_connection(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT i.session_id, i.projected_tail, i.log_len, i.log_mtime_ns, \
+                        s.last_event_sequence \
+                   FROM projection_log_identity AS i \
+                   JOIN sessions AS s ON s.session_id = i.session_id",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        })?;
+        let mut rebuilt = 0usize;
+        for (raw, tail, len, mtime, event_tail) in rows {
+            let Ok(session_id) = DaemonSessionId::new(raw) else {
+                continue;
+            };
+            let metadata = std::fs::metadata(self.event_log(&session_id).path()).ok();
+            let same_file = metadata.as_ref().is_some_and(|meta| {
+                i64::try_from(meta.len()).ok() == Some(len) && log_mtime_ns(meta) == mtime
+            });
+            if same_file && tail == event_tail {
+                continue;
+            }
+            match self.rebuild_session_projections(&session_id) {
+                Ok(_) => rebuilt += 1,
+                Err(error) => axon_logger::warning(&format!(
+                    "日志身份对不上且重建失败，保留原投影: session={} error={error}",
                     session_id.as_str()
                 )),
             }

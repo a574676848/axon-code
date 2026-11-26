@@ -198,7 +198,10 @@ fn a_lower_version_database_is_migrated_with_its_rows_intact() {
             .expect("写一行待保留数据");
         // 回到 15 版本并删掉本轮新增的表：等价于升级前的存量库。
         connection
-            .execute_batch("DROP TABLE projection_state; PRAGMA user_version = 15;")
+            .execute_batch(
+                "DROP TABLE projection_state; DROP TABLE projection_log_identity; \
+                 PRAGMA user_version = 15;",
+            )
             .expect("构造旧版本库");
     }
 
@@ -209,7 +212,7 @@ fn a_lower_version_database_is_migrated_with_its_rows_intact() {
             connection.query_row("PRAGMA user_version", [], |row| row.get(0))
         })
         .expect("读版本");
-    assert_eq!(version, 16, "迁移后版本号必须推进到当前版本");
+    assert_eq!(version, 17, "迁移后版本号必须推进到当前版本");
     let kept: i64 = migrated
         .with_read_connection(|connection| {
             connection.query_row(

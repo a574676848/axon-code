@@ -363,3 +363,50 @@ fn rebuilding_replays_the_log_into_all_three_projections() {
     let row = activity.get(interaction).expect("重建后必须有逐轮事实");
     assert_eq!(row.answer_text.as_deref(), Some("重建答案"));
 }
+
+/// 投影成功后记下日志身份；磁盘上的日志被改写后，启动对账必须能发现并重建。
+#[test]
+fn log_identity_is_recorded_and_reconcile_detects_a_rewrite() {
+    let (store, session_id, _host) = fixture("projection-identity");
+    let metrics = axon_eventlog::TurnMetrics {
+        turn_id: "turn-1".to_owned(),
+        active_ms: 300,
+        ..axon_eventlog::TurnMetrics::default()
+    };
+    let records = vec![axon_eventlog::RuntimeEventRecord::new(
+        1,
+        1_000,
+        axon_eventlog::RuntimeEventKind::TurnMetrics,
+        serde_json::to_value(&metrics).expect("指标序列化"),
+    )];
+    axon_eventlog::append_once(&store.event_log(&session_id), 1, 1_000, &records)
+        .expect("写事件日志");
+    let batch = [metrics_event("turn-1", 300)];
+    submit(&store, &session_id, 1, &batch, Some("desktop"), 10, false);
+
+    let recorded: i64 = store
+        .with_read_connection(|connection| {
+            connection.query_row(
+                "SELECT log_len FROM projection_log_identity WHERE session_id=?1",
+                [session_id.as_str()],
+                |row| row.get(0),
+            )
+        })
+        .expect("投影后必须记下日志身份");
+    assert!(recorded > 0, "身份里的日志长度必须来自真实文件");
+
+    // 模拟外部改写：把落库的长度改掉，等价于日志被另一份内容替换。
+    store
+        .with_read_connection(|connection| {
+            connection
+                .execute(
+                    "UPDATE projection_log_identity SET log_len = log_len + 1 WHERE session_id=?1",
+                    [session_id.as_str()],
+                )
+                .map(|_| ())
+        })
+        .expect("改写身份");
+
+    let rebuilt = store.reconcile_log_identities().expect("对账必须成功");
+    assert_eq!(rebuilt, 1, "身份对不上必须重建该会话");
+}

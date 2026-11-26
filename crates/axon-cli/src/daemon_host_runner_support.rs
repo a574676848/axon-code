@@ -190,5 +190,11 @@ pub(super) fn open_runtime_store(runtime_root: &std::path::Path) -> SqliteRuntim
         Ok(count) => axon_logger::info(&format!("启动投影重建完成：{count} 个会话")),
         Err(error) => axon_logger::warning(&format!("启动投影对账失败，跳过重建：{error}")),
     }
+    // 再按日志身份对账：水位看不出「同样长度的另一份日志」，长度与修改时刻可以。
+    match store.reconcile_log_identities() {
+        Ok(0) => {}
+        Ok(count) => axon_logger::info(&format!("日志身份对账重建完成：{count} 个会话")),
+        Err(error) => axon_logger::warning(&format!("日志身份对账失败：{error}")),
+    }
     store
 }

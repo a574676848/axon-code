@@ -38,7 +38,8 @@ impl SchemaKind {
             // 14：删掉无人使用的 turn_activity_latest 索引；thread_turn_facts 增 turn_sequence。
             // 15：新增 context_snapshots 会话级上下文快照投影（界面占用读数与剩余量同源）。
             // 16：新增 projection_state 投影水位（异步投影补齐的起点，只加表）。
-            Self::Control => 16,
+            // 17：新增 projection_log_identity 日志身份（长度与修改时刻），用于发现日志被重写。
+            Self::Control => 17,
             // 2：三张保留期表各增一个以 expires_at_ms 前导的清理索引，清批不再整索引扫描。
             Self::Outbox => 2,
         }
@@ -53,7 +54,11 @@ impl SchemaKind {
     const fn migrations(self) -> &'static [(i64, &'static [&'static str])] {
         match self {
             // 15 升 16：投影水位表。旧库打开时补建，新库由 DDL 直接建。
-            Self::Control => &[(15, &[PROJECTION_STATE_DDL])],
+            // 16 升 17：日志身份表，用来发现「事件日志被外部重写、投影还停在旧内容」。
+            Self::Control => &[
+                (15, &[PROJECTION_STATE_DDL]),
+                (16, &[PROJECTION_LOG_IDENTITY_DDL]),
+            ],
             Self::Outbox => &[],
         }
     }
@@ -64,7 +69,12 @@ impl SchemaKind {
     /// 模块（单文件行数硬限）。片段顺序不影响建表结果，外键引用在 SQLite 首次使用时才校验。
     const fn ddl(self) -> &'static [&'static str] {
         match self {
-            Self::Control => &[CONTROL_DDL, CONTEXT_SNAPSHOT_DDL, PROJECTION_STATE_DDL],
+            Self::Control => &[
+                CONTROL_DDL,
+                CONTEXT_SNAPSHOT_DDL,
+                PROJECTION_STATE_DDL,
+                PROJECTION_LOG_IDENTITY_DDL,
+            ],
             Self::Outbox => &[OUTBOX_DDL],
         }
     }
@@ -78,6 +88,20 @@ const PROJECTION_STATE_DDL: &str = "
     CREATE TABLE IF NOT EXISTS projection_state (
         session_id TEXT PRIMARY KEY,
         last_projected_seq INTEGER NOT NULL DEFAULT 0,
+        updated_at_ms INTEGER NOT NULL
+    );
+";
+
+/// 投影对应的日志身份：长度与修改时刻。
+///
+/// 事件日志被重写、截断或整体替换时，长度与修改时刻都会变；投影水位只认序号，看不出
+/// 「同样长度的另一份日志」。启动时比对这张表与磁盘现状，对不上就重建该会话的投影。
+const PROJECTION_LOG_IDENTITY_DDL: &str = "
+    CREATE TABLE IF NOT EXISTS projection_log_identity (
+        session_id TEXT PRIMARY KEY,
+        projected_tail INTEGER NOT NULL,
+        log_len INTEGER NOT NULL,
+        log_mtime_ns INTEGER NOT NULL,
         updated_at_ms INTEGER NOT NULL
     );
 ";

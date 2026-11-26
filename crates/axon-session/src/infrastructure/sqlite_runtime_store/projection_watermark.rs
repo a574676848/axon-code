@@ -14,6 +14,8 @@ use super::super::SqliteRuntimeStore;
 use super::super::helpers::{i64_value, storage};
 use axon_domain::DaemonSessionId;
 
+use crate::ports::RuntimeStoreError;
+
 /// 这一批是否已经投影过；已投影过时返回挡住它的水位。
 ///
 /// 判据是「批首序号不大于水位」：整批是同一次提交，已投影过就整批跳过，不能只跳过累加
@@ -53,7 +55,8 @@ pub(super) fn advance(
                     i64_value(now_ms)?
                 ],
             )
-            .map_err(storage)
+            .map_err(storage)?;
+        record_log_identity(&connection, store, session_id, start_sequence, now_ms)
     });
     if let Err(error) = written {
         report(&format!(
@@ -130,6 +133,49 @@ pub(super) fn reset_if_rewound(
             false
         }
     }
+}
+
+/// 记下这次投影对应的日志身份；日志文件不存在时跳过。
+///
+/// 只取 `metadata`，不读内容：长度与修改时刻足以发现重写与替换，成本是一次 stat。
+fn record_log_identity(
+    connection: &rusqlite::Connection,
+    store: &SqliteRuntimeStore,
+    session_id: &DaemonSessionId,
+    projected_tail: u64,
+    now_ms: u64,
+) -> Result<(), RuntimeStoreError> {
+    let path = store.event_log(session_id).path();
+    let Ok(metadata) = std::fs::metadata(&path) else {
+        return Ok(());
+    };
+    let len = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
+    let mtime_ns = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|elapsed| i64::try_from(elapsed.as_nanos()).unwrap_or(i64::MAX))
+        .unwrap_or(0);
+    connection
+        .execute(
+            "INSERT INTO projection_log_identity \
+             (session_id, projected_tail, log_len, log_mtime_ns, updated_at_ms) \
+         VALUES(?1,?2,?3,?4,?5) \
+         ON CONFLICT(session_id) DO UPDATE SET \
+             projected_tail=excluded.projected_tail, \
+             log_len=excluded.log_len, \
+             log_mtime_ns=excluded.log_mtime_ns, \
+             updated_at_ms=excluded.updated_at_ms",
+            params![
+                session_id.as_str(),
+                i64_value(projected_tail)?,
+                len,
+                mtime_ns,
+                i64_value(now_ms)?
+            ],
+        )
+        .map_err(storage)?;
+    Ok(())
 }
 
 /// 读取水位；没有这一行（从未投影过）时返回 `None`。
