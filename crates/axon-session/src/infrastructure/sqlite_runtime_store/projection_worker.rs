@@ -149,6 +149,13 @@ pub(super) fn project_events(
     now_ms: u64,
 ) -> Result<(), RuntimeStoreError> {
     /*
+     * 逐轮事实的准备（解析、缺工具名时的日志回扫）先做完：文件 IO 不放进写事务，否则
+     * 无工具的普通回合每轮都要持着写锁解压事件日志。
+     */
+    let activities = super::super::turn_activity_projection::prepare_turn_activities(
+        store, session_id, events, now_ms,
+    )?;
+    /*
      * 三个投影、水位与日志身份放进同一次 IMMEDIATE 提交：任一失败整批回滚，不会留下
      * 「逐轮读数写了、累计指标没写」的半批状态，水位也不会先于投影推进。
      */
@@ -156,11 +163,9 @@ pub(super) fn project_events(
     let transaction = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| RuntimeStoreError::Storage(error.to_string()))?;
-    super::super::turn_activity_projection::project_turn_activity_in(
-        store,
+    super::super::turn_activity_projection::write_turn_activities(
         &transaction,
-        session_id,
-        events,
+        &activities,
         now_ms,
     )?;
     super::super::context_snapshot_projection::project_context_snapshot_in(

@@ -107,6 +107,38 @@ fn expired_goal_less_execution_quarantines_without_touching_goal_ledgers() {
     );
 }
 
+#[test]
+fn goal_less_work_items_do_not_starve_the_completion_scan() {
+    use crate::ports::ClientDeliveryStore as _;
+
+    let directory = axon_test_support::test_temp_dir();
+    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    let session_id = DaemonSessionId::new("session-completion-scan").expect("session");
+    store.create_session(&session_id, ".", 10).expect("session");
+    // 无目标轮次时间上排在目标执行之前：它们排不出通知，也不得占住候选集。
+    insert_goal_less_work_item(&store, "turn-scan-older", &session_id, "completed", None);
+    insert_goal_less_work_item(&store, "turn-scan-newer", &session_id, "completed", None);
+
+    let connection = rusqlite::Connection::open(store.path()).expect("打开数据库");
+    connection
+        .execute(
+            "INSERT INTO work_items(execution_id,goal_id,session_id,kind,payload_json,attempt,priority,status,created_at_ms,updated_at_ms) \
+             VALUES('execution-goal-scan','goal-scan',?1,'goal','{}',1,0,'completed',30,30)",
+            rusqlite::params![session_id.as_str()],
+        )
+        .expect("插入目标执行行");
+    drop(connection);
+
+    let candidates = store
+        .unnotified_conclusive_executions(8)
+        .expect("补偿扫描候选必须可读");
+    assert_eq!(
+        candidates,
+        vec!["execution-goal-scan".to_owned()],
+        "只有目标执行能产出完成通知，无目标的会话轮次不得把候选集占满"
+    );
+}
+
 /// 暂停与取消都要真的让在途轮次停下来：标记落库，运行侧按会话查得到。
 #[test]
 fn execution_stop_marks_the_running_work_item_for_its_session() {

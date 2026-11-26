@@ -103,7 +103,9 @@ pub(super) fn advance_in(
             ],
         )
         .map_err(storage)?;
-    record_log_identity(connection, store, session_id, start_sequence, now_ms)
+    // 身份只是对账辅助数据：写失败记日志，不连坐三张投影与水位。
+    record_log_identity(connection, store, session_id, start_sequence, now_ms);
+    Ok(())
 }
 
 /// 事件日志序号回退后清空水位。
@@ -184,10 +186,10 @@ fn record_log_identity(
     session_id: &DaemonSessionId,
     projected_tail: u64,
     now_ms: u64,
-) -> Result<(), RuntimeStoreError> {
+) {
     let path = store.event_log(session_id).path();
     let Ok(metadata) = std::fs::metadata(&path) else {
-        return Ok(());
+        return;
     };
     let len = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
     let mtime_ns = log_mtime_ns(&metadata);
@@ -197,20 +199,28 @@ fn record_log_identity(
              (session_id, projected_tail, log_len, log_mtime_ns, updated_at_ms) \
          VALUES(?1,?2,?3,?4,?5) \
          ON CONFLICT(session_id) DO UPDATE SET \
-             projected_tail=excluded.projected_tail, \
-             log_len=excluded.log_len, \
-             log_mtime_ns=excluded.log_mtime_ns, \
+             projected_tail=CASE WHEN projection_log_identity.projected_tail < 0 \
+                 THEN -1 ELSE excluded.projected_tail END, \
+             log_len=CASE WHEN projection_log_identity.projected_tail < 0 \
+                 THEN projection_log_identity.log_len ELSE excluded.log_len END, \
+             log_mtime_ns=CASE WHEN projection_log_identity.projected_tail < 0 \
+                 THEN projection_log_identity.log_mtime_ns ELSE excluded.log_mtime_ns END, \
              updated_at_ms=excluded.updated_at_ms",
             params![
                 session_id.as_str(),
-                i64_value(projected_tail)?,
+                i64::try_from(projected_tail).unwrap_or(i64::MAX),
                 len,
                 mtime_ns,
-                i64_value(now_ms)?
+                i64::try_from(now_ms).unwrap_or(i64::MAX)
             ],
         )
-        .map_err(storage)?;
-    Ok(())
+        .map(|_| ())
+        .unwrap_or_else(|error| {
+            report(&format!(
+                "投影日志身份写入失败，下次启动可能漏检: session={} error={error}",
+                session_id.as_str()
+            ))
+        });
 }
 
 /// 写路径上的一次身份对账：日志被外部重写或替换时，把该会话标记为待重建。

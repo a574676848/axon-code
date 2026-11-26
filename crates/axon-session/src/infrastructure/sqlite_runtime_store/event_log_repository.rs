@@ -158,6 +158,8 @@ fn append_events_with(
     for (record, runtime) in records.iter_mut().zip(&runtime_records) {
         record.sequence = runtime.sequence;
     }
+    // 事件面追加是守护进程最大的写入源：WAL 回写线程按这个计数判断攒够了没有。
+    super::record_write_batch();
     // 重排会改掉分配时的序号：投影水位跟落盘的真实批首序号走，才与日志里的帧对得上。
     let projected_from = records.first().map_or(start, |record| record.sequence);
     /*

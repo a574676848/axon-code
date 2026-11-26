@@ -183,6 +183,25 @@ impl Drop for PooledConnection<'_> {
     }
 }
 
+/// 进程内已提交的事件追加批数：WAL 回写线程据此判断攒够了没有。
+static WRITE_BATCHES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 记一次事件追加提交。写路径在追加成功后调用，覆盖真正的写入源。
+pub fn record_write_batch() {
+    WRITE_BATCHES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 自上次回写以来累计的写批次数。
+#[must_use]
+pub fn pending_write_batches() -> u64 {
+    WRITE_BATCHES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 回写成功后清零。
+pub fn reset_write_batches() {
+    WRITE_BATCHES.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
 #[cfg(test)]
 mod wal_autocheckpoint_tests {
     use super::*;

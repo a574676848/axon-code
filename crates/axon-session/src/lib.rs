@@ -45,7 +45,8 @@ pub use infrastructure::{
     SESSION_EVENT_INLINE_PAYLOAD_LIMIT_BYTES, SESSION_EVENT_MISSING_ARCHIVE_TYPE,
     SqliteRuntimeStore, ThreadTurnFacts, TurnActivity, WalCheckpoint, body_archive_path,
     body_archive_ref, conclusive_work_items_without_terminal_kind_sql,
-    disable_automatic_wal_checkpoint, read_body_archive,
+    disable_automatic_wal_checkpoint, pending_write_batches, read_body_archive, record_write_batch,
+    reset_write_batches,
 };
 pub use ports::ExecutionSettlement;
 pub use ports::ThreadActivationSnapshot;

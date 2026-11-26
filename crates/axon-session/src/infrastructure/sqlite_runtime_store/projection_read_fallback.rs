@@ -15,16 +15,18 @@
 //! 模块由同目录的 `context_snapshot_repository` 声明：两条读路径共用同一套水位、上界与
 //! 留痕规则。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex, PoisonError};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use axon_domain::DaemonSessionId;
-use axon_eventlog::{EventLogError, RuntimeEventRecord, TurnMetrics, TurnOutcome};
+use axon_eventlog::{EventLogError, RuntimeEventRecord, TurnMetrics};
 use rusqlite::{OptionalExtension, params};
 
 use super::super::SqliteRuntimeStore;
-use super::super::session_metrics_repository::{SessionMetricsSnapshot, read_metrics};
+use super::super::session_metrics_repository::{
+    MetricsRow, SessionMetricsSnapshot, accumulate_turn_metrics, read_metrics,
+};
 use super::{SOURCE_USAGE, UsageReading};
 use crate::domain::ContextSnapshot;
 use crate::ports::RuntimeStoreError;
@@ -78,15 +80,6 @@ const COMPOSITION_FIELDS: [&str; 3] = [
 
 /// 单轮指标的事件类型。
 const TURN_METRICS_EVENT_TYPE: &str = "turn_metrics";
-
-/// 直方图桶边界（毫秒）：取值与 `session_metrics_repository` 完全一致，回源与投影才能
-/// 落到同一排桶里。
-const HISTOGRAM_BOUNDS_MS: [u64; 15] = [
-    1, 2, 5, 10, 20, 50, 100, 200, 500, 1_000, 2_000, 5_000, 10_000, 30_000, 60_000,
-];
-
-/// 直方图桶数：15 个上界加一个溢出桶。
-const HISTOGRAM_BUCKETS: usize = 16;
 
 /// 回源留痕的限流表：键是「会话标识加类别」，值是上次留痕时刻。
 static FALLBACK_LOG: LazyLock<Mutex<HashMap<(String, &'static str), u64>>> =
@@ -246,7 +239,7 @@ fn with_reading(projected: Option<ContextSnapshot>, reading: UsageReading) -> Co
 /// 投影落后时按事件日志补齐会话累计指标。
 ///
 /// 投影行缺失但日志里有未投影轮次时同样给出结果：那正是「投影还没跑起来就读」的场景。
-/// 边车索引不可用时直接按投影值返回：此时定向读会退化成整文件解帧。
+/// 累加口径复用 `session_metrics_repository`：回源与投影只有一份实现，不会分叉。
 pub(super) fn freshen_metrics(
     store: &SqliteRuntimeStore,
     session_id: &DaemonSessionId,
@@ -254,54 +247,52 @@ pub(super) fn freshen_metrics(
     lag: &ProjectionLag,
 ) -> Option<SessionMetricsSnapshot> {
     let started = Instant::now();
+    if lag.pending_events() == 0 {
+        return projected;
+    }
     let path = store.event_log(session_id).path();
+    // 边车索引不可用时定向读会退化成整文件解帧，直接按投影值返回。
     if !axon_eventlog::index_is_fresh(&path) {
         report(LogKind::Skipped, session_id, lag, started, "边车索引不可用");
         return projected;
     }
-    let delta = match metrics_delta(store, session_id, lag) {
-        Ok(delta) => delta,
+    match metrics_after_watermark(store, session_id, lag, projected.as_ref()) {
+        Ok(snapshot) => {
+            report(
+                LogKind::Observed,
+                session_id,
+                lag,
+                started,
+                "水位区间已读完",
+            );
+            Some(snapshot)
+        }
         Err(reason) => {
             report(LogKind::Failed, session_id, lag, started, &reason);
-            return projected;
+            projected
         }
-    };
-    let detail = "水位区间已读完";
-    report(LogKind::Observed, session_id, lag, started, detail);
-    match projected {
-        Some(mut snapshot) => {
-            delta.apply(&mut snapshot);
-            Some(snapshot)
-        }
-        None if !delta.is_empty() => {
-            let mut snapshot = SessionMetricsSnapshot::default();
-            delta.apply(&mut snapshot);
-            Some(snapshot)
-        }
-        None => None,
     }
 }
 
-/// 水位之后那一段事件里的累计增量；读不全、越界或读失败时给出原因。
-fn metrics_delta(
+/// 从投影值出发，把水位之后区间里的指标按同一套累加口径叠加一遍。
+fn metrics_after_watermark(
     store: &SqliteRuntimeStore,
     session_id: &DaemonSessionId,
     lag: &ProjectionLag,
-) -> Result<MetricsDelta, String> {
+    projected: Option<&SessionMetricsSnapshot>,
+) -> Result<SessionMetricsSnapshot, String> {
     let pending = lag.pending_events();
-    if pending == 0 {
-        return Ok(MetricsDelta::default());
-    }
     if pending > METRICS_GAP_MAX_EVENTS {
         return Err(format!("跨度 {pending} 超出上界 {METRICS_GAP_MAX_EVENTS}"));
     }
+    let base = projected.cloned().unwrap_or_default();
+    let mut row = MetricsRow::from_snapshot(&base);
     let limit = usize::try_from(pending).map_err(|_| "跨度无法换算".to_owned())?;
     let path = store.event_log(session_id).path();
     let started = Instant::now();
     let mut cursor = lag.last_projected_seq;
     let mut first: Option<u64> = None;
     let mut total = 0_usize;
-    let mut turns: Vec<(String, TurnMetrics)> = Vec::new();
     let mut retained = 0_usize;
     while total < limit {
         let remaining = limit - total;
@@ -319,19 +310,19 @@ fn metrics_delta(
         let want = METRICS_CHUNK_EVENTS.min(remaining);
         let records = axon_eventlog::read_after(&path, cursor, want).map_err(|e| e.to_string())?;
         let exhausted = records.len() < want;
-        // 一批读完立即释放整条记录：往后只留累加需要的字段，不把区间与副本同时留在内存里。
+        // 一批读完立即释放整条记录：只留累加需要的字段，不把区间与副本同时留在内存里。
         for record in records {
             first.get_or_insert(record.sequence);
             cursor = record.sequence;
             total = total.saturating_add(1);
-            let Some(turn) = turn_metrics_of(record) else {
+            let Some((metrics, channel, emitted_at_ms)) = turn_metrics_of(record) else {
                 continue;
             };
-            retained += std::mem::size_of_val(&turn) + turn.0.len() + turn.1.turn_id.len();
-            turns.push(turn);
+            retained += std::mem::size_of_val(&metrics) + metrics.turn_id.len();
             if retained > METRICS_BYTES_MAX {
                 return Err(format!("保留字节超 {METRICS_BYTES_MAX}，{total}/{limit}"));
             }
+            accumulate_turn_metrics(&mut row, &metrics, channel.as_deref(), emitted_at_ms);
         }
         if exhausted {
             break;
@@ -343,223 +334,21 @@ fn metrics_delta(
     if !complete {
         return Err(format!("水位区间读不全：期望 {limit} 条，实得 {total} 条"));
     }
-    let owners: Vec<&str> = turns.iter().map(|(owner, _)| owner.as_str()).collect();
-    let counted = counted_interactions(store, session_id, &owners)
-        .ok_or_else(|| "已计入轮次的查证失败".to_owned())?;
-    let mut delta = MetricsDelta::default();
-    for (owner, metrics) in &turns {
-        // 已经在投影里计过数的轮次不再累加：水位是批首序号，最后一批通常早已投影完。
-        if counted.contains(owner) {
-            continue;
-        }
-        delta.add(metrics);
-    }
-    Ok(delta)
+    Ok(SessionMetricsSnapshot::from_row(&row))
 }
 
-/// 一条事件是否是一轮的指标；是则给出归属轮次与指标。
+/// 一条事件是否是一轮的指标；是则给出指标、渠道与记录时刻。
 ///
-/// 归属取记录的交互列，老记录没有该列时回落到载荷里的 `turnId`。两者都取不到时丢掉这条
-/// 记录：无法证明它有没有被投影计入，宁可少算也不能重复累加。载荷按值取出，避免留下副本。
-fn turn_metrics_of(record: RuntimeEventRecord) -> Option<(String, TurnMetrics)> {
+/// 不再按「已计入轮次」去重：水位记的是已投影到的最后一条序号，区间里的事件都还没进
+/// 累计值，全部累加才对；去重会在部分批次失败时把该轮永久少算。
+fn turn_metrics_of(record: RuntimeEventRecord) -> Option<(TurnMetrics, Option<String>, u64)> {
     if record.event_type.as_str() != TURN_METRICS_EVENT_TYPE {
         return None;
     }
-    let mut metrics = serde_json::from_value::<TurnMetrics>(record.payload).ok()?;
-    let owner = record
-        .interaction_id
-        .filter(|owner| !owner.is_empty())
-        .unwrap_or_else(|| std::mem::take(&mut metrics.turn_id));
-    (!owner.is_empty()).then_some((owner, metrics))
-}
-
-/// 已经在投影里计过数的轮次。
-///
-/// 判据是 `turn_activity` 里已经有这一轮的读数：三个投影同批执行，`turn_activity` 先于
-/// 累计指标，因此「累计指标计过这一轮」必然推出「`turn_activity` 有它的读数」。查证失败
-/// 返回 `None`：拿不到已计入集合就无法证明不会重复累加，此时放弃回源。
-fn counted_interactions(
-    store: &SqliteRuntimeStore,
-    session_id: &DaemonSessionId,
-    owners: &[&str],
-) -> Option<HashSet<String>> {
-    if owners.is_empty() {
-        return Some(HashSet::new());
-    }
-    let unique: Vec<&str> = owners
-        .iter()
-        .copied()
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect();
-    let mut bindings: Vec<&str> = Vec::with_capacity(unique.len() + 1);
-    bindings.push(session_id.as_str());
-    bindings.extend(unique.iter().copied());
-    let placeholders = vec!["?"; unique.len()].join(",");
-    let sql = format!(
-        "SELECT interaction_id FROM turn_activity \
-          WHERE session_id = ?1 AND metrics_json IS NOT NULL \
-            AND interaction_id IN ({placeholders})"
-    );
-    let found = store.with_read_connection(|connection| {
-        let mut statement = connection.prepare(&sql)?;
-        let rows = statement.query_map(rusqlite::params_from_iter(bindings.iter()), |row| {
-            row.get::<_, String>(0)
-        })?;
-        let mut found = HashSet::new();
-        for interaction_id in rows.flatten() {
-            found.insert(interaction_id);
-        }
-        Ok(found)
-    });
-    found.ok()
-}
-
-/// 投影落后时按日志补齐的累计增量。
-///
-/// 字段与 `session_metrics_repository::accumulate_turn_metrics` 一一对应：同一批
-/// `turn_metrics` 交给投影与交给这里，得到的总量必须一致。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(super) struct MetricsDelta {
-    turn_count: u64,
-    turn_succeeded: u64,
-    turn_failed: u64,
-    turn_interrupted: u64,
-    total_active_ms: u64,
-    total_provider_ms: u64,
-    total_tool_ms: u64,
-    max_turn_ms: u64,
-    ttft_sum_ms: u64,
-    ttft_samples: u64,
-    ttft_max_ms: u64,
-    ttft_histogram: Vec<u64>,
-    turn_histogram: Vec<u64>,
-    total_input_tokens: u64,
-    total_output_tokens: u64,
-    total_reasoning_tokens: u64,
-    total_cache_read_tokens: u64,
-    total_cache_write_tokens: u64,
-    total_tool_calls: u64,
-}
-
-impl MetricsDelta {
-    /// 这一批增量是否什么都没加；轮次数是唯一入口，它为 0 就说明一条轮次也没加。
-    fn is_empty(&self) -> bool {
-        self.turn_count == 0
-    }
-
-    /// 把一轮指标叠加进增量；逐字段口径与投影的累加完全一致。
-    fn add(&mut self, metrics: &TurnMetrics) {
-        self.turn_count = self.turn_count.saturating_add(1);
-        match metrics.outcome {
-            TurnOutcome::Succeeded => {
-                self.turn_succeeded = self.turn_succeeded.saturating_add(1);
-            }
-            TurnOutcome::Failed => self.turn_failed = self.turn_failed.saturating_add(1),
-            TurnOutcome::Interrupted => {
-                self.turn_interrupted = self.turn_interrupted.saturating_add(1);
-            }
-        }
-        self.total_active_ms = self.total_active_ms.saturating_add(metrics.active_ms);
-        self.total_provider_ms = self
-            .total_provider_ms
-            .saturating_add(metrics.provider_duration_ms);
-        self.total_tool_ms = self.total_tool_ms.saturating_add(metrics.tool_ms);
-        self.max_turn_ms = self.max_turn_ms.max(metrics.active_ms);
-        if let Some(ttft) = metrics.ttft_ms {
-            self.ttft_sum_ms = self.ttft_sum_ms.saturating_add(ttft);
-            self.ttft_samples = self.ttft_samples.saturating_add(1);
-            self.ttft_max_ms = self.ttft_max_ms.max(ttft);
-            add_bucket(&mut self.ttft_histogram, ttft);
-        }
-        add_bucket(&mut self.turn_histogram, metrics.active_ms);
-        self.total_input_tokens = self.total_input_tokens.saturating_add(metrics.input_tokens);
-        self.total_output_tokens = self
-            .total_output_tokens
-            .saturating_add(metrics.output_tokens);
-        self.total_reasoning_tokens = self
-            .total_reasoning_tokens
-            .saturating_add(metrics.reasoning_tokens);
-        self.total_cache_read_tokens = self
-            .total_cache_read_tokens
-            .saturating_add(metrics.cache_read_tokens);
-        self.total_cache_write_tokens = self
-            .total_cache_write_tokens
-            .saturating_add(metrics.cache_write_tokens);
-        self.total_tool_calls = self
-            .total_tool_calls
-            .saturating_add(u64::from(metrics.tool_calls));
-    }
-
-    /// 把增量叠加到投影行上；只做累加与取大，不覆盖任何单调量。
-    fn apply(&self, snapshot: &mut SessionMetricsSnapshot) {
-        snapshot.turn_count = snapshot.turn_count.saturating_add(self.turn_count);
-        snapshot.turn_succeeded = snapshot.turn_succeeded.saturating_add(self.turn_succeeded);
-        snapshot.turn_failed = snapshot.turn_failed.saturating_add(self.turn_failed);
-        snapshot.turn_interrupted = snapshot
-            .turn_interrupted
-            .saturating_add(self.turn_interrupted);
-        snapshot.total_active_ms = snapshot
-            .total_active_ms
-            .saturating_add(self.total_active_ms);
-        snapshot.total_provider_ms = snapshot
-            .total_provider_ms
-            .saturating_add(self.total_provider_ms);
-        snapshot.total_tool_ms = snapshot.total_tool_ms.saturating_add(self.total_tool_ms);
-        snapshot.max_turn_ms = snapshot.max_turn_ms.max(self.max_turn_ms);
-        snapshot.ttft_sum_ms = snapshot.ttft_sum_ms.saturating_add(self.ttft_sum_ms);
-        snapshot.ttft_samples = snapshot.ttft_samples.saturating_add(self.ttft_samples);
-        snapshot.ttft_max_ms = snapshot.ttft_max_ms.max(self.ttft_max_ms);
-        merge_histogram(&mut snapshot.ttft_histogram, &self.ttft_histogram);
-        merge_histogram(&mut snapshot.turn_histogram, &self.turn_histogram);
-        snapshot.total_input_tokens = snapshot
-            .total_input_tokens
-            .saturating_add(self.total_input_tokens);
-        snapshot.total_output_tokens = snapshot
-            .total_output_tokens
-            .saturating_add(self.total_output_tokens);
-        snapshot.total_reasoning_tokens = snapshot
-            .total_reasoning_tokens
-            .saturating_add(self.total_reasoning_tokens);
-        snapshot.total_cache_read_tokens = snapshot
-            .total_cache_read_tokens
-            .saturating_add(self.total_cache_read_tokens);
-        snapshot.total_cache_write_tokens = snapshot
-            .total_cache_write_tokens
-            .saturating_add(self.total_cache_write_tokens);
-        snapshot.total_tool_calls = snapshot
-            .total_tool_calls
-            .saturating_add(self.total_tool_calls);
-    }
-}
-
-/// 把一段直方图并进另一段；长度不足时补齐到统一桶数。
-fn merge_histogram(target: &mut Vec<u64>, delta: &[u64]) {
-    if delta.is_empty() {
-        return;
-    }
-    if target.len() < HISTOGRAM_BUCKETS {
-        target.resize(HISTOGRAM_BUCKETS, 0);
-    }
-    for (index, count) in delta.iter().enumerate() {
-        if let Some(slot) = target.get_mut(index) {
-            *slot = slot.saturating_add(*count);
-        }
-    }
-}
-
-/// 记一个样本进直方图；桶边界与投影一致，落在哪个桶由「首个大于它的上界」决定。
-fn add_bucket(histogram: &mut Vec<u64>, value_ms: u64) {
-    if histogram.len() < HISTOGRAM_BUCKETS {
-        histogram.resize(HISTOGRAM_BUCKETS, 0);
-    }
-    let index = HISTOGRAM_BOUNDS_MS
-        .iter()
-        .position(|bound| value_ms < *bound)
-        .unwrap_or(HISTOGRAM_BUCKETS - 1);
-    if let Some(slot) = histogram.get_mut(index) {
-        *slot = slot.saturating_add(1);
-    }
+    let emitted_at_ms = record.emitted_at_ms;
+    let channel = record.origin_channel;
+    let metrics = serde_json::from_value::<TurnMetrics>(record.payload).ok()?;
+    Some((metrics, channel, emitted_at_ms))
 }
 
 impl SqliteRuntimeStore {

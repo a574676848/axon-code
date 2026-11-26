@@ -102,7 +102,7 @@ pub(super) fn rebuild_metrics(
 }
 
 /// 把一轮指标叠加到内存行上；增量投影与全量重放共用同一套口径。
-fn accumulate_turn_metrics(
+pub(super) fn accumulate_turn_metrics(
     row: &mut MetricsRow,
     metrics: &TurnMetrics,
     channel: Option<&str>,
@@ -262,7 +262,7 @@ pub struct SessionMetricsSnapshot {
 }
 
 #[derive(Default)]
-struct MetricsRow {
+pub(super) struct MetricsRow {
     turn_count: u64,
     turn_succeeded: u64,
     turn_failed: u64,
@@ -290,6 +290,76 @@ struct MetricsRow {
     first_turn_at_ms: Option<u64>,
     last_turn_at_ms: Option<u64>,
     updated_at_ms: u64,
+}
+
+impl MetricsRow {
+    /// 由可读快照构造：回源要从投影值出发继续累加，必须共用同一套字段。
+    pub(super) fn from_snapshot(snapshot: &SessionMetricsSnapshot) -> Self {
+        Self {
+            turn_count: snapshot.turn_count,
+            turn_succeeded: snapshot.turn_succeeded,
+            turn_failed: snapshot.turn_failed,
+            turn_interrupted: snapshot.turn_interrupted,
+            total_active_ms: snapshot.total_active_ms,
+            total_provider_ms: snapshot.total_provider_ms,
+            total_tool_ms: snapshot.total_tool_ms,
+            max_turn_ms: snapshot.max_turn_ms,
+            ttft_sum_ms: snapshot.ttft_sum_ms,
+            ttft_samples: snapshot.ttft_samples,
+            ttft_max_ms: snapshot.ttft_max_ms,
+            ttft_histogram: snapshot.ttft_histogram.clone(),
+            turn_histogram: snapshot.turn_histogram.clone(),
+            channel_mix: snapshot.channel_mix.clone(),
+            total_input_tokens: snapshot.total_input_tokens,
+            total_output_tokens: snapshot.total_output_tokens,
+            total_reasoning_tokens: snapshot.total_reasoning_tokens,
+            total_cache_read_tokens: snapshot.total_cache_read_tokens,
+            total_cache_write_tokens: snapshot.total_cache_write_tokens,
+            total_tool_calls: snapshot.total_tool_calls,
+            jobs_started: snapshot.jobs_started,
+            jobs_completed: snapshot.jobs_completed,
+            jobs_failed: snapshot.jobs_failed,
+            jobs_running: snapshot.jobs_running,
+            first_turn_at_ms: snapshot.first_turn_at_ms,
+            last_turn_at_ms: snapshot.last_turn_at_ms,
+            updated_at_ms: snapshot.updated_at_ms,
+        }
+    }
+}
+
+impl SessionMetricsSnapshot {
+    /// 由内存行还原：回源算完之后按投影同一口径交回读路径。
+    pub(super) fn from_row(row: &MetricsRow) -> Self {
+        Self {
+            turn_count: row.turn_count,
+            turn_succeeded: row.turn_succeeded,
+            turn_failed: row.turn_failed,
+            turn_interrupted: row.turn_interrupted,
+            total_active_ms: row.total_active_ms,
+            total_provider_ms: row.total_provider_ms,
+            total_tool_ms: row.total_tool_ms,
+            max_turn_ms: row.max_turn_ms,
+            ttft_sum_ms: row.ttft_sum_ms,
+            ttft_samples: row.ttft_samples,
+            ttft_max_ms: row.ttft_max_ms,
+            ttft_histogram: row.ttft_histogram.clone(),
+            turn_histogram: row.turn_histogram.clone(),
+            channel_mix: row.channel_mix.clone(),
+            total_input_tokens: row.total_input_tokens,
+            total_output_tokens: row.total_output_tokens,
+            total_reasoning_tokens: row.total_reasoning_tokens,
+            total_cache_read_tokens: row.total_cache_read_tokens,
+            total_cache_write_tokens: row.total_cache_write_tokens,
+            total_tool_calls: row.total_tool_calls,
+            jobs_started: row.jobs_started,
+            jobs_completed: row.jobs_completed,
+            jobs_failed: row.jobs_failed,
+            jobs_running: row.jobs_running,
+            first_turn_at_ms: row.first_turn_at_ms,
+            last_turn_at_ms: row.last_turn_at_ms,
+            updated_at_ms: row.updated_at_ms,
+        }
+    }
 }
 
 fn add_bucket(histogram: &mut Vec<u64>, value_ms: u64) {

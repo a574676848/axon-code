@@ -220,8 +220,12 @@ impl ClientDeliveryStore for SqliteRuntimeStore {
                 let mut statement = connection
                     .prepare(&format!(
                         // 终态行已搬进历史表：补偿扫描必须走覆盖在途与历史的视图。
+                        //
+                        // 只有目标执行会产出完成通知：没有目标的会话轮次取不到 Goal，永远排不出
+                        // 通知，却始终留在候选集里。按 updated_at_ms 升序分批时它们会把每一批都
+                        // 占满，真正收尾的目标执行永远轮不到，因此这里按 kind 收窄。
                         "SELECT execution_id FROM work_items_all
-                         WHERE status IN ({statuses})
+                         WHERE status IN ({statuses}) AND kind='goal'
                          ORDER BY updated_at_ms ASC, execution_id ASC LIMIT ?1 OFFSET ?2"
                     ))
                     .map_err(storage_error)?;

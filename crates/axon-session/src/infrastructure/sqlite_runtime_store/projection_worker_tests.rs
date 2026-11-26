@@ -469,6 +469,20 @@ fn a_rewritten_log_is_marked_on_the_write_path_and_rebuilt_at_startup() {
         .expect("读标记");
     assert_eq!(marked, -1, "标记值是 -1");
 
+    // 再投影一批：粘滞标记不能被同批的身份写入覆盖，否则启动对账永远看不到它。
+    let later = [metrics_event("turn-2", 150)];
+    submit(&store, &session_id, 2, &later, Some("desktop"), 20, false);
+    let still: i64 = store
+        .with_read_connection(|connection| {
+            connection.query_row(
+                "SELECT projected_tail FROM projection_log_identity WHERE session_id=?1",
+                [session_id.as_str()],
+                |row| row.get(0),
+            )
+        })
+        .expect("读标记");
+    assert_eq!(still, -1, "标记必须粘滞到重建");
+
     let rebuilt = store.reconcile_log_identities().expect("启动对账");
     assert_eq!(rebuilt, 1, "被标记的会话必须重建");
 }

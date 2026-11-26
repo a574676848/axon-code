@@ -190,6 +190,7 @@ impl SqliteRuntimeStore {
                 "context_snapshots",
                 "session_metrics",
                 "projection_state",
+                "projection_log_identity",
             ] {
                 transaction.execute(
                     &format!("DELETE FROM {table} WHERE session_id=?1"),

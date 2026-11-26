@@ -3,7 +3,7 @@
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -30,7 +30,7 @@ pub(super) fn start_background_workers(
         Arc::clone(&host_fenced),
     );
     // 写批次由维护循环累加、由回写线程消费：需要的是「自上次回写以来提交了多少批」。
-    let write_batches = Arc::new(WriteBatchCounter::default());
+    let write_batches = Arc::new(WriteBatchCounter);
     start_primary_turn_worker(
         host.clone(),
         Arc::clone(&workers_running),
@@ -156,17 +156,10 @@ fn run_primary_turn_loop(
     maintenance_signal: Arc<DaemonMaintenanceSignal>,
     write_batches: Arc<WriteBatchCounter>,
 ) {
+    let _ = &write_batches;
     while running.load(Ordering::Acquire) {
         let result = host.primary_turn_tick(SUPERVISOR_BATCH_LIMIT);
         handle_primary_turn_failures(&result);
-        if let Ok(report) = &result {
-            write_batches.record(&[
-                report.claimed,
-                report.understood,
-                report.rejected,
-                report.interrupted,
-            ]);
-        }
         let backlog_remains = result
             .as_ref()
             .is_ok_and(|report| report.claimed >= SUPERVISOR_BATCH_LIMIT);
@@ -211,6 +204,7 @@ fn run_supervisor_loop(
     signal: Arc<DaemonMaintenanceSignal>,
     write_batches: Arc<WriteBatchCounter>,
 ) {
+    let _ = &write_batches;
     let mut last_release_gc = Instant::now();
     let mut last_lsp_sample = Instant::now();
     let mut last_lsp_active = None;
@@ -225,27 +219,10 @@ fn run_supervisor_loop(
             &mut last_active_turns,
         );
         let scheduler = host.scheduler_tick(SCHEDULE_LEASE_DURATION_MS, SUPERVISOR_BATCH_LIMIT);
-        if let Ok(report) = &scheduler {
-            write_batches.record(&[
-                report.claimed,
-                report.interactions_submitted,
-                report.deferred,
-                report.failed,
-            ]);
-        }
         if !handle_host_tick(scheduler, &running, &fenced, "Scheduler") {
             break;
         }
         let supervisor = host.supervisor_tick(SUPERVISOR_BATCH_LIMIT);
-        if let Ok(report) = &supervisor {
-            write_batches.record(&[
-                report.recovered,
-                report.quarantined,
-                report.interrupted_interactions,
-                report.silent_turns_settled,
-                report.pumped,
-            ]);
-        }
         if !handle_host_tick(supervisor, &running, &fenced, "Supervisor") {
             break;
         }
@@ -279,32 +256,17 @@ fn run_cron_loop(cron_adapter: crate::cron_commands::CronDaemonAdapter, running:
 /// 这里只记回执报出来的条目；cron 的回执是格式化摘要，不解析。少记只让回写稍晚（周期
 /// 兜底仍在），多记只多一次空回写（`PASSIVE` 拿不到帧就返回），判据方向不受影响。
 #[derive(Debug, Default)]
-struct WriteBatchCounter {
-    batches: AtomicU64,
-}
+struct WriteBatchCounter;
 
 impl WriteBatchCounter {
-    /// 记下一个 tick 回执里的写批次数。
-    fn record(&self, counts: &[u32]) {
-        let total = counts
-            .iter()
-            .fold(0_u64, |sum, count| sum.saturating_add(u64::from(*count)));
-        if total > 0 {
-            self.batches.fetch_add(total, Ordering::Relaxed);
-        }
-    }
-
-    /// 自上次回写以来累计的写批次数。
+    /// 进程级写批次计数由存储层在每次事件追加提交后累加：它覆盖真正的写入源，
+    /// 而不是 tick 回执里的交互件数。
     fn since_last_checkpoint(&self) -> u64 {
-        self.batches.load(Ordering::Relaxed)
+        axon_session::pending_write_batches()
     }
 
-    /// 回写之后扣掉已经消费掉的批次。用减法而不是清零：回写期间别的线程可能又提交了
-    /// 批次，`swap(0)` 会把它们一起吞掉；计数器只在这里变小，扣减量又来自刚读到的值。
-    fn reset_after_checkpoint(&self, handled: u64) {
-        if handled > 0 {
-            self.batches.fetch_sub(handled, Ordering::Relaxed);
-        }
+    fn reset_after_checkpoint(&self) {
+        axon_session::reset_write_batches();
     }
 }
 
@@ -379,10 +341,10 @@ fn checkpoint_wal_if_due(
             "自上次回写已提交 {batches} 个写批次，跳过周期等待，立即回写"
         ));
     }
-    // 批次与时间一起重置，失败的那一轮也不回填：`PASSIVE` 失败通常是等不到写锁，
-    // 下一轮按周期重试即可，留着批次只会让下一轮立刻再撞一次同样的失败。
-    *last_checkpoint_at = Instant::now();
-    write_batches.reset_after_checkpoint(batches);
+    /*
+     * 先回写、成功才清计数与时间：忙等或失败说明这一轮没写成，清掉计数会把重试推到
+     * 下一个 5 分钟周期。失败时保留计数与时间，下一个 tick（30 秒）会再试。
+     */
     match host.store().checkpoint_wal() {
         Ok(checkpoint) if checkpoint.busy => axon_logger::debug(&format!(
             "WAL 回写被并发读者挡住，剩余 {} 帧留给下一轮",
@@ -390,11 +352,16 @@ fn checkpoint_wal_if_due(
                 .log_frames
                 .saturating_sub(checkpoint.checkpointed_frames)
         )),
-        Ok(checkpoint) if checkpoint.checkpointed_frames > 0 => axon_logger::debug(&format!(
-            "WAL 回写完成：{} 帧已落主库",
-            checkpoint.checkpointed_frames
-        )),
-        Ok(_) => {}
+        Ok(checkpoint) => {
+            *last_checkpoint_at = Instant::now();
+            write_batches.reset_after_checkpoint();
+            if checkpoint.checkpointed_frames > 0 {
+                axon_logger::debug(&format!(
+                    "WAL 回写完成：{} 帧已落主库",
+                    checkpoint.checkpointed_frames
+                ));
+            }
+        }
         Err(error) => axon_logger::warning(&format!("WAL 回写失败，将在下一轮重试: {error}")),
     }
 }
@@ -624,71 +591,47 @@ mod lease_renew_tests {
 mod checkpoint_tests {
     use super::*;
 
-    /// 周期兜底必须保留：写批次为 0 的空转进程也得周期性重置一次 WAL，否则慢速累积的库
-    /// 永远等不到批次阈值，WAL 仍会按写入量一直长。
+    /// 空闲时批次不涨，周期兜底仍然生效。
     #[test]
     fn idle_daemon_still_checkpoints_on_the_interval() {
         let interval = Duration::from_millis(WAL_CHECKPOINT_INTERVAL_MS);
-
-        assert!(
-            checkpoint_due(0, interval),
-            "一个写批次都没有也要按周期兜底，否则慢速累积永远等不到阈值"
-        );
-        assert!(
-            !checkpoint_due(0, interval / 2),
-            "批次与周期都没到，这一轮不该回写"
-        );
+        assert!(checkpoint_due(0, interval));
+        assert!(!checkpoint_due(0, interval / 2));
     }
 
-    /// 批次到阈值就是「攒够了」：不能为了等满五分钟继续让它攒下去。
+    /// 写批次攒够阈值时，即使还没到周期也立即回写。
     #[test]
     fn enough_write_batches_trigger_before_the_interval() {
-        assert!(
-            checkpoint_due(WRITE_BATCH_CHECKPOINT_THRESHOLD, Duration::ZERO),
-            "批次刚到阈值，即使才回写过不久也必须回写"
-        );
-        assert!(
-            checkpoint_due(WRITE_BATCH_CHECKPOINT_THRESHOLD + 1, Duration::ZERO),
-            "越过阈值之后每一轮都该回写，直到批次被扣掉"
-        );
+        assert!(checkpoint_due(
+            WRITE_BATCH_CHECKPOINT_THRESHOLD,
+            Duration::ZERO
+        ));
+        assert!(checkpoint_due(
+            WRITE_BATCH_CHECKPOINT_THRESHOLD + 1,
+            Duration::ZERO
+        ));
     }
 
-    /// 批次不足且未到间隔时一律不动：否则线程会退化成每个 tick 都做一次空回写。
+    /// 批次不足且未到周期不回写。
     #[test]
     fn insufficient_write_batches_before_the_interval_do_not_trigger() {
         let interval = Duration::from_millis(WAL_CHECKPOINT_INTERVAL_MS);
-
-        assert!(
-            !checkpoint_due(WRITE_BATCH_CHECKPOINT_THRESHOLD - 1, interval / 2),
-            "差一个批次也还没到，这一轮不该回写"
-        );
-        assert!(
-            !checkpoint_due(1, Duration::ZERO),
-            "刚回写过就只提交了一批，不该立刻再回写"
-        );
+        assert!(!checkpoint_due(
+            WRITE_BATCH_CHECKPOINT_THRESHOLD - 1,
+            interval / 2
+        ));
+        assert!(!checkpoint_due(1, Duration::ZERO));
     }
 
-    /// 回写之后批次归零；回写期间新到的批次不能被一起吞掉。
+    /// 计数来自存储层记录的真实写批次数，回写后归零。
     #[test]
-    fn checkpoint_resets_the_write_batch_counter() {
-        let counter = WriteBatchCounter::default();
-        counter.record(&[WRITE_BATCH_CHECKPOINT_THRESHOLD as u32]);
-        let observed = counter.since_last_checkpoint();
-        assert_eq!(observed, WRITE_BATCH_CHECKPOINT_THRESHOLD);
-        assert!(checkpoint_due(observed, Duration::ZERO));
-
-        // 回写进行中另一条线程又提交了两批：扣减只能扣掉本轮读到的那部分。
-        counter.record(&[2]);
-        counter.reset_after_checkpoint(observed);
-
-        assert_eq!(
-            counter.since_last_checkpoint(),
-            2,
-            "回写期间新到的批次必须留到下一轮，不能随重置一起清掉"
-        );
-        assert!(
-            !checkpoint_due(counter.since_last_checkpoint(), Duration::ZERO),
-            "归零之后必须再攒够一批才触发"
-        );
+    fn write_batches_come_from_the_store_counter() {
+        axon_session::reset_write_batches();
+        for _ in 0..3 {
+            axon_session::record_write_batch();
+        }
+        assert_eq!(WriteBatchCounter.since_last_checkpoint(), 3);
+        WriteBatchCounter.reset_after_checkpoint();
+        assert_eq!(WriteBatchCounter.since_last_checkpoint(), 0);
     }
 }

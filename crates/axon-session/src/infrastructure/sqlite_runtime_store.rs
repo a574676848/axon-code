@@ -264,6 +264,7 @@ impl DatabaseHandle {
     }
 }
 
+pub use connection_pool::{pending_write_batches, record_write_batch, reset_write_batches};
 /// 关闭本进程连接的自动 WAL 回写。
 ///
 /// 只给 Daemon 用：它有独立线程按体量与周期驱动 `PASSIVE` 回写，自动回写留在提交线程里

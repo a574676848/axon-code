@@ -146,11 +146,13 @@ where
             let Ok(execution_id) = ExecutionId::new(execution_id) else {
                 continue;
             };
-            if self
-                .record_execution_completion_inbox(&execution_id)
-                .is_ok()
-            {
-                recovered = recovered.saturating_add(1);
+            match self.record_execution_completion_inbox(&execution_id) {
+                Ok(()) => recovered = recovered.saturating_add(1),
+                // 单条落库失败必须留痕：静默跳过会让「通知丢了」在日志里毫无踪迹。
+                Err(error) => axon_logger::warning(&format!(
+                    "完成通知落库失败: execution={}, error={error}",
+                    execution_id.as_str()
+                )),
             }
         }
         if recovered > 0 {
