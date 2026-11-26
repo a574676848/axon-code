@@ -21,7 +21,7 @@ use std::sync::{Mutex, OnceLock};
 
 use axon_agent_runtime::{
     ProviderStreamProtocol, ProviderVisibleCacheBreakReason, ProviderVisibleCacheShape,
-    TokenUsageTelemetry,
+    ProviderVisibleCacheShapeComparison, TokenUsageTelemetry,
 };
 use axon_jsonl::ShardedJsonlStore;
 use serde::{Deserialize, Serialize};
@@ -250,12 +250,7 @@ pub(crate) fn record(
         protocol,
         attempt_index,
         &compact,
-        &comparison.reason,
-        comparison.common_prefix_messages,
-        comparison.previous_message_count,
-        comparison.current_message_count,
-        comparison.conversation_rewritten,
-        comparison.message_prefix_changed,
+        &comparison,
         ok,
         usage,
     );
@@ -269,7 +264,6 @@ pub(crate) fn record(
 }
 
 /// 组装采样，供落盘与测试共用同一口径。
-#[allow(clippy::too_many_arguments)]
 fn build_sample(
     sampled_at_ms: u64,
     provider: &str,
@@ -277,12 +271,7 @@ fn build_sample(
     protocol: ProviderStreamProtocol,
     attempt_index: usize,
     shape: &ProviderVisibleCacheShape,
-    break_reason: &ProviderVisibleCacheBreakReason,
-    common_prefix_messages: usize,
-    previous_message_count: usize,
-    current_message_count: usize,
-    conversation_rewritten: bool,
-    message_prefix_changed: bool,
+    comparison: &ProviderVisibleCacheShapeComparison,
     ok: bool,
     usage: Option<&TokenUsageTelemetry>,
 ) -> PromptCacheSample {
@@ -300,12 +289,12 @@ fn build_sample(
         protocol: protocol_label(protocol).to_owned(),
         attempt_index: u32::try_from(attempt_index).unwrap_or(u32::MAX),
         ok,
-        cache_break_reason: reason_label(break_reason).to_owned(),
-        common_prefix_messages: u32_from_usize(common_prefix_messages),
-        previous_message_count: u32_from_usize(previous_message_count),
-        current_message_count: u32_from_usize(current_message_count),
-        conversation_rewritten,
-        message_prefix_changed,
+        cache_break_reason: reason_label(&comparison.reason).to_owned(),
+        common_prefix_messages: u32_from_usize(comparison.common_prefix_messages),
+        previous_message_count: u32_from_usize(comparison.previous_message_count),
+        current_message_count: u32_from_usize(comparison.current_message_count),
+        conversation_rewritten: comparison.conversation_rewritten,
+        message_prefix_changed: comparison.message_prefix_changed,
         channel_switched: false,
         model_hash: shape.model_hash.clone(),
         system_hash: shape.system_hash.clone(),
@@ -471,7 +460,6 @@ fn current_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axon_agent_runtime::ProviderVisibleCacheShapeComparison;
 
     fn shape(messages: &[&str], tools: &str) -> ProviderVisibleCacheShape {
         ProviderVisibleCacheShape {
@@ -531,6 +519,14 @@ mod tests {
     #[test]
     fn samples_round_trip_through_json() {
         let current = compact_shape(&shape(&["a", "b"], "tools"));
+        let comparison = ProviderVisibleCacheShapeComparison {
+            reason: ProviderVisibleCacheBreakReason::HistoryAppended,
+            common_prefix_messages: 1,
+            previous_message_count: 1,
+            current_message_count: 2,
+            conversation_rewritten: false,
+            message_prefix_changed: false,
+        };
         let built = build_sample(
             1_700_000_000_000,
             "probe-provider",
@@ -538,12 +534,7 @@ mod tests {
             ProviderStreamProtocol::OpenAiCompatible,
             1,
             &current,
-            &ProviderVisibleCacheBreakReason::HistoryAppended,
-            1,
-            1,
-            2,
-            false,
-            false,
+            &comparison,
             true,
             Some(&usage(100, 900)),
         );

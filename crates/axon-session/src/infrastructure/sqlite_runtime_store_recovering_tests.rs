@@ -51,7 +51,6 @@ fn mark_recovering(store: &SqliteRuntimeStore, session_id: &DaemonSessionId, now
 }
 
 /// 在途工作项：`status` 决定它是「从未派发」还是「有人在跑」。
-#[allow(clippy::too_many_arguments)]
 fn insert_work_item(
     store: &SqliteRuntimeStore,
     execution_id: &str,

@@ -71,7 +71,6 @@ fn seed_metrics(store: &SqliteRuntimeStore, session_id: &str, histogram_json: &s
 }
 
 /// 一条入站事实：`client` 为空时渠道回落到 `source_channel`，与读取口径一致。
-#[allow(clippy::too_many_arguments)]
 fn seed_inbox(
     store: &SqliteRuntimeStore,
     session_id: &str,
