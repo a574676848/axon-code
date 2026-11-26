@@ -11,7 +11,7 @@ import { collapseTurn, foldTurn, replaceTurnCells } from './fold';
 import { applySettledSilentTurn } from './terminal';
 import { INITIAL_CONVERSATION, LOCAL_STEER_PREFIX, type AttachmentRef, type ConversationAction, type ConversationState, type JobRow, type TurnState } from './state';
 import { pruneSettledQuestions, type PendingQuestion } from '../questions';
-import { emptyTurn, absorbClaimedUserCells, detachCells, localUserId, openTurn, questionSettled, refreshLiveElapsed, refreshLiveSummary, upsertCell, withTurn } from './turns';
+import { emptyTurn, absorbClaimedUserCells, detachCells, dropStaleUndelivered, localUserId, openTurn, questionSettled, refreshLiveElapsed, refreshLiveSummary, upsertCell, withTurn } from './turns';
 
 /** 归约入口。 */
 export function conversationReducer(
@@ -33,7 +33,7 @@ export function conversationReducer(
     case 'connecting':
       return { ...state, connection: 'connecting', failure: null };
     case 'open-turn':
-      return openTurn(state, action.turnId, action.nowMs);
+      return dropStaleUndelivered(openTurn(state, action.turnId, action.nowMs), action.turnId);
     case 'submit':
       return submitTurn(state, action.turnId, action.text, action.nowMs, action.attachments);
     case 'steer':

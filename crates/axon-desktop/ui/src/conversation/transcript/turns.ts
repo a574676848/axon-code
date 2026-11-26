@@ -69,6 +69,36 @@ export function indexCells(cells: readonly TranscriptCell[]): Record<string, num
   return index;
 }
 
+/**
+ * 新开一轮时清掉旧轮次里遗留的未送达占位。
+ *
+ * 未送达是「这次提交没到后端」的结论，后端不知道它；用户继续发下一条之后它既不会被任何
+ * 帧认领，也会一直挂在时间线尾部（重载历史时本来就会被丢掉）。这里与重载对齐：只摘
+ * 未送达的本地占位，整轮只剩占位时连轮次一起摘掉，避免留下一条永远不动的空轮。
+ */
+export function dropStaleUndelivered(state: ConversationState, keepTurnId: string): ConversationState {
+  let changed = false;
+  const turns: TurnState[] = [];
+  for (const turn of state.turns) {
+    if (turn.id === keepTurnId) {
+      turns.push(turn);
+      continue;
+    }
+    const stale = turn.cells.filter(
+      (cell) => cell.role === 'user' && isLocalPlaceholder(cell) && cell.undelivered === true,
+    );
+    if (stale.length === 0) {
+      turns.push(turn);
+      continue;
+    }
+    changed = true;
+    const kept = turn.cells.filter((cell) => !stale.includes(cell));
+    if (kept.length === 0) continue;
+    turns.push(detachCells(turn, stale.map((cell) => cell.id)));
+  }
+  return changed ? { ...state, turns } : state;
+}
+
 /** 开一条新轮次；已存在同标识轮次时原样返回。 */
 export function openTurn(state: ConversationState, turnId: string, nowMs: number): ConversationState {
   if (state.turns.some((turn) => turn.id === turnId)) return state;

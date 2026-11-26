@@ -397,3 +397,34 @@ test('claimed_message_clears_pending_attachments：认领后附件暂存必须�
         '认领之后附件暂存必须清空，否则同一轮后面的消息会再挂一张重复附件卡',
     );
 });
+
+test('stale_undelivered_placeholder_disappears_when_the_next_turn_opens：未送达占位不残留', () => {
+    let state = conversationReducer(INITIAL_CONVERSATION, {
+        type: 'open-turn',
+        turnId: RUNNING,
+        nowMs: 1_000,
+    });
+    state = conversationReducer(state, {
+        type: 'steer',
+        text: VISIBLE,
+        nowMs: 1_100,
+        attachments: [],
+        structuredInput: '',
+    });
+    // 提交失败：这一格标成未送达，后端从未收到它。
+    state = conversationReducer(state, {
+        type: 'submit-failed',
+        turnId: null,
+        text: VISIBLE,
+        message: '连接失败',
+        nowMs: 1_200,
+    });
+    assert.equal(bubbles(state, VISIBLE).length, 1, '失败后先留着，供用户重发');
+    assert.equal(bubbles(state, VISIBLE)[0].cell.undelivered, true);
+
+    // 用户继续发下一条：旧的未送达占位再也等不到认领，必须与重载历史后一致地消失。
+    state = conversationReducer(state, { type: 'open-turn', turnId: QUEUED, nowMs: 1_300 });
+    assert.equal(bubbles(state, VISIBLE).length, 0, '新开一轮后不再残留未送达气泡');
+    assert.equal(state.turns.length, 1, '只剩新开的那一轮，不留空轮');
+    assert.equal(state.turns[0].id, QUEUED);
+});
