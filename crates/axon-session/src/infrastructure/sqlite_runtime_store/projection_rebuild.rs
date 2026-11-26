@@ -12,7 +12,6 @@ use axon_domain::DaemonSessionId;
 use rusqlite::{OptionalExtension as _, Transaction, TransactionBehavior, params};
 
 use super::super::SqliteRuntimeStore;
-use super::projection_watermark;
 use super::projection_worker;
 use crate::ports::RuntimeStoreError;
 
@@ -47,10 +46,28 @@ impl SqliteRuntimeStore {
         if path.exists() {
             let mut after = 0u64;
             loop {
-                let records = axon_eventlog::read_after(&path, after, REBUILD_BATCH_RECORDS)
+                let mut records = axon_eventlog::read_after(&path, after, REBUILD_BATCH_RECORDS)
                     .map_err(|error| RuntimeStoreError::Storage(error.to_string()))?;
                 if records.is_empty() {
                     break;
+                }
+                /*
+                 * 收口帧与它派生的指标帧同批落盘，投影要求两者同批才写读数。按固定条数
+                 * 切片正好切在两者之间时，这一轮会落成没有读数的一行；这里多读一条把它
+                 * 补齐，边界只在轮次之间切。
+                 */
+                if records
+                    .last()
+                    .is_some_and(|record| record.event_type.as_str() == "turn_completed")
+                {
+                    let tail = records.last().map_or(after, |record| record.sequence);
+                    if let Ok(mut next) = axon_eventlog::read_after(&path, tail, 1)
+                        && next
+                            .first()
+                            .is_some_and(|record| record.event_type.as_str() == "turn_metrics")
+                    {
+                        records.append(&mut next);
+                    }
                 }
                 let events = records
                     .iter()
@@ -65,15 +82,16 @@ impl SqliteRuntimeStore {
                     .iter()
                     .find_map(|record| record.origin_channel.clone());
                 let now_ms = records.last().map_or(0, |record| record.emitted_at_ms);
+                let first = records.first().map_or(after + 1, |record| record.sequence);
                 projection_worker::project_events(
                     self,
                     session_id,
+                    first,
                     &events,
                     origin_channel.as_deref(),
                     now_ms,
                 )?;
                 let last = records.last().map_or(after, |record| record.sequence);
-                projection_watermark::advance(self, session_id, last, now_ms);
                 replayed += u64::try_from(records.len()).unwrap_or(0);
                 if last <= after {
                     break;
@@ -144,7 +162,8 @@ impl SqliteRuntimeStore {
             let same_file = metadata.as_ref().is_some_and(|meta| {
                 i64::try_from(meta.len()).ok() == Some(len) && log_mtime_ns(meta) == mtime
             });
-            if same_file && tail == event_tail {
+            // `projected_tail = -1` 是写路径标记的「日志被替换过」，无条件重建。
+            if tail >= 0 && same_file && tail == event_tail {
                 continue;
             }
             match self.rebuild_session_projections(&session_id) {

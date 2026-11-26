@@ -1,7 +1,8 @@
 //! 会话累计指标的投影回源验收。
 //!
-//! 三件事各一条用例：投影落后时按日志补齐水位之后的轮次；投影不落后时一次事件日志都不读；
-//! 水位停在批首序号时，早已投影完的最后一批不得被重复累加。全部在临时运行态根里跑。
+//! 四件事各一条用例：投影落后时按日志补齐水位之后的轮次；投影不落后时一次事件日志都不读；
+//! 水位停在批首序号时，早已投影完的最后一批不得被重复累加；跨度超过单批上界时按批读完。
+//! 另有两条守卫：读不全退回投影值，边车索引不可用时根本不回源。全部在临时运行态根里跑。
 
 use axon_domain::{DaemonSessionId, InteractionId, RuntimeHostId};
 use axon_eventlog::{RuntimeEventKind, RuntimeEventRecord};
@@ -96,6 +97,38 @@ fn mark_event_tail(store: &SqliteRuntimeStore, session_id: &DaemonSessionId, tai
             )
         })
         .expect("推事件水位");
+}
+
+/// 只写事件日志、不投影：把一批记录原样落盘，序号必须首尾相接。
+fn append_records_to_log(
+    store: &SqliteRuntimeStore,
+    session_id: &DaemonSessionId,
+    records: &[RuntimeEventRecord],
+) {
+    let log = store.event_log(session_id);
+    let first = records.first().expect("至少一条记录");
+    axon_eventlog::append_once(&log, first.sequence, first.emitted_at_ms, records)
+        .expect("直接写日志");
+}
+
+/// 一条用量帧的载荷：`kind.type = usageUpdate`，形状与投影取同一口径。
+fn usage_payload(recorded_at_ms: i64, current_context_tokens: u64) -> Value {
+    json!({
+        "recordedAtMs": recorded_at_ms,
+        "interactionId": "interaction-snapshot",
+        "kind": {
+            "type": "usageUpdate",
+            "payload": { "currentContextTokens": current_context_tokens },
+        },
+    })
+}
+
+/// 当前快照里的上下文占用。
+fn snapshot_tokens(store: &SqliteRuntimeStore, session_id: &DaemonSessionId) -> Option<u64> {
+    store
+        .context_snapshot(session_id)
+        .expect("读取上下文快照")
+        .and_then(|snapshot| snapshot.current_context_tokens)
 }
 
 /// 投影落后时，回源必须补上只在日志里的那一轮。
@@ -205,6 +238,123 @@ fn projection_caught_up_skips_the_event_log() {
     );
     assert_eq!(merged.total_input_tokens, 1_000);
     assert_eq!(merged.total_active_ms, 900);
+}
+
+/// 水位跨度超过单批上界时按批读完：累计必须覆盖整段未投影区间。
+#[test]
+fn gap_beyond_one_batch_is_read_in_chunks() {
+    let (store, session_id, host) = fixture();
+    let completed = [(
+        "turn_completed".to_owned(),
+        json!({ "interactionId": "interaction-a", "response": "结论" }).to_string(),
+    )];
+    append_batch(
+        &store,
+        &session_id,
+        &host,
+        "interaction-a",
+        &completed,
+        1_100,
+    );
+    let projected = metrics_payload("interaction-a", 900, 1_000, 100);
+    let metrics_batch = [("turn_metrics".to_owned(), projected.to_string())];
+    let tail = append_batch(
+        &store,
+        &session_id,
+        &host,
+        "interaction-a",
+        &metrics_batch,
+        1_200,
+    );
+
+    /*
+     * 日志里堆 2 600 条未投影指标帧：跨度超过单批 2 048，但在 8 192 的上界之内，必须分批
+     * 读完而不是放弃回源。归属取同一个交互，避免查证语句的占位符随轮次膨胀。
+     */
+    let pending = 2_600_u64;
+    let mut sequence = tail;
+    let mut remaining = pending;
+    while remaining > 0 {
+        let batch = remaining.min(600);
+        let records: Vec<RuntimeEventRecord> = (0..batch)
+            .map(|_| {
+                sequence += 1;
+                RuntimeEventRecord::new(
+                    sequence,
+                    2_000 + sequence,
+                    RuntimeEventKind::TurnMetrics,
+                    metrics_payload("interaction-bulk", 10, 10, 1),
+                )
+                .with_interaction("interaction-bulk")
+            })
+            .collect();
+        append_records_to_log(&store, &session_id, &records);
+        remaining -= batch;
+    }
+    mark_event_tail(&store, &session_id, sequence);
+
+    let merged = store
+        .session_metrics_with_fallback(&session_id)
+        .expect("读取累计指标")
+        .expect("必须给出读数");
+    assert_eq!(
+        merged.turn_count,
+        1 + pending,
+        "跨度超过单批上界时必须分批读完，而不是退回投影值"
+    );
+    assert_eq!(merged.total_input_tokens, 1_000 + pending * 10);
+    assert_eq!(merged.total_output_tokens, 100 + pending);
+    assert_eq!(merged.total_active_ms, 900 + pending * 10);
+}
+
+/// 边车索引不可用时跳过回源：不得为了补一个读数触发整文件解帧。
+#[test]
+fn missing_index_skips_the_log_fallback() {
+    let (store, session_id, host) = fixture();
+    // 投影里先落一份读数：100ms 时占用 135 917。
+    let projected = [(
+        "wire_event".to_owned(),
+        usage_payload(100, 135_917).to_string(),
+    )];
+    append_batch(
+        &store,
+        &session_id,
+        &host,
+        "interaction-snapshot",
+        &projected,
+        1_100,
+    );
+    assert_eq!(snapshot_tokens(&store, &session_id), Some(135_917));
+
+    // 日志里再落一条更新的读数：控制面水位已推进，投影水位仍停在上一批。
+    let unprojected = RuntimeEventRecord::new(
+        2,
+        200,
+        RuntimeEventKind::Other("wire_event".to_owned()),
+        usage_payload(200, 140_000),
+    )
+    .with_interaction("interaction-snapshot");
+    append_records_to_log(&store, &session_id, &[unprojected]);
+    mark_event_tail(&store, &session_id, 2);
+
+    // 索引还在时：回源必须读到日志里更新的那条读数。
+    assert_eq!(
+        snapshot_tokens(&store, &session_id),
+        Some(140_000),
+        "索引可用时必须回源"
+    );
+
+    // 删掉边车索引：此时尾部扫描会退化成整文件解帧，必须按投影值返回。
+    let log = store.event_log(&session_id);
+    let mut index_path = log.path().into_os_string();
+    index_path.push(".idx");
+    std::fs::remove_file(std::path::PathBuf::from(index_path)).expect("删除边车索引");
+
+    assert_eq!(
+        snapshot_tokens(&store, &session_id),
+        Some(135_917),
+        "索引不可用时不得回源，必须退回投影值"
+    );
 }
 
 /// 水位区间读不全时退回投影值：宁可用落后一点的读数，也不给偏小的总量。

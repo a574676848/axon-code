@@ -22,6 +22,7 @@ const HISTOGRAM_BOUNDS_MS: [u64; 15] = [
 const HISTOGRAM_BUCKETS: usize = 16;
 
 /// 把一轮指标累加进会话投影。
+#[cfg(test)]
 pub(super) fn apply_turn_metrics(
     store: &SqliteRuntimeStore,
     session_id: &DaemonSessionId,
@@ -33,11 +34,25 @@ pub(super) fn apply_turn_metrics(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(storage)?;
-    let existing = read_row(&transaction, session_id)?;
+    apply_turn_metrics_in(&transaction, session_id, metrics, channel, now_ms)?;
+    transaction.commit().map_err(storage)
+}
+
+/// 在调用方的事务里累加一轮指标。
+///
+/// 三个投影要共用一次提交：任一失败整批回滚，水位不推进，不会留下「读数已写、指标没写」
+/// 的半批状态。
+pub(super) fn apply_turn_metrics_in(
+    connection: &rusqlite::Connection,
+    session_id: &DaemonSessionId,
+    metrics: &TurnMetrics,
+    channel: Option<&str>,
+    now_ms: u64,
+) -> Result<(), RuntimeStoreError> {
+    let existing = read_row(connection, session_id)?;
     let mut row = existing.unwrap_or_default();
     accumulate_turn_metrics(&mut row, metrics, channel, now_ms);
-    write_row(&transaction, session_id, &row)?;
-    transaction.commit().map_err(storage)
+    write_row(connection, session_id, &row)
 }
 
 /// 由会话事件日志重放重建累计指标。
@@ -291,7 +306,7 @@ fn add_bucket(histogram: &mut Vec<u64>, value_ms: u64) {
 }
 
 fn read_row(
-    transaction: &rusqlite::Transaction<'_>,
+    transaction: &rusqlite::Connection,
     session_id: &DaemonSessionId,
 ) -> Result<Option<MetricsRow>, RuntimeStoreError> {
     let row = transaction
@@ -347,7 +362,7 @@ fn read_row(
 }
 
 fn write_row(
-    transaction: &rusqlite::Transaction<'_>,
+    transaction: &rusqlite::Connection,
     session_id: &DaemonSessionId,
     row: &MetricsRow,
 ) -> Result<(), RuntimeStoreError> {

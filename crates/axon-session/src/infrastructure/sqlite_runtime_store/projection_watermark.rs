@@ -34,36 +34,76 @@ pub(super) fn already_projected(
 /// 调用方只在本批三个投影全部成功后才调用：失败批次不推进水位，重放时才不会被整批跳过。
 /// 取 `MAX`：迟到的低序号批次不得把水位倒退回去。写失败只记日志：水位缺失最多让下一批
 /// 多投影一次，投影本身是可重建的派生数据。
+#[cfg(test)]
 pub(super) fn advance(
     store: &SqliteRuntimeStore,
     session_id: &DaemonSessionId,
     start_sequence: u64,
     now_ms: u64,
 ) {
-    let written = store.connection().and_then(|connection| {
-        connection
-            .execute(
-                "INSERT INTO projection_state(session_id,last_projected_seq,updated_at_ms) \
-                 VALUES(?1,?2,?3) \
-                 ON CONFLICT(session_id) DO UPDATE SET \
-                     last_projected_seq=MAX(projection_state.last_projected_seq,\
-                         excluded.last_projected_seq), \
-                     updated_at_ms=excluded.updated_at_ms",
-                params![
-                    session_id.as_str(),
-                    i64_value(start_sequence)?,
-                    i64_value(now_ms)?
-                ],
-            )
-            .map_err(storage)?;
-        record_log_identity(&connection, store, session_id, start_sequence, now_ms)
-    });
+    let mut connection = match store.connection() {
+        Ok(connection) => connection,
+        Err(error) => {
+            report(&format!(
+                "投影水位写入失败，下一批可能重复累加: session={} start={start_sequence} error={error}",
+                session_id.as_str()
+            ));
+            return;
+        }
+    };
+    let transaction = match connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+    {
+        Ok(transaction) => transaction,
+        Err(error) => {
+            report(&format!(
+                "投影水位写入失败，下一批可能重复累加: session={} start={start_sequence} error={error}",
+                session_id.as_str()
+            ));
+            return;
+        }
+    };
+    let written =
+        advance_in(&transaction, store, session_id, start_sequence, now_ms).and_then(|_| {
+            transaction
+                .commit()
+                .map_err(|error| RuntimeStoreError::Storage(error.to_string()))
+        });
     if let Err(error) = written {
         report(&format!(
             "投影水位写入失败，下一批可能重复累加: session={} start={start_sequence} error={error}",
             session_id.as_str()
         ));
     }
+}
+
+/// 在调用方的事务里推进水位并记下日志身份。
+///
+/// 写路径把三个投影、水位与日志身份放进同一次提交：任一步失败整批回滚，不会留下
+/// 「投影写了、水位没推」或「水位推了、身份没记」的半批状态。
+pub(super) fn advance_in(
+    connection: &rusqlite::Connection,
+    store: &SqliteRuntimeStore,
+    session_id: &DaemonSessionId,
+    start_sequence: u64,
+    now_ms: u64,
+) -> Result<(), RuntimeStoreError> {
+    connection
+        .execute(
+            "INSERT INTO projection_state(session_id,last_projected_seq,updated_at_ms) \
+             VALUES(?1,?2,?3) \
+             ON CONFLICT(session_id) DO UPDATE SET \
+                 last_projected_seq=MAX(projection_state.last_projected_seq,\
+                     excluded.last_projected_seq), \
+                 updated_at_ms=excluded.updated_at_ms",
+            params![
+                session_id.as_str(),
+                i64_value(start_sequence)?,
+                i64_value(now_ms)?
+            ],
+        )
+        .map_err(storage)?;
+    record_log_identity(connection, store, session_id, start_sequence, now_ms)
 }
 
 /// 事件日志序号回退后清空水位。
@@ -150,12 +190,7 @@ fn record_log_identity(
         return Ok(());
     };
     let len = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
-    let mtime_ns = metadata
-        .modified()
-        .ok()
-        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|elapsed| i64::try_from(elapsed.as_nanos()).unwrap_or(i64::MAX))
-        .unwrap_or(0);
+    let mtime_ns = log_mtime_ns(&metadata);
     connection
         .execute(
             "INSERT INTO projection_log_identity \
@@ -176,6 +211,84 @@ fn record_log_identity(
         )
         .map_err(storage)?;
     Ok(())
+}
+
+/// 写路径上的一次身份对账：日志被外部重写或替换时，把该会话标记为待重建。
+///
+/// 只在「身份记录的水位已追平事件水位」时才判定：落后说明只是有未投影的新批，长度变化
+/// 是正常的。命中后把 `projected_tail` 置为 -1，启动对账据此强制重建；不在这里就地重放，
+/// 重建会清空派生表，不能与投影 worker 并发。
+///
+/// 返回是否标记成功。查不到身份（从未投影过）时不判定。
+pub(super) fn detect_log_rewrite(store: &SqliteRuntimeStore, session_id: &DaemonSessionId) -> bool {
+    let found = store.connection().and_then(|connection| {
+        connection
+            .query_row(
+                "SELECT i.projected_tail, i.log_len, i.log_mtime_ns, s.last_event_sequence \
+                   FROM projection_log_identity AS i \
+                   JOIN sessions AS s ON s.session_id = i.session_id \
+                  WHERE i.session_id = ?1",
+                params![session_id.as_str()],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(storage)
+    });
+    let Ok(Some((tail, len, mtime, event_tail))) = found else {
+        return false;
+    };
+    if tail < 0 || tail != event_tail {
+        return false;
+    }
+    let path = store.event_log(session_id).path();
+    let Ok(metadata) = std::fs::metadata(&path) else {
+        return false;
+    };
+    if i64::try_from(metadata.len()).ok() == Some(len) && log_mtime_ns(&metadata) == mtime {
+        return false;
+    }
+    let marked = store.connection().and_then(|connection| {
+        connection
+            .execute(
+                "UPDATE projection_log_identity SET projected_tail = -1 WHERE session_id = ?1",
+                params![session_id.as_str()],
+            )
+            .map(|_| ())
+            .map_err(storage)
+    });
+    match marked {
+        Ok(()) => {
+            report(&format!(
+                "事件日志与投影身份不一致，已标记待重建: session={}",
+                session_id.as_str()
+            ));
+            true
+        }
+        Err(error) => {
+            report(&format!(
+                "投影身份标记失败，下次启动可能漏检: session={} error={error}",
+                session_id.as_str()
+            ));
+            false
+        }
+    }
+}
+
+/// 日志文件的修改时刻（纳秒）；平台不支持时按 0。
+pub(super) fn log_mtime_ns(metadata: &std::fs::Metadata) -> i64 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|elapsed| i64::try_from(elapsed.as_nanos()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
 }
 
 /// 读取水位；没有这一行（从未投影过）时返回 `None`。

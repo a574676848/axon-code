@@ -108,6 +108,12 @@ fn append_events_with(
         .unwrap_or_else(std::sync::PoisonError::into_inner);
 
     /*
+     * 先做一次日志身份对账：日志被外部重写或替换时，把会话标记为待重建，避免这一批
+     * 投影到一份与历史不一致的日志上。查不到身份（从未投影过）时不判定。
+     */
+    projection_watermark::detect_log_rewrite(store, session_id);
+
+    /*
      * 阶段 1：控制面事务。fence 校验、租约校验、分配序号、推进水位。
      *
      * 写锁争用是瞬时的（持有者几毫秒到几百毫秒后放锁），交给 `with_busy_retry` 重试；

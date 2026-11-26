@@ -143,17 +143,31 @@ fn run(job: ProjectionJob) {
 pub(super) fn project_events(
     store: &SqliteRuntimeStore,
     session_id: &DaemonSessionId,
+    start_sequence: u64,
     events: &[(String, String)],
     origin_channel: Option<&str>,
     now_ms: u64,
 ) -> Result<(), RuntimeStoreError> {
-    // 逐轮事实：收口批次里同时带着终态与它派生的指标，一次投影就够。
-    super::super::turn_activity_projection::project_turn_activity(
-        store, session_id, events, now_ms,
+    /*
+     * 三个投影、水位与日志身份放进同一次 IMMEDIATE 提交：任一失败整批回滚，不会留下
+     * 「逐轮读数写了、累计指标没写」的半批状态，水位也不会先于投影推进。
+     */
+    let mut connection = store.connection()?;
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|error| RuntimeStoreError::Storage(error.to_string()))?;
+    super::super::turn_activity_projection::project_turn_activity_in(
+        store,
+        &transaction,
+        session_id,
+        events,
+        now_ms,
     )?;
-    // 会话级上下文快照：界面占用读数与剩余量现在读同一份。
-    super::super::context_snapshot_projection::project_context_snapshot(
-        store, session_id, events, now_ms,
+    super::super::context_snapshot_projection::project_context_snapshot_in(
+        &transaction,
+        session_id,
+        events,
+        now_ms,
     )?;
     for (event_type, payload_json) in events {
         if event_type != "turn_metrics" {
@@ -162,15 +176,24 @@ pub(super) fn project_events(
         let Ok(metrics) = serde_json::from_str::<axon_eventlog::TurnMetrics>(payload_json) else {
             continue;
         };
-        super::super::session_metrics_repository::apply_turn_metrics(
-            store,
+        super::super::session_metrics_repository::apply_turn_metrics_in(
+            &transaction,
             session_id,
             &metrics,
             origin_channel,
             now_ms,
         )?;
     }
-    Ok(())
+    /*
+     * 水位记「已投影到的最后一条序号」：一批事件是连续序号的一段，记末尾才能让
+     * 「是否落后」判定精确到批。水位与身份和三个投影同一次提交，失败整批回滚。
+     */
+    let batch_end =
+        start_sequence.saturating_add(u64::try_from(events.len().saturating_sub(1)).unwrap_or(0));
+    super::projection_watermark::advance_in(&transaction, store, session_id, batch_end, now_ms)?;
+    transaction
+        .commit()
+        .map_err(|error| RuntimeStoreError::Storage(error.to_string()))
 }
 
 /// 一批投影的完整执行：闸门判定、三个投影、成功后推进水位。
@@ -196,21 +219,12 @@ fn project(job: &ProjectionJob) -> ProjectionOutcome {
     match project_events(
         store,
         session_id,
+        job.start_sequence,
         &job.events,
         job.origin_channel.as_deref(),
         job.now_ms,
     ) {
-        Ok(()) => {
-            /*
-             * 水位记「已投影到的最后一条序号」：一批事件是连续序号的一段，记末尾才能让
-             * 「是否落后」判定精确到批；记批首会让多帧批永远显示落后一批。
-             */
-            let batch_end = job
-                .start_sequence
-                .saturating_add(u64::try_from(job.events.len().saturating_sub(1)).unwrap_or(0));
-            projection_watermark::advance(store, session_id, batch_end, job.now_ms);
-            ProjectionOutcome::Applied
-        }
+        Ok(()) => ProjectionOutcome::Applied,
         Err(error) => ProjectionOutcome::Failed { error },
     }
 }

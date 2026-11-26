@@ -138,6 +138,18 @@ pub(crate) fn log_len(path: &Path) -> Result<Option<u64>, EventLogError> {
     }
 }
 
+/// 边车索引是否可用于本次读取。
+///
+/// 判据与内部读者完全相同：索引缺失、落后于日志长度或结构不自洽时一律为假。这类索引会
+/// 让尾部扫描与定向读退化成整文件解帧，而那种扫描没有帧数上界可依；读路径据此先问一条，
+/// 不可用就干脆不回源。
+pub fn index_is_fresh(path: &Path) -> bool {
+    let Ok(Some(len)) = log_len(path) else {
+        return false;
+    };
+    index::load(path, len).is_some()
+}
+
 /// 从尾部倒推读取满足谓词的最后 `limit` 条事件，只解压必要的尾部帧。
 pub fn read_tail_matching<F>(
     path: &Path,

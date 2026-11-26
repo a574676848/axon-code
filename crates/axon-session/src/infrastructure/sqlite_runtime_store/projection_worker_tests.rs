@@ -410,3 +410,65 @@ fn log_identity_is_recorded_and_reconcile_detects_a_rewrite() {
     let rebuilt = store.reconcile_log_identities().expect("对账必须成功");
     assert_eq!(rebuilt, 1, "身份对不上必须重建该会话");
 }
+
+/// 写路径身份对账：日志与身份对不上时标记待重建，启动对账据此重建。
+#[test]
+fn a_rewritten_log_is_marked_on_the_write_path_and_rebuilt_at_startup() {
+    let (store, session_id, _host) = fixture("projection-identity-runtime");
+    let metrics = axon_eventlog::TurnMetrics {
+        turn_id: "turn-1".to_owned(),
+        active_ms: 200,
+        ..axon_eventlog::TurnMetrics::default()
+    };
+    let records = vec![axon_eventlog::RuntimeEventRecord::new(
+        1,
+        1_000,
+        axon_eventlog::RuntimeEventKind::TurnMetrics,
+        serde_json::to_value(&metrics).expect("指标序列化"),
+    )];
+    axon_eventlog::append_once(&store.event_log(&session_id), 1, 1_000, &records)
+        .expect("写事件日志");
+    // 直接落盘绕过了控制面，这里把事件水位对齐到本批末尾，模拟真实写入后的状态。
+    store
+        .with_read_connection(|connection| {
+            connection
+                .execute(
+                    "UPDATE sessions SET last_event_sequence = 1 WHERE session_id = ?1",
+                    [session_id.as_str()],
+                )
+                .map(|_| ())
+        })
+        .expect("推事件水位");
+    let batch = [metrics_event("turn-1", 200)];
+    submit(&store, &session_id, 1, &batch, Some("desktop"), 10, false);
+
+    // 改写身份里的长度，模拟日志被另一份内容替换。
+    store
+        .with_read_connection(|connection| {
+            connection
+                .execute(
+                    "UPDATE projection_log_identity SET log_len = log_len + 1 WHERE session_id=?1",
+                    [session_id.as_str()],
+                )
+                .map(|_| ())
+        })
+        .expect("改写身份");
+
+    assert!(
+        super::super::projection_watermark::detect_log_rewrite(&store, &session_id),
+        "长度对不上必须标记待重建"
+    );
+    let marked: i64 = store
+        .with_read_connection(|connection| {
+            connection.query_row(
+                "SELECT projected_tail FROM projection_log_identity WHERE session_id=?1",
+                [session_id.as_str()],
+                |row| row.get(0),
+            )
+        })
+        .expect("读标记");
+    assert_eq!(marked, -1, "标记值是 -1");
+
+    let rebuilt = store.reconcile_log_identities().expect("启动对账");
+    assert_eq!(rebuilt, 1, "被标记的会话必须重建");
+}

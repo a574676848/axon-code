@@ -32,11 +32,10 @@ pub struct TurnActivity {
 
 /// 写入或更新一轮的活动事实。
 pub(super) fn upsert_activity(
-    store: &SqliteRuntimeStore,
+    connection: &rusqlite::Connection,
     activity: &TurnActivity,
     now_ms: u64,
 ) -> Result<(), RuntimeStoreError> {
-    let connection = store.connection()?;
     connection
         .execute(
             "INSERT INTO turn_activity (

@@ -1,10 +1,9 @@
 //! Daemon 后台 Worker 线程的循环与失败处理。
 
 use std::{
-    path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -30,12 +29,15 @@ pub(super) fn start_background_workers(
         Arc::clone(&workers_running),
         Arc::clone(&host_fenced),
     );
+    // 写批次由维护循环累加、由回写线程消费：需要的是「自上次回写以来提交了多少批」。
+    let write_batches = Arc::new(WriteBatchCounter::default());
     start_primary_turn_worker(
         host.clone(),
         Arc::clone(&workers_running),
         Arc::clone(&host_fenced),
         primary_turn_signal,
         Arc::clone(&maintenance_signal),
+        Arc::clone(&write_batches),
     );
     start_supervisor_worker(
         host.clone(),
@@ -43,12 +45,13 @@ pub(super) fn start_background_workers(
         Arc::clone(&workers_running),
         host_fenced,
         maintenance_signal,
+        Arc::clone(&write_batches),
     );
     /*
      * WAL 回写单独占一条线程：它要做一次真正的磁盘回写，挂在监督循环里会让每秒一次的
      * 租约续期与维护 tick 一起排到回写后面。独立之后，回写慢只影响自己那一轮。
      */
-    start_checkpoint_worker(host.clone(), Arc::clone(&workers_running));
+    start_checkpoint_worker(host.clone(), Arc::clone(&workers_running), write_batches);
     start_cron_worker(cron_adapter, workers_running);
 }
 
@@ -131,9 +134,17 @@ fn start_primary_turn_worker(
     fenced: Arc<AtomicBool>,
     signal: Arc<DaemonMaintenanceSignal>,
     maintenance_signal: Arc<DaemonMaintenanceSignal>,
+    write_batches: Arc<WriteBatchCounter>,
 ) {
     thread::spawn(move || {
-        run_primary_turn_loop(host, running, fenced, signal, maintenance_signal);
+        run_primary_turn_loop(
+            host,
+            running,
+            fenced,
+            signal,
+            maintenance_signal,
+            write_batches,
+        );
     });
 }
 
@@ -143,10 +154,19 @@ fn run_primary_turn_loop(
     fenced: Arc<AtomicBool>,
     signal: Arc<DaemonMaintenanceSignal>,
     maintenance_signal: Arc<DaemonMaintenanceSignal>,
+    write_batches: Arc<WriteBatchCounter>,
 ) {
     while running.load(Ordering::Acquire) {
         let result = host.primary_turn_tick(SUPERVISOR_BATCH_LIMIT);
         handle_primary_turn_failures(&result);
+        if let Ok(report) = &result {
+            write_batches.record(&[
+                report.claimed,
+                report.understood,
+                report.rejected,
+                report.interrupted,
+            ]);
+        }
         let backlog_remains = result
             .as_ref()
             .is_ok_and(|report| report.claimed >= SUPERVISOR_BATCH_LIMIT);
@@ -169,9 +189,17 @@ fn start_supervisor_worker(
     running: Arc<AtomicBool>,
     fenced: Arc<AtomicBool>,
     signal: Arc<DaemonMaintenanceSignal>,
+    write_batches: Arc<WriteBatchCounter>,
 ) {
     thread::spawn(move || {
-        run_supervisor_loop(host, active_primary_turns, running, fenced, signal);
+        run_supervisor_loop(
+            host,
+            active_primary_turns,
+            running,
+            fenced,
+            signal,
+            write_batches,
+        );
     });
 }
 
@@ -181,6 +209,7 @@ fn run_supervisor_loop(
     running: Arc<AtomicBool>,
     fenced: Arc<AtomicBool>,
     signal: Arc<DaemonMaintenanceSignal>,
+    write_batches: Arc<WriteBatchCounter>,
 ) {
     let mut last_release_gc = Instant::now();
     let mut last_lsp_sample = Instant::now();
@@ -195,17 +224,29 @@ fn run_supervisor_loop(
             &mut last_lsp_active,
             &mut last_active_turns,
         );
-        if !handle_host_tick(
-            host.scheduler_tick(SCHEDULE_LEASE_DURATION_MS, SUPERVISOR_BATCH_LIMIT),
-            &running,
-            &fenced,
-            "Scheduler",
-        ) || !handle_host_tick(
-            host.supervisor_tick(SUPERVISOR_BATCH_LIMIT),
-            &running,
-            &fenced,
-            "Supervisor",
-        ) {
+        let scheduler = host.scheduler_tick(SCHEDULE_LEASE_DURATION_MS, SUPERVISOR_BATCH_LIMIT);
+        if let Ok(report) = &scheduler {
+            write_batches.record(&[
+                report.claimed,
+                report.interactions_submitted,
+                report.deferred,
+                report.failed,
+            ]);
+        }
+        if !handle_host_tick(scheduler, &running, &fenced, "Scheduler") {
+            break;
+        }
+        let supervisor = host.supervisor_tick(SUPERVISOR_BATCH_LIMIT);
+        if let Ok(report) = &supervisor {
+            write_batches.record(&[
+                report.recovered,
+                report.quarantined,
+                report.interrupted_interactions,
+                report.silent_turns_settled,
+                report.pumped,
+            ]);
+        }
+        if !handle_host_tick(supervisor, &running, &fenced, "Supervisor") {
             break;
         }
         signal.wait(Duration::from_millis(MAINTENANCE_TIMER_INTERVAL_MS));
@@ -230,12 +271,53 @@ fn run_cron_loop(cron_adapter: crate::cron_commands::CronDaemonAdapter, running:
     }
 }
 
-/// WAL 回写独立线程：按体量或固定周期做一次 `PASSIVE` 回写。
-fn start_checkpoint_worker(host: CliDaemonHost, running: Arc<AtomicBool>) {
+/// 自上次回写以来，Daemon 维护线程提交过的写批次数。
+///
+/// 连接池没有统一的提交入口：各仓库取到连接后各自开事务并直接 `commit`，池子看不到提交
+/// 动作，只能由写者自己记。维护 tick 的回执里每一条领取、结算、隔离或收敛都对应至少一次
+/// 已提交的写事务，因此都按一个写批次累加。这是保守下界：一件工作项正常路径提交两次，
+/// 这里只记回执报出来的条目；cron 的回执是格式化摘要，不解析。少记只让回写稍晚（周期
+/// 兜底仍在），多记只多一次空回写（`PASSIVE` 拿不到帧就返回），判据方向不受影响。
+#[derive(Debug, Default)]
+struct WriteBatchCounter {
+    batches: AtomicU64,
+}
+
+impl WriteBatchCounter {
+    /// 记下一个 tick 回执里的写批次数。
+    fn record(&self, counts: &[u32]) {
+        let total = counts
+            .iter()
+            .fold(0_u64, |sum, count| sum.saturating_add(u64::from(*count)));
+        if total > 0 {
+            self.batches.fetch_add(total, Ordering::Relaxed);
+        }
+    }
+
+    /// 自上次回写以来累计的写批次数。
+    fn since_last_checkpoint(&self) -> u64 {
+        self.batches.load(Ordering::Relaxed)
+    }
+
+    /// 回写之后扣掉已经消费掉的批次。用减法而不是清零：回写期间别的线程可能又提交了
+    /// 批次，`swap(0)` 会把它们一起吞掉；计数器只在这里变小，扣减量又来自刚读到的值。
+    fn reset_after_checkpoint(&self, handled: u64) {
+        if handled > 0 {
+            self.batches.fetch_sub(handled, Ordering::Relaxed);
+        }
+    }
+}
+
+/// WAL 回写独立线程：按写批次数或固定周期做一次 `PASSIVE` 回写。
+fn start_checkpoint_worker(
+    host: CliDaemonHost,
+    running: Arc<AtomicBool>,
+    write_batches: Arc<WriteBatchCounter>,
+) {
     thread::spawn(move || {
         let mut last_checkpoint_at = Instant::now();
         while running.load(Ordering::Acquire) {
-            checkpoint_wal_if_due(&host, &mut last_checkpoint_at);
+            checkpoint_wal_if_due(&host, &write_batches, &mut last_checkpoint_at);
             thread::sleep(Duration::from_millis(CHECKPOINT_WORKER_TICK_MS));
         }
     });
@@ -243,7 +325,7 @@ fn start_checkpoint_worker(host: CliDaemonHost, running: Arc<AtomicBool>) {
 
 /// 回写线程的唤醒粒度：比回写周期短得多，因此只做一次比较就回去睡。
 ///
-/// 它同时是体量触发的检测延迟上界：WAL 越过阈值到真正回写，最多晚一个 tick。
+/// 它同时是写批次判据的检测延迟上界：批次越过阈值到真正回写，最多晚一个 tick。
 const CHECKPOINT_WORKER_TICK_MS: u64 = 30_000;
 
 fn cleanup_releases_if_due(last_release_gc: &mut Instant) {
@@ -256,67 +338,51 @@ fn cleanup_releases_if_due(last_release_gc: &mut Instant) {
 
 const LSP_OBSERVATION_SAMPLE_INTERVAL_MS: u64 = 3_000;
 
-/// WAL 体量触发阈值：`-wal` 文件超过这个字节数就立即回写，不等固定周期。
+/// 写批次触发阈值：自上次回写以来累计到这么多写批次就立即回写，不等固定周期。
 ///
-/// 取 64 MiB，与 `axon-session` 连接池里的 `journal_size_limit` 相等，比较必须写成
-/// **严格大于**。一次成功的回写会重置 WAL，随后的第一次提交把文件截到
-/// `journal_size_limit`，文件长度从此是「高水位」而不是当前帧量：长度恰好等于 64 MiB
-/// 时，WAL 里可能一帧都没有。写成严格大于，两种情况才归到同一句话：文件长度超过阈值，
-/// 等价于「自上次重置起新写入的帧超过 64 MiB」。若写成大于等于，文件被截到基线之后
-/// 每一次 tick 都会判定超阈值，体量触发就退化成固定 30 秒回写。
+/// 不再按 `-wal` 文件长度触发：`journal_size_limit` 会把文件截到 64 MiB 的高水位，此后
+/// 任意一次写入都让长度严格大于阈值；checkpoint 长期不完整（有长读者）时长度也停在阈值
+/// 之上。两种情况下文件长度都不再表达「攒了多少写入」，按长度触发会退化成每个 tick 都
+/// 回写一次。批次相反：它是单调累积的提交计数，回写后归零，与高水位无关。
 ///
-/// 为什么是 64 MiB：`PASSIVE` 回写要把 WAL 帧逐页拷回主库，拷贝期间持有写锁，阈值越大
-/// 单次独占越久（连接池的 `busy_timeout` 是 2 秒），阈值越小回写越频繁但每次越便宜。
-/// 64 MiB 让单次回写通常落在数百毫秒内，同时把 WAL 常驻体量压在「64 MiB 加一个 tick
-/// 的写入量」以内。
-const WAL_SIZE_CHECKPOINT_THRESHOLD_BYTES: u64 = 64 * 1024 * 1024;
+/// 为什么取 4096：控制面单个写事务只有几页，4096 批按每批一到数页估算约合数十 MiB，与
+/// 旧判据的 64 MiB 同一量级，单次 `PASSIVE` 回写的拷贝量仍落在数百毫秒内（连接池的
+/// `busy_timeout` 是 2 秒）。维护 tick 每秒一次、批量上限 32，满载时约一到四分钟就到
+/// 4096，计数触发因而先于 5 分钟兜底生效；空闲时批次不累积，判据只由周期驱动。
+const WRITE_BATCH_CHECKPOINT_THRESHOLD: u64 = 4096;
 
-/// WAL 回写周期：体量没到阈值时的兜底。
+/// WAL 回写周期：写批次没到阈值时的兜底。
 ///
-/// 持续写入下 WAL 会一直漂大，漂到与主库同量级后一次全量回写要独占写锁数十秒，
-/// 所有写者按 `busy_timeout` 排队失败，续租与业务写一起被拉下水。周期性地做
-/// `PASSIVE` 回写把这件事摊平：不阻塞读写，拿不到干净窗口就留给下一轮。
-///
-/// 连接池关掉自动回写之后，周期性回写只剩这条线程：慢速累积的库等不到体量阈值，
-/// 也必须有一次周期性的重置，否则 WAL 仍会按写入量一直长。
+/// 持续写入下 WAL 会一直漂大，漂到与主库同量级后一次全量回写要独占写锁数十秒，所有写者
+/// 按 `busy_timeout` 排队失败。周期性 `PASSIVE` 回写把这件事摊平：不阻塞读写，拿不到干净
+/// 窗口就留给下一轮。连接池关掉自动回写之后周期性回写只剩这条线程，慢速累积的库等不到
+/// 批次阈值，也必须有一次周期性的重置。
 const WAL_CHECKPOINT_INTERVAL_MS: u64 = 5 * 60 * 1_000;
 
-/// 这一轮是否该回写：体量超阈值优先，否则按固定周期兜底。
-fn checkpoint_due(wal_bytes: u64, since_last_checkpoint: Duration) -> bool {
-    wal_bytes > WAL_SIZE_CHECKPOINT_THRESHOLD_BYTES
+/// 这一轮是否该回写：写批次到阈值优先，否则按固定周期兜底。
+fn checkpoint_due(write_batches: u64, since_last_checkpoint: Duration) -> bool {
+    write_batches >= WRITE_BATCH_CHECKPOINT_THRESHOLD
         || since_last_checkpoint >= Duration::from_millis(WAL_CHECKPOINT_INTERVAL_MS)
 }
 
-/// 两个库 `-wal` 文件的字节数之和：控制面与待消费队列各有一份。
-///
-/// 读不到就按 0 计：文件可能还没创建，也可能刚被上一轮回写删掉，这两种情况都不该让
-/// 巡检线程报错或者跳过周期兜底。
-fn runtime_wal_bytes(host: &CliDaemonHost) -> u64 {
-    host.store()
-        .database_paths()
-        .into_iter()
-        .map(wal_file_bytes)
-        .sum()
-}
-
-/// 数据库文件对应的 WAL 文件字节数。
-fn wal_file_bytes(database_path: &Path) -> u64 {
-    let mut wal_path = database_path.as_os_str().to_owned();
-    wal_path.push("-wal");
-    std::fs::metadata(PathBuf::from(wal_path)).map_or(0, |metadata| metadata.len())
-}
-
-fn checkpoint_wal_if_due(host: &CliDaemonHost, last_checkpoint_at: &mut Instant) {
-    let wal_bytes = runtime_wal_bytes(host);
-    if !checkpoint_due(wal_bytes, last_checkpoint_at.elapsed()) {
+fn checkpoint_wal_if_due(
+    host: &CliDaemonHost,
+    write_batches: &WriteBatchCounter,
+    last_checkpoint_at: &mut Instant,
+) {
+    let batches = write_batches.since_last_checkpoint();
+    if !checkpoint_due(batches, last_checkpoint_at.elapsed()) {
         return;
     }
-    if wal_bytes > WAL_SIZE_CHECKPOINT_THRESHOLD_BYTES {
+    if batches >= WRITE_BATCH_CHECKPOINT_THRESHOLD {
         axon_logger::debug(&format!(
-            "WAL 已达 {wal_bytes} 字节，跳过回写周期等待，立即按体量回写"
+            "自上次回写已提交 {batches} 个写批次，跳过周期等待，立即回写"
         ));
     }
+    // 批次与时间一起重置，失败的那一轮也不回填：`PASSIVE` 失败通常是等不到写锁，
+    // 下一轮按周期重试即可，留着批次只会让下一轮立刻再撞一次同样的失败。
     *last_checkpoint_at = Instant::now();
+    write_batches.reset_after_checkpoint(batches);
     match host.store().checkpoint_wal() {
         Ok(checkpoint) if checkpoint.busy => axon_logger::debug(&format!(
             "WAL 回写被并发读者挡住，剩余 {} 帧留给下一轮",
@@ -558,27 +624,71 @@ mod lease_renew_tests {
 mod checkpoint_tests {
     use super::*;
 
-    /// 体量优先于周期：WAL 越过阈值就必须立刻回写，不能为了等满五分钟让它继续长大；
-    /// 体量与周期都没到时一律不动，否则线程会退化成每个 tick 都做一次回写。
+    /// 周期兜底必须保留：写批次为 0 的空转进程也得周期性重置一次 WAL，否则慢速累积的库
+    /// 永远等不到批次阈值，WAL 仍会按写入量一直长。
     #[test]
-    fn oversized_wal_triggers_checkpoint_before_the_interval() {
+    fn idle_daemon_still_checkpoints_on_the_interval() {
         let interval = Duration::from_millis(WAL_CHECKPOINT_INTERVAL_MS);
 
         assert!(
-            checkpoint_due(WAL_SIZE_CHECKPOINT_THRESHOLD_BYTES + 1, Duration::ZERO),
-            "WAL 已超阈值，即使距上次回写不到五分钟也必须回写"
-        );
-        assert!(
-            !checkpoint_due(WAL_SIZE_CHECKPOINT_THRESHOLD_BYTES - 1, interval / 2),
-            "体量与周期都没到，这一轮不该回写"
-        );
-        assert!(
-            !checkpoint_due(WAL_SIZE_CHECKPOINT_THRESHOLD_BYTES, Duration::ZERO),
-            "恰好等于阈值不算超过：文件长度可能只是 journal_size_limit 留下的高水位基线"
-        );
-        assert!(
             checkpoint_due(0, interval),
-            "体量虽小也要按周期兜底，否则慢速累积永远等不到阈值"
+            "一个写批次都没有也要按周期兜底，否则慢速累积永远等不到阈值"
+        );
+        assert!(
+            !checkpoint_due(0, interval / 2),
+            "批次与周期都没到，这一轮不该回写"
+        );
+    }
+
+    /// 批次到阈值就是「攒够了」：不能为了等满五分钟继续让它攒下去。
+    #[test]
+    fn enough_write_batches_trigger_before_the_interval() {
+        assert!(
+            checkpoint_due(WRITE_BATCH_CHECKPOINT_THRESHOLD, Duration::ZERO),
+            "批次刚到阈值，即使才回写过不久也必须回写"
+        );
+        assert!(
+            checkpoint_due(WRITE_BATCH_CHECKPOINT_THRESHOLD + 1, Duration::ZERO),
+            "越过阈值之后每一轮都该回写，直到批次被扣掉"
+        );
+    }
+
+    /// 批次不足且未到间隔时一律不动：否则线程会退化成每个 tick 都做一次空回写。
+    #[test]
+    fn insufficient_write_batches_before_the_interval_do_not_trigger() {
+        let interval = Duration::from_millis(WAL_CHECKPOINT_INTERVAL_MS);
+
+        assert!(
+            !checkpoint_due(WRITE_BATCH_CHECKPOINT_THRESHOLD - 1, interval / 2),
+            "差一个批次也还没到，这一轮不该回写"
+        );
+        assert!(
+            !checkpoint_due(1, Duration::ZERO),
+            "刚回写过就只提交了一批，不该立刻再回写"
+        );
+    }
+
+    /// 回写之后批次归零；回写期间新到的批次不能被一起吞掉。
+    #[test]
+    fn checkpoint_resets_the_write_batch_counter() {
+        let counter = WriteBatchCounter::default();
+        counter.record(&[WRITE_BATCH_CHECKPOINT_THRESHOLD as u32]);
+        let observed = counter.since_last_checkpoint();
+        assert_eq!(observed, WRITE_BATCH_CHECKPOINT_THRESHOLD);
+        assert!(checkpoint_due(observed, Duration::ZERO));
+
+        // 回写进行中另一条线程又提交了两批：扣减只能扣掉本轮读到的那部分。
+        counter.record(&[2]);
+        counter.reset_after_checkpoint(observed);
+
+        assert_eq!(
+            counter.since_last_checkpoint(),
+            2,
+            "回写期间新到的批次必须留到下一轮，不能随重置一起清掉"
+        );
+        assert!(
+            !checkpoint_due(counter.since_last_checkpoint(), Duration::ZERO),
+            "归零之后必须再攒够一批才触发"
         );
     }
 }

@@ -662,7 +662,8 @@ impl SqliteRuntimeStore {
         activity: &turn_activity_repository::TurnActivity,
         now_ms: u64,
     ) -> Result<(), RuntimeStoreError> {
-        turn_activity_repository::upsert_activity(self, activity, now_ms)
+        let connection = self.connection()?;
+        turn_activity_repository::upsert_activity(&connection, activity, now_ms)
     }
 
     /// 一批交互的逐轮事实；缺行由调用方回落日志尾扫。

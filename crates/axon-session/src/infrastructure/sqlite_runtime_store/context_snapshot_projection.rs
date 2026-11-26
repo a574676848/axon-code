@@ -12,8 +12,7 @@
 
 use serde_json::Value;
 
-use super::SqliteRuntimeStore;
-use super::context_snapshot_repository::{ContextSnapshotUpdate, UsageReading, apply_update};
+use super::context_snapshot_repository::{ContextSnapshotUpdate, UsageReading, apply_update_in};
 use crate::ports::RuntimeStoreError;
 use axon_domain::DaemonSessionId;
 
@@ -34,12 +33,9 @@ const COMPOSITION_FIELDS: [&str; 3] = [
     "conversationTokens",
 ];
 
-/// 把一批事件里的上下文读数投影成会话级快照。
-///
-/// 写入失败原样返回错误：水位只在三个投影都成功后推进，失败批次留给重放或下一份真实读数
-/// 覆盖修正。写失败留下的旧行不会被声称为最新读数（时间戳不变）。
-pub(super) fn project_context_snapshot(
-    store: &SqliteRuntimeStore,
+/// 在调用方的事务里投影上下文快照；没有可用读数时什么都不写。
+pub(super) fn project_context_snapshot_in(
+    connection: &rusqlite::Connection,
     session_id: &DaemonSessionId,
     events: &[(String, String)],
     now_ms: u64,
@@ -47,7 +43,7 @@ pub(super) fn project_context_snapshot(
     let Some(update) = read_update(events, now_ms) else {
         return Ok(());
     };
-    apply_update(store, session_id, &update)
+    apply_update_in(connection, session_id, &update)
 }
 
 /// 读出一批事件里的读数；这一批没有可用读数时返回 `None`，调用方据此不写任何行。

@@ -27,8 +27,9 @@ pub use format::{
     FrameScan, FrameSpan, HEADER_FRAME_INDEX, Header, decode_frame, encode_frame, scan_frames,
 };
 pub use read::{
-    EventLogReader, EventLogSnapshot, read_after, read_header, read_interaction_after,
-    read_interaction_tail, read_tail_matching, read_tail_record, read_tail_records, read_tail_scan,
+    EventLogReader, EventLogSnapshot, index_is_fresh, read_after, read_header,
+    read_interaction_after, read_interaction_tail, read_tail_matching, read_tail_record,
+    read_tail_records, read_tail_scan,
 };
 pub use record::{
     JobOutcome, JobRef, RuntimeEventKind, RuntimeEventRecord, TurnMetrics, TurnOrigin, TurnOutcome,

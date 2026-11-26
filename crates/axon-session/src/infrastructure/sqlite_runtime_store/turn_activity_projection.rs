@@ -18,8 +18,29 @@ const TOOL_SCAN_FRAME_LIMIT: u32 = 4_000;
 /// 因此一次调用就能把答案与读数一起写进同一行。
 ///
 /// 写入失败原样返回错误：水位只在三个投影都成功后推进，失败批次留给重放或重建入口。
+#[cfg(test)]
 pub(super) fn project_turn_activity(
     store: &SqliteRuntimeStore,
+    session_id: &DaemonSessionId,
+    events: &[(String, String)],
+    now_ms: u64,
+) -> Result<(), RuntimeStoreError> {
+    let mut connection = store.connection()?;
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|error| RuntimeStoreError::Storage(error.to_string()))?;
+    project_turn_activity_in(store, &transaction, session_id, events, now_ms)?;
+    transaction
+        .commit()
+        .map_err(|error| RuntimeStoreError::Storage(error.to_string()))
+}
+
+/// 在调用方的事务里投影逐轮事实；与快照、累计指标共用一次提交。
+///
+/// `store` 只用于缺 `toolNames` 的老帧回扫；新写入的收口帧一律自带工具名。
+pub(super) fn project_turn_activity_in(
+    store: &SqliteRuntimeStore,
+    connection: &rusqlite::Connection,
     session_id: &DaemonSessionId,
     events: &[(String, String)],
     now_ms: u64,
@@ -82,7 +103,7 @@ pub(super) fn project_turn_activity(
         tool_names,
         metrics_json,
     };
-    upsert_activity(store, &activity, now_ms)
+    upsert_activity(connection, &activity, now_ms)
 }
 
 /// 这一轮用过哪些工具：只扫它自己的帧，且有帧数上限。

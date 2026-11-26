@@ -11,7 +11,7 @@
 //! 读数的口径只有一处：用量帧里的 Provider 实测值。换窗不再写入任何前后读数，
 //! 头部因此只展示「最近一次请求占了多少窗口」，剩余量由消费方按窗口与实测占用派生。
 
-use rusqlite::{OptionalExtension, TransactionBehavior, params};
+use rusqlite::{OptionalExtension, params};
 
 use super::SqliteRuntimeStore;
 use super::helpers::{i64_value, storage};
@@ -58,23 +58,16 @@ pub(super) struct UsageReading {
     pub(super) observed_at_ms: u64,
 }
 
-/// 把一批读数合并进会话级快照。
-///
-/// 读写同一个事务：先读旧行再合并，最后就地更新。没有可用读数时调用方根本不会走到
-/// 这里，因此「不倒退、不粘旧值」由调用方的过滤与这里的事务共同保证。
-pub(super) fn apply_update(
-    store: &SqliteRuntimeStore,
+/// 在调用方的事务里合并读数；与三个投影共用一次提交。
+pub(super) fn apply_update_in(
+    connection: &rusqlite::Connection,
     session_id: &DaemonSessionId,
     update: &ContextSnapshotUpdate,
 ) -> Result<(), RuntimeStoreError> {
     if update.is_empty() {
         return Ok(());
     }
-    let mut connection = store.connection()?;
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(storage)?;
-    let mut row = read_row(&transaction, session_id)?.unwrap_or_default();
+    let mut row = read_row(connection, session_id)?.unwrap_or_default();
     if let Some(usage) = update.usage.as_ref() {
         row.current_context_tokens = Some(usage.current_context_tokens);
         row.context_window = usage.context_window;
@@ -84,8 +77,8 @@ pub(super) fn apply_update(
         row.updated_at_ms = Some(fresher(row.updated_at_ms, usage.observed_at_ms));
         row.source = Some(SOURCE_USAGE.to_owned());
     }
-    write_row(&transaction, session_id, &row)?;
-    transaction.commit().map_err(storage)
+    write_row(connection, session_id, &row)?;
+    Ok(())
 }
 
 /// 两条时刻里较新的一条；缺失按「更早」处理。
