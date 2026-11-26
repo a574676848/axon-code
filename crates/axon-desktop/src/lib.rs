@@ -192,10 +192,6 @@ pub fn run() {
          * 不影响应用启动。
          */
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        // 窗口状态插件只恢复尺寸、位置、最大化与全屏四项。
-        // 可见性必须排除在外：插件默认会在恢复几何时顺手 show 一次，
-        // 那一刻前端还没画完第一帧，用户看到的就是白底加一次位置跳动。
-        .plugin(window_state::plugin())
         // 单实例必须排在最前：第二次启动时它负责唤回既有窗口后立即退出，
         // 否则用户每点一次图标就会多出一个托盘图标与一份后台进程。
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -224,6 +220,9 @@ pub fn run() {
             },
         )
         .setup(|app| {
+            // 几何记忆先于其余窗口装配：系统材质、托盘与兜底呈现都会碰到窗口，
+            // 恢复必须在它们之前落地，并且全程窗口仍然不可见。
+            window_state::install(app.handle());
             // 注入应用句柄，使「打开文件/目录」走官方插件而不是自行拼系统命令。
             process::install_opener(app.handle().clone());
             // 会话事件经 Tauri 事件通道下发；订阅器是进程内唯一实例，
@@ -403,8 +402,14 @@ pub fn run() {
             pricing_auto_sync,
             pricing_set_auto_sync,
         ])
-        .run(tauri::generate_context!())
-        .expect("运行 Axon 桌面工作台失败");
+        .build(tauri::generate_context!())
+        .expect("构建 Axon 桌面工作台失败")
+        .run(|app, event| {
+            // 托盘退出与切档退出都走这里：窗口几何在这一刻落盘，供下次启动静默恢复。
+            if let tauri::RunEvent::Exit = event {
+                window_state::flush(app);
+            }
+        });
 }
 
 #[cfg(test)]

@@ -242,24 +242,27 @@ impl AgentTurnRuntime {
                         )
                     });
                 /*
-                 * 自动换窗只认 Provider 实测，不用本地估算拍板。
+                 * 自动换窗以 Provider 实测为基准，只把「实测之后新增、还没被它覆盖」的那段
+                 * 估算加回去；首迭代还没有实测时不做判断，先发一次请求拿读数。
                  *
-                 * 估算按可见 item 的 UTF-8 字节 / 4 折算，与真实 tokenizer 可能相差数倍；
-                 * 用它决策会在上下文还很宽裕时反复重建窗口（真机：Provider 实测 188K、
-                 * 触发线 800K，却按全量估算判成超线，一个 turn 内换一次窗）。首迭代还没有
-                 * 实测，就先发一次请求拿读数；真的溢出由 Provider 溢出重试接管。
+                 * 全量估算按可见 item 的 UTF-8 字节 / 4 折算，与真实 tokenizer 可能相差
+                 * 数倍：拿它拍板会在上下文还很宽裕时反复重建窗口（真机：Provider 实测
+                 * 188K、触发线 800K，却按全量估算判成超线）。但也不能只看实测：provider
+                 * 读数对应的是上一次请求，本轮新增的工具输出还没被它覆盖，漏掉这段会在
+                 * 真正快溢出时不换窗，而 ContextOverflow 不会被重试或压缩，只会直接失败。
                  */
+                let compression_reading = current_context_tokens.and(estimated_context_tokens);
                 let compression_outcome = if explicit_rollover {
                     active.maybe_compress_requested(
                         &mut messages,
-                        estimated_context_tokens,
+                        compression_reading,
                         turn_id,
                         &mut turn_events,
                     )
                 } else {
                     active.maybe_compress(
                         &mut messages,
-                        current_context_tokens,
+                        compression_reading,
                         turn_id,
                         &mut turn_events,
                     )
