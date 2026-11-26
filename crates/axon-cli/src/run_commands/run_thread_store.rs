@@ -279,14 +279,11 @@ pub(super) fn mirror_session_started(
 ) -> Result<(), String> {
     let root = resolved_axon_root(config_path)?;
     let service = ThreadService::new(JsonlThreadEventStore);
-    let mut turn = turn_from_record(record, 0)?;
-    turn.status = TurnStatus::Active;
-    turn.completed_at_ms = None;
-    turn.interrupted_at_ms = None;
+    let turn_id = turn_from_record(record, 0)?.turn_id;
 
     let activation = service.read_thread_activation(&root, &record.thread_id)?;
     if activation.exists {
-        if activation.active_turn_id.as_deref() == Some(turn.turn_id.as_str()) {
+        if activation.active_turn_id.as_deref() == Some(turn_id.as_str()) {
             return Ok(());
         }
         // 崩溃恢复：上一进程若在 turn 中途被强杀，Thread 会遗留永不收口的 active turn。
@@ -323,14 +320,6 @@ pub(super) fn mirror_session_started(
                 )),
             }
         }
-        service.start_turn(
-            &root,
-            StartTurnCommand {
-                thread_id: record.thread_id.clone(),
-                recorded_at_ms: record.created_at_ms,
-                turn,
-            },
-        )
     } else {
         service.start_empty_thread(
             &root,
@@ -345,15 +334,31 @@ pub(super) fn mirror_session_started(
                 created_at_ms: record.created_at_ms,
             },
         )?;
-        service.start_turn(
-            &root,
-            StartTurnCommand {
-                thread_id: record.thread_id.clone(),
-                recorded_at_ms: record.created_at_ms,
-                turn,
-            },
-        )
     }
+
+    /*
+     * 起跑定序：此刻 thread 里所有轮次都已定稿，max+1 就是本轮的真实轮序。
+     *
+     * 旧实现把序号硬写成 0，每轮起跑都与 Turn 0 撞号：换窗只能预测「收口后会不会拿到
+     * max+1」，一旦该轮被中断，边界就悬空；恢复时按它过滤会清空历史或重放巨型旧轮，
+     * 窗口交接随之错乱。序号从写入那一刻就该是事实。
+     */
+    let detail = service
+        .read_thread(&root, &record.thread_id)
+        .map_err(|error| format!("起跑前读取 Thread 失败：{error}"))?;
+    let sequence = mirror_turn::next_sequence(&detail, None);
+    let mut turn = turn_from_record(record, sequence)?;
+    turn.status = TurnStatus::Active;
+    turn.completed_at_ms = None;
+    turn.interrupted_at_ms = None;
+    service.start_turn(
+        &root,
+        StartTurnCommand {
+            thread_id: record.thread_id.clone(),
+            recorded_at_ms: record.created_at_ms,
+            turn,
+        },
+    )
 }
 
 /// 计算仍需要落盘的历史 item：身份是 `(类别, part_id)`，与投影侧 upsert 口径一致。
