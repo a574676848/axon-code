@@ -27,7 +27,7 @@ const MEMORY_SQLITE_SCHEMA_INIT_BACKOFF_MS: u64 = 150;
 ///
 /// 同进程内先串行化：多个线程同时首次打开同一个库，本质是同一进程在自相争抢写锁；
 /// 串行后每个线程都在前一个提交之后进入，不会互相拖垮。跨进程竞争仍交给有界重试，
-/// 并且每次等待之后先确认对方是否已经建完——建完就直接复用，不再抢写锁。
+/// 并且每次等待之后先确认对方是否已经建完，建完就直接复用，不再抢写锁。
 pub(super) fn initialize_schema(connection: &Connection) -> AxonResult<()> {
     static SCHEMA_INIT_LOCK: Mutex<()> = Mutex::new(());
     let _guard = SCHEMA_INIT_LOCK
