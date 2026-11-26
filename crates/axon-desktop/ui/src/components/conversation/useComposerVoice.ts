@@ -89,6 +89,8 @@ export interface ComposerVoice {
   phase: VoicePhase;
   /** 服务端中间识别结果；空串表示没有。 */
   partial: string;
+  /** realtime 车道下发的助手文字；仅「思考/播放」阶段有值。 */
+  assistant: string;
   /** 一次性失败结论。 */
   error: string | null;
   /** 采集是否处于打开状态。 */
@@ -136,6 +138,7 @@ export function useComposerVoice({
 }: ComposerVoiceOptions): ComposerVoice {
   const [phase, setPhase] = React.useState<VoicePhase>('idle');
   const [partial, setPartial] = React.useState('');
+  const [assistant, setAssistant] = React.useState('');
   const [error, setError] = React.useState<string | null>(null);
   const [active, setActive] = React.useState(false);
   const [elapsedMs, setElapsedMs] = React.useState(0);
@@ -264,6 +267,7 @@ export function useComposerVoice({
       stopElapsed();
       releasePlayer();
       setPartial('');
+      setAssistant('');
       setPhase(nextPhase);
     },
     [clearFinalizeTimer, releasePlayer, stopCapture, stopElapsed],
@@ -315,6 +319,10 @@ export function useComposerVoice({
           setPartial(frame.text ?? '');
           setPhase('listening');
           break;
+        case 'assistant':
+          // realtime 车道把助手文字单独下发：状态行在「思考/播放」阶段展示它。
+          setAssistant(frame.text ?? '');
+          break;
         case 'final': {
           // 用户已经取消：定稿作废，绝不回填输入坞。
           if (discardRef.current) {
@@ -340,6 +348,7 @@ export function useComposerVoice({
           stopCapture();
           stopElapsed();
           setPartial('');
+          setAssistant('');
           setPhase('thinking');
           break;
         }
@@ -420,6 +429,7 @@ export function useComposerVoice({
     stopCapture();
     stopElapsed();
     setPartial('');
+    setAssistant('');
     setPhase('idle');
     void stopVoiceSession().catch(() => undefined);
     if (mode === 'conversation') {
@@ -652,6 +662,7 @@ export function useComposerVoice({
     available,
     phase,
     partial,
+    assistant,
     error,
     active,
     elapsedMs,

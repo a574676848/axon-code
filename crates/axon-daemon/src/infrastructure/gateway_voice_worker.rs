@@ -19,6 +19,11 @@ const AUDIO_QUEUE_CAPACITY: usize = 8;
 pub(super) const MAX_AUDIO_FRAME_BYTES: usize = 8 * 1024 + 1;
 /// 工作线程轮询步长。
 const WORKER_TICK: Duration = Duration::from_millis(20);
+/// 上行采样率与单样本字节数：实测 RTF 的音频时长按这两个常量折算。
+const ASR_SAMPLE_RATE_HZ: f64 = 16_000.0;
+const ASR_BYTES_PER_SAMPLE: f64 = 2.0;
+/// 管道音频帧头：kind 1 字节 + 载荷长度 4 字节，不计入音频时长。
+const FRAME_HEADER_BYTES: usize = 5;
 /// 丢帧时最多每秒上报一次 `backpressure`，避免错误帧自己形成洪水。
 const BACKPRESSURE_REPORT_INTERVAL: Duration = Duration::from_secs(1);
 /// 连续超限的恢复间隔：超过这个时长没有新的丢帧才算恢复。
@@ -432,12 +437,27 @@ fn run_worker(
     }
     let _ = out.send(VoiceOut::Text(state_json("listening")));
 
+    // 实测 RTF：音频时长按 16 kHz/16 bit 单声道折算，处理耗时从「结束一句」算到定稿。
+    let mut utterance_pcm_bytes: usize = 0;
+    let mut utterance_wait_started: Option<std::time::Instant> = None;
     loop {
         for command in queue.drain() {
             let outcome = match command {
-                Command::Audio(bytes) => bridge.push_audio(&bytes),
-                Command::Stop(utterance_seq) => bridge.end_utterance(utterance_seq),
-                Command::Cancel(reason) => bridge.cancel(&reason),
+                Command::Audio(bytes) => {
+                    utterance_pcm_bytes = utterance_pcm_bytes
+                        .saturating_add(bytes.len().saturating_sub(FRAME_HEADER_BYTES));
+                    bridge.push_audio(&bytes)
+                }
+                Command::Stop(utterance_seq) => {
+                    utterance_wait_started = Some(std::time::Instant::now());
+                    bridge.end_utterance(utterance_seq)
+                }
+                Command::Cancel(reason) => {
+                    // 取消的一句不产生定稿，计量状态必须清掉，避免串到下一句。
+                    utterance_pcm_bytes = 0;
+                    utterance_wait_started = None;
+                    bridge.cancel(&reason)
+                }
                 Command::Speak {
                     turn_id,
                     epoch,
@@ -459,6 +479,16 @@ fn run_worker(
         metrics.set_queue_depth(queue.depth());
         match bridge.poll(WORKER_TICK) {
             Ok(Some(event)) => {
+                if matches!(&event, axon_voice_bridge::VoiceEvent::Final(_)) {
+                    if let Some(started) = utterance_wait_started.take() {
+                        let audio_secs = utterance_pcm_bytes as f64
+                            / (ASR_SAMPLE_RATE_HZ * ASR_BYTES_PER_SAMPLE);
+                        if audio_secs > 0.0 {
+                            metrics.set_rtf(started.elapsed().as_secs_f64() / audio_secs);
+                        }
+                    }
+                    utterance_pcm_bytes = 0;
+                }
                 if let Some(text) = event_out(event) {
                     let _ = out.send(text);
                 }

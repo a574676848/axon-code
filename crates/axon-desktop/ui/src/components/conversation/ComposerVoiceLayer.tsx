@@ -47,9 +47,12 @@ export const ComposerVoiceBar: React.FC<{ voice: ComposerVoice }> = ({ voice }) 
   if (voice.phase === 'idle') return null;
   const focus = PHASE_FOCUS[voice.phase];
   const partial = voice.partial.trim();
+  const assistant = voice.assistant.trim();
   const primary =
     voice.phase === 'listening' && partial.length > 0
       ? partial
+      : assistant.length > 0
+        ? assistant
       : voice.phase === 'arming' && voice.elapsedMs >= COLD_START_HINT_MS
         ? '正在连接语音提供方'
         : focus.label;

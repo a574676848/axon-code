@@ -25,6 +25,8 @@ pub(super) const DEFAULT_TTS_SPEAKER: &str = "zh_female_shuangkuaisisi_uranus_bi
 const SAMPLE_RATE: u32 = 24_000;
 /// 一次性合成的整体超时。
 const SYNTH_TIMEOUT: Duration = Duration::from_secs(30);
+/// 首包超时：协议参考值 3 秒。首包迟迟不来通常是链路或凭据问题，不该拖满整体超时。
+const FIRST_AUDIO_TIMEOUT: Duration = Duration::from_secs(3);
 /// 请求帧的固定头：version 1、header size 4、full client request、JSON + 无压缩。
 const REQUEST_HEADER: [u8; 4] = [0x11, 0x10, 0x10, 0x00];
 /// 结束事件：收到即收线。
@@ -109,8 +111,15 @@ pub(super) async fn synth_wav(cfg: &VolcTtsConfig, text: &str) -> Result<Vec<u8>
 
     let mut audio: Vec<u8> = Vec::new();
     let deadline = tokio::time::Instant::now() + SYNTH_TIMEOUT;
+    // 首包单独限时：3 秒还没有音频就先失败，把等待成本压回用户可接受的范围。
+    let first_audio_deadline = tokio::time::Instant::now() + FIRST_AUDIO_TIMEOUT;
     loop {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let limit = if audio.is_empty() {
+            first_audio_deadline.min(deadline)
+        } else {
+            deadline
+        };
+        let remaining = limit.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
             return Err(TtsError::Timeout);
         }

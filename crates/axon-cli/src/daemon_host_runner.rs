@@ -158,17 +158,20 @@ fn try_run_daemon_host(
     crate::run_commands::cleanup_stale_run_controls(&command.config_path)
         .map_err(|error| format!("清理 stale run 控制文件失败: {error}"))?;
     let gateway_config = loaded_config.config.remote.gateway;
+    // 网关扩展路由、多 Key 存储与语音提示词文件同源：三处都取 Axon 运行时根，
+    // 在这里解析一次、各处复用，避免同一份路径被解析出两个结论。
+    let axon_root = axon_config::runtime_axon_root_path(&command.config_path)
+        .map_err(|error| format!("解析 Axon 运行时根目录失败: {error:?}"))?;
     // 语音运行参数在装配 Gateway 前解析一次：之后所有请求只读这一份快照。
     // 没有任何 `[voice]` 模型时退回进程环境，避免配置层把开发机已有的车道清空。
     let voice_runtime = if loaded_config.config.voice.models.is_empty() {
         axon_daemon::VoiceRuntime::from_env()
     } else {
-        crate::voice_runtime_config::voice_runtime_from_config(&loaded_config.config.voice)
+        crate::voice_runtime_config::voice_runtime_from_config(
+            &loaded_config.config.voice,
+            &axon_root,
+        )
     };
-    // 网关扩展路由与多 Key 存储同源：两处都取 Axon 运行时根，在这里解析一次、两处复用，
-    // 避免同一份路径被解析出两个结论。
-    let axon_root = axon_config::runtime_axon_root_path(&command.config_path)
-        .map_err(|error| format!("解析 Axon 运行时根目录失败: {error:?}"))?;
     // 多 Key 存储与鉴权层、管理面适配器共享同一个句柄：签发与吊销因此对下一次鉴权立即生效。
     let key_store = open_gateway_key_store(&axon_root, &gateway_config.auth_keys);
     let gateway_auth = axon_config::provider_credential(&gateway_config.api_token_env)
