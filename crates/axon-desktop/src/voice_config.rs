@@ -58,6 +58,9 @@ pub struct VoiceModelDto {
     pub speech_rate: i32,
     /// 轮次检测策略。
     pub turn_detection: String,
+    /// 会话系统提示词；仅 realtime 角色生效，留空用内置语音版人格。
+    #[serde(default)]
+    pub instructions: String,
 }
 
 /// 整段语音配置 DTO：读写共用；写回时 `api_keyConfigured` 由后端忽略并按名保留明文。
@@ -109,12 +112,16 @@ fn to_dto(config: &VoiceConfig) -> VoiceConfigDto {
                 voice: model.voice.clone(),
                 speech_rate: model.speech_rate,
                 turn_detection: model.turn_detection.clone(),
+                instructions: model.instructions.clone(),
             })
             .collect(),
     }
 }
 
-fn from_dto(input: VoiceConfigDto, keys: &std::collections::BTreeMap<String, Option<String>>) -> VoiceConfig {
+fn from_dto(
+    input: VoiceConfigDto,
+    keys: &std::collections::BTreeMap<String, Option<String>>,
+) -> VoiceConfig {
     VoiceConfig {
         enabled: input.enabled,
         channel_balancer: input.lane,
@@ -148,6 +155,7 @@ fn from_dto(input: VoiceConfigDto, keys: &std::collections::BTreeMap<String, Opt
                 voice: model.voice,
                 speech_rate: model.speech_rate,
                 turn_detection: model.turn_detection,
+                instructions: model.instructions,
             })
             .collect(),
     }
@@ -211,7 +219,10 @@ mod tests {
         let mut keys = std::collections::BTreeMap::new();
         keys.insert("volc-tts".to_owned(), Some("secret-value".to_owned()));
         let restored = from_dto(dto, &keys);
-        assert_eq!(restored.channels[0].api_key.as_deref(), Some("secret-value"));
+        assert_eq!(
+            restored.channels[0].api_key.as_deref(),
+            Some("secret-value")
+        );
         assert_eq!(restored, config);
     }
 
@@ -228,6 +239,9 @@ mod tests {
         let mut keys = std::collections::BTreeMap::new();
         keys.insert("old".to_owned(), Some("old-secret".to_owned()));
         let restored = from_dto(dto, &keys);
-        assert!(restored.channels[0].api_key.is_none(), "改名不继承旧渠道密钥");
+        assert!(
+            restored.channels[0].api_key.is_none(),
+            "改名不继承旧渠道密钥"
+        );
     }
 }

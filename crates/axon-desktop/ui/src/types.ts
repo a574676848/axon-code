@@ -128,6 +128,8 @@ export interface VoiceModelDto {
   voice: string;
   speechRate: number;
   turnDetection: string;
+  /** 会话系统提示词；仅 realtime 角色生效，留空用内置语音版人格。 */
+  instructions: string;
 }
 
 /** 独立 `[voice]` 段 DTO，读写共用。 */

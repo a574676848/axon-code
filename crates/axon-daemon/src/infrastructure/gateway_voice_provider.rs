@@ -69,8 +69,9 @@ pub struct RealtimeEndpoint {
 impl RealtimeEndpoint {
     /// 用用户配置里的最小字段构造。
     ///
-    /// 提示词走产品默认，语速留给服务端：`[voice]` 段的语速是合成语义
-    /// （-50..=100），与 realtime 的倍率语义（0.5..=2.0）不同，不能互相搬运。
+    /// 提示词按 `[voice]` 段的 `instructions` 走，留空回落语音版人格默认值；
+    /// 语速留给服务端：`[voice]` 段的语速是合成语义（-50..=100），与 realtime
+    /// 的倍率语义（0.5..=2.0）不同，不能互相搬运。
     #[must_use]
     pub fn from_config(
         base_url: &str,
@@ -79,15 +80,21 @@ impl RealtimeEndpoint {
         voice: String,
         language: &str,
         turn_detection: &str,
+        instructions: &str,
     ) -> Self {
         let url = with_model_query(base_url, &model);
+        let instructions = instructions.trim();
         Self {
             url,
             api_key,
             model,
             session: SessionConfig {
                 voice,
-                instructions: DEFAULT_REALTIME_INSTRUCTIONS.to_owned(),
+                instructions: if instructions.is_empty() {
+                    DEFAULT_REALTIME_INSTRUCTIONS.to_owned()
+                } else {
+                    instructions.to_owned()
+                },
                 speech_rate: None,
                 language: language.to_owned(),
                 turn_detection: TurnDetection::from_code(turn_detection),
@@ -235,9 +242,15 @@ const DEFAULT_REALTIME_BASE_URL: &str =
 const DEFAULT_REALTIME_MODEL: &str = "qwen-audio-3.1-realtime-flash";
 /// 默认音色：与 TTS 探针一致，避免两条车道听起来像两个人。
 const DEFAULT_REALTIME_VOICE: &str = "longanlingxin_v3.1";
-/// 默认系统提示词：先守住「短」这条产品红线，M5 会接入真实人格。
-const DEFAULT_REALTIME_INSTRUCTIONS: &str =
-    "你是知微，先生的私人助理。回答简短口语化，一次不超过两句话。";
+/// 默认系统提示词：语音版人格骨架。
+///
+/// realtime 的 `instructions` 每轮随会话重发，整份 SOUL 会拖慢首包并稀释
+/// 指令，所以这里只留人格骨架与语音红线；完整人格由桌面文字侧承载。
+const DEFAULT_REALTIME_INSTRUCTIONS: &str = "\
+你是知微，先生的私人助理。\
+性情知性干练、外冷内热：对技术只认规范与落地闭环，对生活直接给方案、不唠叨。\
+说话短句、口语、先说结论，一次最多两句话；不用列表、不用 markdown、不复述先生的话。\
+称呼对方为「先生」，自称「我」；不确定就直说不确定，不编造。";
 
 /// 专用凭据变量名。
 const ENV_REALTIME_API_KEY: &str = "AXON_VOICE_REALTIME_API_KEY";

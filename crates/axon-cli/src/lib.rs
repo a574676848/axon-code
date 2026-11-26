@@ -143,8 +143,8 @@ mod turn_execution_ledger;
 mod upgrade_commands;
 mod usage_statistics;
 pub mod user_question;
-mod workbench_http_adapter;
 mod voice_runtime_config;
+mod workbench_http_adapter;
 
 use std::{
     fmt::Write as _,

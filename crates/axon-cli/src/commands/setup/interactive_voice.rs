@@ -111,15 +111,23 @@ fn collect_channel_input(current: Option<&VoiceChannelConfig>, cmd: &mut VoiceSe
         cmd.base_url = Some(base);
     }
 
-    let ws_now = current.and_then(|c| c.websocket_url.clone()).unwrap_or_default();
+    let ws_now = current
+        .and_then(|c| c.websocket_url.clone())
+        .unwrap_or_default();
     let ws = prompt_string("WebSocket 地址", "留空则由 API 地址推导；回车保留", &ws_now);
     if ws != ws_now && !name.is_empty() {
         ensure_channel(cmd, &name);
         cmd.websocket_url = Some(ws);
     }
 
-    let env_now = current.and_then(|c| c.api_key_env.clone()).unwrap_or_default();
-    let env = prompt_string("密钥环境变量名", "仅变量名，不收密钥明文；回车保留", &env_now);
+    let env_now = current
+        .and_then(|c| c.api_key_env.clone())
+        .unwrap_or_default();
+    let env = prompt_string(
+        "密钥环境变量名",
+        "仅变量名，不收密钥明文；回车保留",
+        &env_now,
+    );
     if env != env_now && !name.is_empty() {
         ensure_channel(cmd, &name);
         cmd.api_key_env = Some(env);
@@ -144,7 +152,12 @@ fn collect_model_input(current: Option<&VoiceModelConfig>, cmd: &mut VoiceSetupC
     let role_now = current.map_or("asr", |m| m.role.as_str());
     let role = pick(
         role_now,
-        prompt_choice("模型角色", "asr 识别 / tts 合成 / realtime 实时", ROLES, role_now),
+        prompt_choice(
+            "模型角色",
+            "asr 识别 / tts 合成 / realtime 实时",
+            ROLES,
+            role_now,
+        ),
         ROLES,
     );
     if role != role_now && !name.is_empty() {
@@ -187,7 +200,12 @@ pub(super) fn collect_voice_input(config: &AxonConfig) -> VoiceSetupCommand {
     let enabled_now = if voice.is_enabled() { "是" } else { "否" };
     let enabled = pick(
         enabled_now,
-        prompt_choice("语音总开关", "配置入口；交互 UI 仍由全局开关控制", YES_NO, enabled_now),
+        prompt_choice(
+            "语音总开关",
+            "配置入口；交互 UI 仍由全局开关控制",
+            YES_NO,
+            enabled_now,
+        ),
         YES_NO,
     );
     if enabled != enabled_now {

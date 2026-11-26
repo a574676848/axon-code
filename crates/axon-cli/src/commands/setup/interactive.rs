@@ -14,10 +14,10 @@ use super::setup_interactive_config::collect_module_config_values;
 use super::setup_interactive_model_catalog::collect_model_input;
 use super::setup_interactive_provider_catalog::collect_provider_input;
 use super::setup_interactive_style::{SetupStyle, paint};
-use super::setup_interactive_voice::collect_voice_input;
 use super::setup_interactive_views::{
     collect_advanced_config_input, collect_remote_input, collect_reset_menu_input, print_dashboard,
 };
+use super::setup_interactive_voice::collect_voice_input;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct InteractiveSetupInput {

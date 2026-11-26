@@ -72,7 +72,7 @@ priority = 100
 # 同优先级权重；默认值：1。
 weight = 1
 
-# 语音模型（同构于 [[models]]，另加 role/voice/speech_rate/turn_detection）。
+# 语音模型（同构于 [[models]]，另加 role/voice/speech_rate/turn_detection/instructions）。
 [[voice.models]]
 # 模型路由名称，段内唯一；默认值：""（必须填写）。
 name = "volc-tts-seed20"
@@ -88,6 +88,8 @@ voice = "zh_female_shuangkuaisisi_uranus_bigtts"
 speech_rate = 20
 # 轮次检测；可选值：server_vad、smart_turn_v2、manual；默认值："server_vad"。
 turn_detection = "server_vad"
+# 会话系统提示词；仅 role 为 realtime 时生效，留空用内置语音版人格。
+# instructions = "只答一句，不寒暄。"
 
 # 识别渠道：与合成分开配置——两者端点路径不同，不能共用一个 base_url。
 [[voice.channels]]

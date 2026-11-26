@@ -19,10 +19,10 @@ mod setup_interactive_provider_catalog;
 mod setup_interactive_provider_model;
 #[path = "setup/interactive_style.rs"]
 mod setup_interactive_style;
-#[path = "setup/interactive_voice.rs"]
-mod setup_interactive_voice;
 #[path = "setup/interactive_views.rs"]
 mod setup_interactive_views;
+#[path = "setup/interactive_voice.rs"]
+mod setup_interactive_voice;
 #[path = "setup/option_help.rs"]
 mod setup_option_help;
 #[path = "setup/plan.rs"]

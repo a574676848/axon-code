@@ -30,9 +30,7 @@ pub use expression::{
     ExpressionStyle, SpeechSegment, parse_expression, render_with_expression, segments_with_pauses,
 };
 pub use fusion::{PersonaVoiceInput, VoicePlan, plan};
-pub use port::{
-    Clock, PcmChunk, SAMPLE_RATE_HZ, SpeechRenderer, TextToSpeech,
-};
+pub use port::{Clock, PcmChunk, SAMPLE_RATE_HZ, SpeechRenderer, TextToSpeech};
 pub use presets::{PRESETS, VoicePreset, default_preset, resolve};
 pub use render::{
     SpeechStream, render_for_speech, render_for_speech_with_override, render_sentences,

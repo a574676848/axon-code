@@ -26,10 +26,10 @@ mod keys;
 mod keys_specs;
 #[path = "schema/sections.rs"]
 mod sections;
-#[path = "voice.rs"]
-pub mod voice;
 #[path = "validation/validators.rs"]
 mod validators;
+#[path = "voice.rs"]
+pub mod voice;
 #[cfg(test)]
 pub(crate) use config_paths::default_user_axon_root_path_from_env;
 pub use config_paths::{
@@ -54,8 +54,8 @@ pub use sections::{
     AgentConfig, ChannelBalancerConfig, MemoryConfig, MemoryEmbeddingConfig, RemoteConfig,
     RemoteGatewayConfig, SkillsConfig, TuiConfig, VisionConfig,
 };
-pub use voice::{VoiceChannelConfig, VoiceConfig, VoiceModelConfig};
 pub use setup::*;
+pub use voice::{VoiceChannelConfig, VoiceConfig, VoiceModelConfig};
 
 /// OpenAI 默认协议（映射到 Responses API）。
 pub const PROVIDER_PROTOCOL_OPENAI: &str = "openai";

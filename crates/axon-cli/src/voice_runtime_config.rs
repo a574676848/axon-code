@@ -8,7 +8,7 @@ use axon_config::voice::{
     VOICE_ROLE_ASR, VOICE_ROLE_REALTIME, VOICE_ROLE_TTS, VoiceChannelConfig, VoiceConfig,
     VoiceModelConfig,
 };
-use axon_daemon::{RealtimeEndpoint, VolcAsrConfig, VolcTtsConfig, VoiceRuntime};
+use axon_daemon::{RealtimeEndpoint, VoiceRuntime, VolcAsrConfig, VolcTtsConfig};
 
 /// 默认转写语言：与协议缺省一致。
 const DEFAULT_LANGUAGE: &str = "zh";
@@ -29,7 +29,10 @@ fn model_of<'a>(voice: &'a VoiceConfig, role: &str) -> Option<&'a VoiceModelConf
 }
 
 /// 找出模型引用的渠道。
-fn channel_of<'a>(voice: &'a VoiceConfig, model: &VoiceModelConfig) -> Option<&'a VoiceChannelConfig> {
+fn channel_of<'a>(
+    voice: &'a VoiceConfig,
+    model: &VoiceModelConfig,
+) -> Option<&'a VoiceChannelConfig> {
     voice
         .channels
         .iter()
@@ -74,6 +77,7 @@ fn realtime_endpoint(voice: &VoiceConfig) -> Option<RealtimeEndpoint> {
         model.voice.clone(),
         DEFAULT_LANGUAGE,
         &model.turn_detection,
+        &model.instructions,
     ))
 }
 
@@ -118,8 +122,7 @@ mod tests {
     use super::voice_runtime_from_config;
     use axon_config::voice::{
         VOICE_LANE_REALTIME, VOICE_ROLE_ASR, VOICE_ROLE_REALTIME, VOICE_ROLE_TTS,
-        VoiceChannelConfig, VoiceConfig,
-        VoiceModelConfig,
+        VoiceChannelConfig, VoiceConfig, VoiceModelConfig,
     };
 
     fn channel(name: &str) -> VoiceChannelConfig {
@@ -160,7 +163,10 @@ mod tests {
         assert_eq!(tts.resource_id, "seed-tts-2.0");
         assert_eq!(tts.speech_rate, 20);
         assert_eq!(tts.endpoint, "wss://example.invalid/voice");
-        assert!(runtime.realtime().is_none(), "没配 realtime 角色就不该有车道");
+        assert!(
+            runtime.realtime().is_none(),
+            "没配 realtime 角色就不该有车道"
+        );
     }
 
     #[test]
@@ -182,7 +188,32 @@ mod tests {
         let endpoint = runtime.realtime().expect("realtime 车道必须装配出来");
         assert!(endpoint.url.contains("model=qwen-audio-3.1-realtime-flash"));
         assert_eq!(endpoint.session.voice, "longanlingxin_v3.1");
+        assert!(
+            endpoint.session.instructions.contains("说话短句"),
+            "留空时回落内置语音版人格"
+        );
         assert!(runtime.tts().is_none());
+    }
+
+    #[test]
+    fn realtime_instructions_come_from_the_model_entry() {
+        let voice = VoiceConfig {
+            channel_balancer: VOICE_LANE_REALTIME.to_owned(),
+            channels: vec![channel("bailian")],
+            models: vec![VoiceModelConfig {
+                name: "qwen-realtime".to_owned(),
+                channel: "bailian".to_owned(),
+                id: "qwen-audio-3.1-realtime-flash".to_owned(),
+                role: VOICE_ROLE_REALTIME.to_owned(),
+                voice: "longanlingxin_v3.1".to_owned(),
+                instructions: "只答一句，不寒暄。".to_owned(),
+                ..VoiceModelConfig::default()
+            }],
+            ..VoiceConfig::default()
+        };
+        let runtime = voice_runtime_from_config(&voice);
+        let endpoint = runtime.realtime().expect("realtime 车道必须装配出来");
+        assert_eq!(endpoint.session.instructions, "只答一句，不寒暄。");
     }
 
     #[test]

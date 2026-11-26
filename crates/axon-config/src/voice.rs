@@ -10,8 +10,8 @@ use axon_domain::{AxonError, AxonResult};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    DEFAULT_CHANNEL_PRIORITY, DEFAULT_CHANNEL_WEIGHT,
-    PROVIDER_PROTOCOL_VOLCENGINE_ARK_MULTIMODAL, PROVIDER_WIRE_TRANSPORT_WEBSOCKET,
+    DEFAULT_CHANNEL_PRIORITY, DEFAULT_CHANNEL_WEIGHT, PROVIDER_PROTOCOL_VOLCENGINE_ARK_MULTIMODAL,
+    PROVIDER_WIRE_TRANSPORT_WEBSOCKET,
 };
 
 /// 语音车道：级联。
@@ -105,6 +105,8 @@ pub struct VoiceModelConfig {
     pub speech_rate: i32,
     /// 轮次检测策略：server_vad / smart_turn_v2 / manual。
     pub turn_detection: String,
+    /// 会话系统提示词，仅 realtime 角色生效；留空用内置语音版人格。
+    pub instructions: String,
 }
 
 impl Default for VoiceModelConfig {
@@ -117,6 +119,7 @@ impl Default for VoiceModelConfig {
             voice: String::new(),
             speech_rate: 0,
             turn_detection: VOICE_TURN_SERVER_VAD.to_owned(),
+            instructions: String::new(),
         }
     }
 }
@@ -245,7 +248,7 @@ pub(crate) fn validate_voice(voice: &VoiceConfig) -> AxonResult<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        VoiceChannelConfig, VoiceConfig, VoiceModelConfig, VOICE_LANE_REALTIME, VOICE_ROLE_TTS,
+        VOICE_LANE_REALTIME, VOICE_ROLE_TTS, VoiceChannelConfig, VoiceConfig, VoiceModelConfig,
     };
 
     fn sample_config() -> VoiceConfig {
