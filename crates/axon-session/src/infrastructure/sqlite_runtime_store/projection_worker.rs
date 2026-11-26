@@ -8,8 +8,9 @@
 //! 这个顺序消费，水位因此单调推进，累计型投影不会算错。水位闸门留在 worker 内判定，投递
 //! 时不判定：投递时刻的水位与执行时刻可能不同。
 //!
-//! 水位只在三个投影全部成功后推进：任一失败都不推进，并把失败事实写进日志。worker 不为
-//! 失败批次自动排队重试，重试由上层重放或 `rebuild_session_metrics` 这个重建入口承担。
+//! 水位只在三个投影全部成功后推进，记的是「已投影到的最后一条序号」。失败批次不推进，
+//! 也不就地重试：三个投影不是同一事务，整批重放会把已成功的累加投影算第二遍。失败事实
+//! 写进日志，由 [`SqliteRuntimeStore::rebuild_session_projections`] 这个重建入口兜底。
 //!
 //! 闸门命中时整批跳过，并记一条带水位与批首序号的 debug 日志：序号回退这类故障里，整批
 //! 跳过是唯一会静默丢投影的路径，必须留痕。
@@ -135,27 +136,26 @@ fn run(job: ProjectionJob) {
     }
 }
 
-/// 执行本批的三个投影；任一失败即返回错误，由调用方决定水位。
+/// 执行一批事件的三个投影；任一失败即返回错误，由调用方决定水位。
 ///
-/// 这是 `apply_projections` 拆出来的可复用实现：同步路径与 worker 共用，不复制逻辑。
-fn project_events(job: &ProjectionJob) -> Result<(), RuntimeStoreError> {
-    let store = &job.store;
-    let session_id = &job.session_id;
+/// 这是写路径（worker）与重建入口共用的实现，不复制逻辑。重建时把整条日志按批喂进来，
+/// 因此签名只依赖「一批事件」，不依赖投递上下文。
+pub(super) fn project_events(
+    store: &SqliteRuntimeStore,
+    session_id: &DaemonSessionId,
+    events: &[(String, String)],
+    origin_channel: Option<&str>,
+    now_ms: u64,
+) -> Result<(), RuntimeStoreError> {
     // 逐轮事实：收口批次里同时带着终态与它派生的指标，一次投影就够。
     super::super::turn_activity_projection::project_turn_activity(
-        store,
-        session_id,
-        &job.events,
-        job.now_ms,
+        store, session_id, events, now_ms,
     )?;
     // 会话级上下文快照：界面占用读数与剩余量现在读同一份。
     super::super::context_snapshot_projection::project_context_snapshot(
-        store,
-        session_id,
-        &job.events,
-        job.now_ms,
+        store, session_id, events, now_ms,
     )?;
-    for (event_type, payload_json) in &job.events {
+    for (event_type, payload_json) in events {
         if event_type != "turn_metrics" {
             continue;
         }
@@ -166,8 +166,8 @@ fn project_events(job: &ProjectionJob) -> Result<(), RuntimeStoreError> {
             store,
             session_id,
             &metrics,
-            job.origin_channel.as_deref(),
-            job.now_ms,
+            origin_channel,
+            now_ms,
         )?;
     }
     Ok(())
@@ -189,10 +189,26 @@ fn project(job: &ProjectionJob) -> ProjectionOutcome {
     {
         return ProjectionOutcome::Skipped { watermark };
     }
-    match project_events(job) {
+    /*
+     * 不做就地重试：三个投影不是同一个事务，整批重放会把已经成功的 `turn_metrics` 再
+     * 累加一次（累计型投影不幂等）。失败只留痕、不推进水位，由重建入口兜底。
+     */
+    match project_events(
+        store,
+        session_id,
+        &job.events,
+        job.origin_channel.as_deref(),
+        job.now_ms,
+    ) {
         Ok(()) => {
-            // 三个投影全部成功才推进水位：失败批次不推进，重放时才不会被整批跳过。
-            projection_watermark::advance(store, session_id, job.start_sequence, job.now_ms);
+            /*
+             * 水位记「已投影到的最后一条序号」：一批事件是连续序号的一段，记末尾才能让
+             * 「是否落后」判定精确到批；记批首会让多帧批永远显示落后一批。
+             */
+            let batch_end = job
+                .start_sequence
+                .saturating_add(u64::try_from(job.events.len().saturating_sub(1)).unwrap_or(0));
+            projection_watermark::advance(store, session_id, batch_end, job.now_ms);
             ProjectionOutcome::Applied
         }
         Err(error) => ProjectionOutcome::Failed { error },
@@ -357,8 +373,17 @@ impl ProjectionQueue {
     /// 溢出兜底也扫不到它，后批就能先跑并推高水位，前批随后被闸门整批跳过。
     fn run_worker(&self) {
         loop {
+            /*
+             * 等活时不持执行互斥：否则队列被溢出兜底摘空后 worker 会持着 `run_lock` 睡在
+             * 条件变量上，而兜底正需要这把锁，写线程可能永久等锁。取活则在锁内完成，
+             * 「已出队未执行」的窗口仍然不存在。
+             */
+            self.wait_for_work();
             let run_guard = self.lock_run();
-            let job = self.next_job();
+            let Some(job) = self.take_job() else {
+                drop(run_guard);
+                continue;
+            };
             self.execute_locked(job);
             drop(run_guard);
             let mut state = self.lock_state();
@@ -367,20 +392,26 @@ impl ProjectionQueue {
         }
     }
 
-    /// 阻塞取下一批；队列为空时挂在 `wake` 上等投递。
-    fn next_job(&self) -> ProjectionJob {
+    /// 阻塞到队列里有批可拿；等待期间不持执行互斥。
+    fn wait_for_work(&self) {
         let mut state = self.lock_state();
-        loop {
-            if let Some(job) = state.jobs.pop_front() {
-                state.busy = true;
-                return job;
-            }
+        while state.jobs.is_empty() {
             self.drained.notify_all();
             state = self
                 .wake
                 .wait(state)
                 .unwrap_or_else(PoisonError::into_inner);
         }
+    }
+
+    /// 在持有执行互斥时取一批；队列已被溢出兜底摘空时返回 `None`。
+    fn take_job(&self) -> Option<ProjectionJob> {
+        let mut state = self.lock_state();
+        let job = state.jobs.pop_front();
+        if job.is_some() {
+            state.busy = true;
+        }
+        job
     }
 
     /// 阻塞到队列排空且 worker 手上没有在跑的批，返回累计已执行的批数。

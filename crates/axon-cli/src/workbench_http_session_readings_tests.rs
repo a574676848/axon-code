@@ -15,7 +15,10 @@ use axon_domain::{
 use axon_eventlog::{RuntimeEventKind, RuntimeEventRecord};
 use axon_session::{InteractionStore as _, RuntimeStore as _, SqliteRuntimeStore};
 
-use super::{SESSION_TAIL_MAX_FRAMES, page_facts, page_facts_within};
+use super::{
+    SESSION_TAIL_MAX_FRAMES, page_facts, page_facts_within, session_usage_payload,
+    settled_elapsed_ms,
+};
 
 struct Fixture {
     root: PathBuf,
@@ -131,6 +134,56 @@ impl Fixture {
                 )
             })
             .expect("登记在途工作项");
+    }
+
+    /// 落一行会话累计投影：累计读数的默认来源。
+    fn seed_session_metrics(
+        &self,
+        turn_count: u64,
+        total_active_ms: u64,
+        input_tokens: u64,
+        output_tokens: u64,
+    ) {
+        self.store
+            .with_read_connection(|connection| {
+                connection.execute(
+                    "INSERT INTO session_metrics(session_id,turn_count,total_active_ms,\
+                     total_input_tokens,total_output_tokens,updated_at_ms) \
+                     VALUES(?1,?2,?3,?4,?5,1) \
+                     ON CONFLICT(session_id) DO UPDATE SET \
+                         turn_count=excluded.turn_count, \
+                         total_active_ms=excluded.total_active_ms, \
+                         total_input_tokens=excluded.total_input_tokens, \
+                         total_output_tokens=excluded.total_output_tokens",
+                    rusqlite::params![
+                        self.session_id,
+                        turn_count as i64,
+                        total_active_ms as i64,
+                        input_tokens as i64,
+                        output_tokens as i64,
+                    ],
+                )
+            })
+            .expect("写入累计投影");
+    }
+
+    /// 落投影水位与事件水位：两者的大小关系就是「投影落后」的判据。
+    fn seed_watermarks(&self, last_projected_seq: u64, last_event_sequence: u64) {
+        self.store
+            .with_read_connection(|connection| {
+                connection.execute(
+                    "INSERT INTO projection_state(session_id,last_projected_seq,updated_at_ms) \
+                     VALUES(?1,?2,1) \
+                     ON CONFLICT(session_id) DO UPDATE SET \
+                         last_projected_seq=excluded.last_projected_seq",
+                    rusqlite::params![self.session_id, last_projected_seq as i64],
+                )?;
+                connection.execute(
+                    "UPDATE sessions SET last_event_sequence=?1 WHERE session_id=?2",
+                    rusqlite::params![last_event_sequence as i64, self.session_id],
+                )
+            })
+            .expect("写入水位");
     }
 
     fn append(&mut self, kind: RuntimeEventKind, interaction_id: &str, payload: serde_json::Value) {
@@ -368,4 +421,52 @@ fn job_started_far_back_merges_with_a_recent_completion() {
     );
     assert_eq!(job.elapsed_ms, Some(9_000));
     assert_eq!(job.exit_code, Some(124));
+}
+
+/// 累计用量与累计耗时：投影落后时按事件日志补齐，追平后完全走投影。
+#[test]
+fn session_usage_reads_the_log_only_while_the_projection_lags() {
+    let mut fixture = Fixture::new();
+    let projected = fixture.append_interaction("投影已覆盖的轮次");
+    let lagging = fixture.append_interaction("只在日志里的轮次");
+    // 两条指标帧都落在日志里；投影只覆盖了第一条。
+    fixture.append(
+        RuntimeEventKind::TurnMetrics,
+        &projected,
+        turn_metrics_payload(&projected, 900, 11),
+    );
+    fixture.append(
+        RuntimeEventKind::TurnMetrics,
+        &lagging,
+        turn_metrics_payload(&lagging, 400, 22),
+    );
+    fixture.seed_session_metrics(1, 900, 5, 11);
+    fixture.seed_watermarks(0, 1);
+
+    let usage = session_usage_payload(&fixture.root, &fixture.session_id);
+    assert_eq!(
+        usage["outputTokens"], 33,
+        "落后时必须把日志里那一轮的输出补进来：{usage}"
+    );
+    assert_eq!(usage["inputTokens"], 10);
+    assert_eq!(usage["totalTokens"], 43);
+    assert_eq!(
+        settled_elapsed_ms(&fixture.root, &fixture.session_id),
+        Some(1_300),
+        "累计墙钟同样要补上未投影的那一轮"
+    );
+
+    // 追平之后不再回源：投影里的 777 只可能来自投影本身。
+    fixture.seed_session_metrics(1, 900, 777, 11);
+    fixture.seed_watermarks(1, 1);
+    let caught_up = session_usage_payload(&fixture.root, &fixture.session_id);
+    assert_eq!(
+        caught_up["inputTokens"], 777,
+        "不落后时必须原样返回投影值：{caught_up}"
+    );
+    assert_eq!(caught_up["outputTokens"], 11);
+    assert_eq!(
+        settled_elapsed_ms(&fixture.root, &fixture.session_id),
+        Some(900)
+    );
 }

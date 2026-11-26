@@ -264,6 +264,16 @@ impl DatabaseHandle {
     }
 }
 
+/// 关闭本进程连接的自动 WAL 回写。
+///
+/// 只给 Daemon 用：它有独立线程按体量与周期驱动 `PASSIVE` 回写，自动回写留在提交线程里
+/// 会让每一批写入替别人的回写排队。CLI 进程没有这条线程，必须保留默认的 1000 页兜底。
+///
+/// 必须在建立连接之前调用。
+pub fn disable_automatic_wal_checkpoint() {
+    connection_pool::set_wal_autocheckpoint_pages(0);
+}
+
 impl SqliteRuntimeStore {
     /// 从数据库文件路径创建 Store。
     ///

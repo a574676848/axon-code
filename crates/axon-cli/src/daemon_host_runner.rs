@@ -180,7 +180,7 @@ fn try_run_daemon_host(
     let runtime_root = daemon_runtime_root(command);
     // 上一轮停止可能留下请求文件；必须先清掉，否则新进程会被立刻要求退出。
     crate::daemon_commands::daemon_stop_request::clear(&runtime_root);
-    let store = SqliteRuntimeStore::from_root(&runtime_root);
+    let store = support::open_runtime_store(&runtime_root);
     // Gateway 与 CLI、cron 一样是 Interaction 提交方，但它没有调用方 cwd，事件只能落在
     // Daemon 自己的工作目录上；提交方必须先注册 Workspace，否则主 turn 打开运行时会被拒。
     register_daemon_workspace(&store);

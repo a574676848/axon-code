@@ -16,8 +16,8 @@ use std::time::Duration;
 const MAX_IDLE_CONNECTIONS: usize = 8;
 /// 单条连接等待写锁的毫秒数；超时返回 Busy 交由上层可观测地失败，而不是无限阻塞。
 ///
-/// 预算按「最长合法写事务」定：一次 WAL 自动回写（1000 页上限）叠上杀毒扫描可以吃掉
-/// 数百毫秒，突发写入再排几拍，1 秒会给出误报。这里放宽到 2 秒，配合
+/// 预算按「最长合法写事务」定：一次 `PASSIVE` 回写（体量上限 64 MiB）叠上杀毒扫描可以
+/// 吃掉数百毫秒，突发写入再排几拍，1 秒会给出误报。这里放宽到 2 秒，配合
 /// `with_busy_retry` 吃掉的瞬时争用，实测里的 `database is locked` 属于「等不到」而不是
 /// 「库坏了」。
 const BUSY_TIMEOUT_MS: u64 = 2_000;
@@ -39,10 +39,39 @@ const DEFAULT_BUSY_TIMEOUT: Duration = Duration::from_millis(BUSY_TIMEOUT_MS);
 /// （实测 743 MB，与主库同量级），而一次 checkpoint 要把这些页全部回写主库，
 /// 期间独占写锁数十秒，所有写者按 busy_timeout 排队失败。上限一旦生效，
 /// checkpoint 只在有界体量上发生，写锁抖动不再波及无关写入方。
-/// `wal_autocheckpoint` 显式钉住默认值：1000 页（约 4 MB）触发一次 checkpoint，
-/// 不依赖 SQLite 编译期默认，也让「多久回写一次」成为代码里的可见事实。
-const CONNECTION_PRAGMAS: &str = "PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL; \
-     PRAGMA journal_size_limit = 67108864; PRAGMA wal_autocheckpoint = 1000;";
+///
+/// `wal_autocheckpoint = 0` 关闭 SQLite 的自动回写。自动回写是提交路径上的同步动作：
+/// 触发阈值（旧值 1000 页，约 4 MB）的那次 `COMMIT` 必须等回写做完才返回，重写负载下
+/// 每个写者都在替别人的回写排队，单帧延迟因此被回写时长直接决定。关掉之后回写改由
+/// Daemon 的独立线程驱动（`axon-cli` 的 `daemon_host_runner_workers`）：每 30 秒读一次
+/// WAL 体量，超过 64 MiB 立即 `PASSIVE` 回写，未超过则按 5 分钟周期兜底。
+///
+/// 关掉自动回写不会让 WAL 无界增长，三处机制共同兜住体量：
+/// 1. 上一条 `journal_size_limit`：每次成功回写重置 WAL 之后，第一次提交把文件截到
+///    64 MiB，文件长度此后是「高水位」而不是当前帧量，同一轮里反复回写不再叠加；
+/// 2. Daemon 回写线程：体量阈值与固定周期双触发，写入再快也会在一个 tick（30 秒）内
+///    被看见并回写；
+/// 3. 进程退出：最后一个连接关闭时 SQLite 会做一次完整回写并删除 WAL，`axon run` 这类
+///    短命进程不会留下没回写的日志。
+///
+/// 自动回写页数按进程分档：默认保留 SQLite 的 1000 页兜底（CLI 直跑的长轮次与批量修复
+/// 没有别的回写驱动），Daemon 在启动时把它设为 0，改由独立线程按体量与周期驱动。
+static WAL_AUTOCHECKPOINT_PAGES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(1000);
+
+/// 设定本进程连接的自动回写页数；必须在建立连接之前调用。
+pub(super) fn set_wal_autocheckpoint_pages(pages: usize) {
+    WAL_AUTOCHECKPOINT_PAGES.store(pages, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 连接建立时执行的 PRAGMA 批次。
+fn connection_pragmas() -> String {
+    format!(
+        "PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL; \
+         PRAGMA journal_size_limit = 67108864; PRAGMA wal_autocheckpoint = {};",
+        WAL_AUTOCHECKPOINT_PAGES.load(std::sync::atomic::Ordering::Relaxed)
+    )
+}
 /// 守卫在连接被取走后再解引用时的显式失败信息。
 const CONNECTION_TAKEN: &str = "运行时连接在守卫释放前被取走";
 
@@ -107,7 +136,7 @@ impl ConnectionPool {
             .busy_timeout(self.busy_timeout)
             .map_err(storage)?;
         connection
-            .execute_batch(CONNECTION_PRAGMAS)
+            .execute_batch(&connection_pragmas())
             .map_err(storage)?;
         Ok(connection)
     }
@@ -145,5 +174,29 @@ impl Drop for PooledConnection<'_> {
         if let Some(connection) = self.connection.take() {
             self.pool.release(connection);
         }
+    }
+}
+
+#[cfg(test)]
+mod wal_autocheckpoint_tests {
+    use super::*;
+
+    /// 自动回写落在提交线程里：连接建立后必须读回 0，证明它已经被关掉。
+    ///
+    /// 断言必须来自 SQLite 的读回值，不能只看常量字符串：pragma 名字写错不会编译失败，
+    /// 只会静默沿用 SQLite 的编译期默认（1000 页），自动回写就这样留在提交路径上。
+    #[test]
+    fn wal_autocheckpoint_is_disabled_on_pooled_connections() {
+        let directory = axon_test_support::test_temp_dir();
+        let pool = ConnectionPool::new(directory.path().join("control.sqlite3"));
+        let connection = pool.acquire().expect("连接池应能建立连接");
+        let pages: i64 = connection
+            .query_row("PRAGMA wal_autocheckpoint", [], |row| row.get(0))
+            .expect("读取 wal_autocheckpoint");
+
+        assert_eq!(
+            pages, 1000,
+            "默认连接必须保留 SQLite 的兜底回写，否则纯 CLI 进程的 WAL 会随写入量无界增长"
+        );
     }
 }

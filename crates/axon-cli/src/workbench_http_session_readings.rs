@@ -3,7 +3,9 @@
 //! 两类事实各有一个落点，且都不是车道表本身：
 //! - **会话累计**：`session_metrics` 投影，按 `session_id` 一行。它是 `turn_metrics`
 //!   与作业事件的投影，可由事件日志整体重建，因此读取只做一次主键查，
-//!   不回放正文、不解析单轮记录。
+//!   不回放正文、不解析单轮记录。投影落后于事件水位时按日志补齐水位之后的那一段
+//!   （有界，见 `SqliteRuntimeStore::session_metrics_with_fallback`），否则写返回后
+//!   立刻读会读到上一批的旧值。
 //! - **逐轮读数**：每条 Interaction 自己的 `turn_metrics` 事件。索引页要为十几轮各给
 //!   一行读数（用时、token、首字、速率），逐轮整段回放会把一页正文全部解压一遍，因此
 //!   投影覆盖不到的轮次按帧索引的交互指纹定向补，一条交互通常只解压它自己的最后几帧。
@@ -404,22 +406,19 @@ fn clamp_answer_text(text: &str) -> String {
     clamped
 }
 
-/// 会话累计墙钟耗时（毫秒）：直接读 `session_metrics` 投影。
+/// 会话累计墙钟耗时（毫秒）：读 `session_metrics` 投影，投影落后时按日志补齐。
 ///
 /// `inbox` 已不再持有处理状态，逐轮耗时由 `turn_metrics` 投影到
 /// `session_metrics.total_active_ms`；这里读投影而不是回放事件，一次主键查找即可。
+/// 投影是异步的，写返回后立刻读可能读到上一批的累计值，因此落后判定与补齐交给同一处
+/// 入口（[`SqliteRuntimeStore::session_metrics_with_fallback`]）。
 pub(super) fn settled_elapsed_ms(axon_root: &Path, session_id: &str) -> Option<u64> {
-    let store = runtime_store(axon_root);
-    store
-        .with_read_connection(|connection| {
-            connection.query_row(
-                "SELECT total_active_ms FROM session_metrics WHERE session_id = ?1",
-                [session_id],
-                |row| row.get::<_, i64>(0),
-            )
-        })
+    let session = DaemonSessionId::new(session_id.to_owned()).ok()?;
+    runtime_store(axon_root)
+        .session_metrics_with_fallback(&session)
         .ok()
-        .and_then(|total| u64::try_from(total).ok())
+        .flatten()
+        .map(|metrics| metrics.total_active_ms)
 }
 
 /// 车道的累计用量载荷。
@@ -429,6 +428,9 @@ pub(super) fn settled_elapsed_ms(axon_root: &Path, session_id: &str) -> Option<u
 ///
 /// 总量口径与界面一致：输入、缓存读写、输出与推理相加。运维与计费的分桶仍各自保留。
 ///
+/// 投影落后于事件水位时按日志补齐水位之后的轮次，回源有界；不落后时完全走投影，不碰
+/// 事件日志。
+///
 /// 还没有任何轮次的会话读作全零而不是「未知」：新建会话在第一轮跑起来之前就是这个
 /// 状态，把读数藏起来会让「这一轮已经花了多少」在页面上完全看不见。真的读失败
 ///（库打不开、投影损坏）才给 null，由界面按「未知」处理。
@@ -437,7 +439,7 @@ pub(super) fn session_usage_payload(axon_root: &Path, session_id: &str) -> serde
         return serde_json::Value::Null;
     };
     let store = runtime_store(axon_root);
-    let metrics = match store.session_metrics(&session) {
+    let metrics = match store.session_metrics_with_fallback(&session) {
         Ok(metrics) => metrics,
         Err(_) => return serde_json::Value::Null,
     };

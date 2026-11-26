@@ -111,7 +111,7 @@ fn two_delivered_batches_are_projected_after_drain() {
     assert!(processed >= 2, "两批都必须被处理过，实际 {processed}");
 }
 
-/// 同一批重复投递不得重复累加；更大的批首序号才算新的一批。
+/// 同一批重复投递不得重复累加；更大的首序号才算新的一批。
 ///
 /// 顺带固化「单测构建下投递即执行」：这条用例读到投影时不等待任何队列。
 #[test]
@@ -194,7 +194,7 @@ fn resetting_the_watermark_requires_the_rewind_to_cross_it() {
     assert_eq!(
         super::super::projection_watermark::watermark(&store, &session_id),
         Some(10),
-        "投递后的水位必须落在本批批首序号上"
+        "投递后的水位必须落在本批最后一条序号上"
     );
 
     assert!(
@@ -311,4 +311,55 @@ fn queue_counts_skipped_and_failed_outcomes() {
     assert_eq!(queue.processed_count(), 3);
     assert_eq!(queue.skipped_count(), 1, "闸门跳过单独计数");
     assert_eq!(queue.failed_count(), 1, "执行失败单独计数");
+}
+
+/// 重建入口：清掉派生行与水位后按日志整体重放，三张投影都要回到与日志一致的状态。
+#[test]
+fn rebuilding_replays_the_log_into_all_three_projections() {
+    let (store, session_id, _host) = fixture("projection-rebuild");
+    let interaction = "01TURNACTIVITYREBUILD0000001";
+    let metrics = axon_eventlog::TurnMetrics {
+        turn_id: "turn-1".to_owned(),
+        active_ms: 900,
+        ..axon_eventlog::TurnMetrics::default()
+    };
+    let records = vec![
+        axon_eventlog::RuntimeEventRecord::new(
+            1,
+            1_000,
+            axon_eventlog::RuntimeEventKind::TurnMetrics,
+            serde_json::to_value(&metrics).expect("指标序列化"),
+        ),
+        axon_eventlog::RuntimeEventRecord::new(
+            2,
+            1_001,
+            axon_eventlog::RuntimeEventKind::TurnCompleted,
+            serde_json::json!({
+                "interactionId": interaction,
+                "response": "重建答案",
+            }),
+        ),
+    ];
+    axon_eventlog::append_once(&store.event_log(&session_id), 1, 1_000, &records)
+        .expect("写事件日志");
+
+    // 先把状态弄脏：水位推到末尾并留一份错误读数，重建必须把它纠正回来。
+    super::projection_watermark::advance(&store, &session_id, 2, 1);
+    let replayed = store
+        .rebuild_session_projections(&session_id)
+        .expect("重建必须成功");
+    assert_eq!(replayed, 2, "两条帧都要重放");
+
+    let metrics_row = store
+        .session_metrics(&session_id)
+        .expect("读指标")
+        .expect("重建后必须有指标行");
+    assert_eq!(metrics_row.turn_count, 1, "累计轮次来自 turn_metrics");
+    assert_eq!(metrics_row.total_active_ms, 900);
+
+    let activity = store
+        .turn_activities_for(session_id.as_str(), &[interaction])
+        .expect("读逐轮事实");
+    let row = activity.get(interaction).expect("重建后必须有逐轮事实");
+    assert_eq!(row.answer_text.as_deref(), Some("重建答案"));
 }

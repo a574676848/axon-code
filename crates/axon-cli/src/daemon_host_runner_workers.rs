@@ -1,6 +1,7 @@
 //! Daemon 后台 Worker 线程的循环与失败处理。
 
 use std::{
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -229,7 +230,7 @@ fn run_cron_loop(cron_adapter: crate::cron_commands::CronDaemonAdapter, running:
     }
 }
 
-/// WAL 回写独立线程：按固定周期做一次 `PASSIVE` 回写。
+/// WAL 回写独立线程：按体量或固定周期做一次 `PASSIVE` 回写。
 fn start_checkpoint_worker(host: CliDaemonHost, running: Arc<AtomicBool>) {
     thread::spawn(move || {
         let mut last_checkpoint_at = Instant::now();
@@ -241,6 +242,8 @@ fn start_checkpoint_worker(host: CliDaemonHost, running: Arc<AtomicBool>) {
 }
 
 /// 回写线程的唤醒粒度：比回写周期短得多，因此只做一次比较就回去睡。
+///
+/// 它同时是体量触发的检测延迟上界：WAL 越过阈值到真正回写，最多晚一个 tick。
 const CHECKPOINT_WORKER_TICK_MS: u64 = 30_000;
 
 fn cleanup_releases_if_due(last_release_gc: &mut Instant) {
@@ -253,16 +256,65 @@ fn cleanup_releases_if_due(last_release_gc: &mut Instant) {
 
 const LSP_OBSERVATION_SAMPLE_INTERVAL_MS: u64 = 3_000;
 
-/// WAL 回写周期。
+/// WAL 体量触发阈值：`-wal` 文件超过这个字节数就立即回写，不等固定周期。
+///
+/// 取 64 MiB，与 `axon-session` 连接池里的 `journal_size_limit` 相等，比较必须写成
+/// **严格大于**。一次成功的回写会重置 WAL，随后的第一次提交把文件截到
+/// `journal_size_limit`，文件长度从此是「高水位」而不是当前帧量：长度恰好等于 64 MiB
+/// 时，WAL 里可能一帧都没有。写成严格大于，两种情况才归到同一句话：文件长度超过阈值，
+/// 等价于「自上次重置起新写入的帧超过 64 MiB」。若写成大于等于，文件被截到基线之后
+/// 每一次 tick 都会判定超阈值，体量触发就退化成固定 30 秒回写。
+///
+/// 为什么是 64 MiB：`PASSIVE` 回写要把 WAL 帧逐页拷回主库，拷贝期间持有写锁，阈值越大
+/// 单次独占越久（连接池的 `busy_timeout` 是 2 秒），阈值越小回写越频繁但每次越便宜。
+/// 64 MiB 让单次回写通常落在数百毫秒内，同时把 WAL 常驻体量压在「64 MiB 加一个 tick
+/// 的写入量」以内。
+const WAL_SIZE_CHECKPOINT_THRESHOLD_BYTES: u64 = 64 * 1024 * 1024;
+
+/// WAL 回写周期：体量没到阈值时的兜底。
 ///
 /// 持续写入下 WAL 会一直漂大，漂到与主库同量级后一次全量回写要独占写锁数十秒，
 /// 所有写者按 `busy_timeout` 排队失败，续租与业务写一起被拉下水。周期性地做
 /// `PASSIVE` 回写把这件事摊平：不阻塞读写，拿不到干净窗口就留给下一轮。
+///
+/// 连接池关掉自动回写之后，周期性回写只剩这条线程：慢速累积的库等不到体量阈值，
+/// 也必须有一次周期性的重置，否则 WAL 仍会按写入量一直长。
 const WAL_CHECKPOINT_INTERVAL_MS: u64 = 5 * 60 * 1_000;
 
+/// 这一轮是否该回写：体量超阈值优先，否则按固定周期兜底。
+fn checkpoint_due(wal_bytes: u64, since_last_checkpoint: Duration) -> bool {
+    wal_bytes > WAL_SIZE_CHECKPOINT_THRESHOLD_BYTES
+        || since_last_checkpoint >= Duration::from_millis(WAL_CHECKPOINT_INTERVAL_MS)
+}
+
+/// 两个库 `-wal` 文件的字节数之和：控制面与待消费队列各有一份。
+///
+/// 读不到就按 0 计：文件可能还没创建，也可能刚被上一轮回写删掉，这两种情况都不该让
+/// 巡检线程报错或者跳过周期兜底。
+fn runtime_wal_bytes(host: &CliDaemonHost) -> u64 {
+    host.store()
+        .database_paths()
+        .into_iter()
+        .map(wal_file_bytes)
+        .sum()
+}
+
+/// 数据库文件对应的 WAL 文件字节数。
+fn wal_file_bytes(database_path: &Path) -> u64 {
+    let mut wal_path = database_path.as_os_str().to_owned();
+    wal_path.push("-wal");
+    std::fs::metadata(PathBuf::from(wal_path)).map_or(0, |metadata| metadata.len())
+}
+
 fn checkpoint_wal_if_due(host: &CliDaemonHost, last_checkpoint_at: &mut Instant) {
-    if last_checkpoint_at.elapsed() < Duration::from_millis(WAL_CHECKPOINT_INTERVAL_MS) {
+    let wal_bytes = runtime_wal_bytes(host);
+    if !checkpoint_due(wal_bytes, last_checkpoint_at.elapsed()) {
         return;
+    }
+    if wal_bytes > WAL_SIZE_CHECKPOINT_THRESHOLD_BYTES {
+        axon_logger::debug(&format!(
+            "WAL 已达 {wal_bytes} 字节，跳过回写周期等待，立即按体量回写"
+        ));
     }
     *last_checkpoint_at = Instant::now();
     match host.store().checkpoint_wal() {
@@ -499,5 +551,34 @@ mod lease_renew_tests {
         assert!(keep_going, "写锁抖动必须原地重试");
         assert!(!fenced.load(Ordering::Acquire), "抖动不是 fence");
         assert!(running.load(Ordering::Acquire), "抖动不得停掉后台 Worker");
+    }
+}
+
+#[cfg(test)]
+mod checkpoint_tests {
+    use super::*;
+
+    /// 体量优先于周期：WAL 越过阈值就必须立刻回写，不能为了等满五分钟让它继续长大；
+    /// 体量与周期都没到时一律不动，否则线程会退化成每个 tick 都做一次回写。
+    #[test]
+    fn oversized_wal_triggers_checkpoint_before_the_interval() {
+        let interval = Duration::from_millis(WAL_CHECKPOINT_INTERVAL_MS);
+
+        assert!(
+            checkpoint_due(WAL_SIZE_CHECKPOINT_THRESHOLD_BYTES + 1, Duration::ZERO),
+            "WAL 已超阈值，即使距上次回写不到五分钟也必须回写"
+        );
+        assert!(
+            !checkpoint_due(WAL_SIZE_CHECKPOINT_THRESHOLD_BYTES - 1, interval / 2),
+            "体量与周期都没到，这一轮不该回写"
+        );
+        assert!(
+            !checkpoint_due(WAL_SIZE_CHECKPOINT_THRESHOLD_BYTES, Duration::ZERO),
+            "恰好等于阈值不算超过：文件长度可能只是 journal_size_limit 留下的高水位基线"
+        );
+        assert!(
+            checkpoint_due(0, interval),
+            "体量虽小也要按周期兜底，否则慢速累积永远等不到阈值"
+        );
     }
 }

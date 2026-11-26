@@ -1,3 +1,4 @@
+use axon_session::SqliteRuntimeStore;
 use axon_session_runtime::{EventPublisher, RuntimeClock};
 use std::{
     fs,
@@ -172,4 +173,22 @@ pub fn spawn_lease_fence_wake(endpoint: &str, host_fenced: Arc<AtomicBool>) {
         }
         let _ = axon_daemon::infrastructure::ipc::JsonlIpcClient::connect(&endpoint);
     });
+}
+
+/// Daemon 打开运行态库：关掉自动 WAL 回写，并对账重建水位超前的会话。
+///
+/// 自动回写由本模块的回写线程驱动，留在提交线程里会让每一批写入替别人的回写排队；
+/// 但纯 CLI 进程没有这条线程，所以开关按进程设置，不能写死在建库路径上。
+///
+/// 启动对账针对「投影水位超过事件水位」的会话：日志被截断或整体替换过，投影已经错位。
+/// 启动时是单写者窗口，重建不会与投影 worker 并发；数量通常为 0。
+pub(super) fn open_runtime_store(runtime_root: &std::path::Path) -> SqliteRuntimeStore {
+    axon_session::disable_automatic_wal_checkpoint();
+    let store = SqliteRuntimeStore::from_root(runtime_root);
+    match store.rebuild_rewound_projections() {
+        Ok(0) => {}
+        Ok(count) => axon_logger::info(&format!("启动投影重建完成：{count} 个会话")),
+        Err(error) => axon_logger::warning(&format!("启动投影对账失败，跳过重建：{error}")),
+    }
+    store
 }

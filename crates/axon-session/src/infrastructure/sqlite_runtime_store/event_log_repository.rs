@@ -27,6 +27,10 @@ mod projection_watermark;
 #[path = "projection_worker.rs"]
 mod projection_worker;
 
+/// 派生投影的重建入口：按会话从事件日志整体重放。
+#[path = "projection_rebuild.rs"]
+mod projection_rebuild;
+
 pub(super) fn log_error(error: axon_eventlog::EventLogError) -> RuntimeStoreError {
     RuntimeStoreError::Storage(error.to_string())
 }

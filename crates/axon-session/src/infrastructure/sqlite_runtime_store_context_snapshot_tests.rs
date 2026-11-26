@@ -4,6 +4,7 @@
 //! 换窗生命周期帧不再产生任何 token 读数，因此不得改动快照。
 
 use axon_domain::{DaemonSessionId, InteractionId, RuntimeHostId};
+use axon_eventlog::{RuntimeEventKind, RuntimeEventRecord};
 use serde_json::{Value, json};
 
 use super::SqliteRuntimeStore;
@@ -206,5 +207,159 @@ fn rollover_lifecycle_frames_no_longer_write_token_readings() {
         read(&store, &session_id),
         Some(before),
         "换窗帧不再产生读数，快照必须原样保持"
+    );
+}
+
+/// 控制面会话的事件水位。
+fn event_tail(store: &SqliteRuntimeStore, session_id: &DaemonSessionId) -> u64 {
+    store
+        .with_read_connection(|connection| {
+            connection.query_row(
+                "SELECT last_event_sequence FROM sessions WHERE session_id=?1",
+                [session_id.as_str()],
+                |row| row.get::<_, i64>(0),
+            )
+        })
+        .expect("读事件水位")
+        .try_into()
+        .expect("水位非负")
+}
+
+/// 只写事件日志、不投影：模拟「写路径已返回，投影 worker 还没消费这一批」。
+fn append_to_log_only(
+    store: &SqliteRuntimeStore,
+    session_id: &DaemonSessionId,
+    sequence: u64,
+    observed_at_ms: i64,
+    current_context_tokens: u64,
+) {
+    let log = store.event_log(session_id);
+    let record = RuntimeEventRecord::new(
+        sequence,
+        u64::try_from(observed_at_ms).expect("时刻非负"),
+        RuntimeEventKind::Other("wire_event".to_owned()),
+        json!({
+            "recordedAtMs": observed_at_ms,
+            "interactionId": INTERACTION_ID,
+            "kind": {
+                "type": "usageUpdate",
+                "payload": { "currentContextTokens": current_context_tokens },
+            },
+        }),
+    )
+    .with_interaction(INTERACTION_ID);
+    axon_eventlog::append_once(
+        &log,
+        sequence,
+        u64::try_from(observed_at_ms).expect("时刻非负"),
+        &[record],
+    )
+    .expect("直接写日志");
+}
+
+/// 把控制面事件水位推到指定序号。
+fn mark_event_tail(store: &SqliteRuntimeStore, session_id: &DaemonSessionId, tail: u64) {
+    store
+        .with_read_connection(|connection| {
+            connection.execute(
+                "UPDATE sessions SET last_event_sequence=?1 WHERE session_id=?2",
+                rusqlite::params![
+                    i64::try_from(tail).expect("水位在范围内"),
+                    session_id.as_str()
+                ],
+            )
+        })
+        .expect("推事件水位");
+}
+
+/// 投影表里当前落着的占用读数。
+fn projected_tokens(store: &SqliteRuntimeStore, session_id: &DaemonSessionId) -> Option<i64> {
+    store
+        .with_read_connection(|connection| {
+            connection.query_row(
+                "SELECT current_context_tokens FROM context_snapshots WHERE session_id=?1",
+                [session_id.as_str()],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+        })
+        .ok()
+        .flatten()
+}
+
+/// 投影落后时读日志里的最新读数，且不把回源结果写回投影表。
+#[test]
+fn lagging_projection_reads_the_newest_log_reading() {
+    let (store, session_id, host) = fixture();
+    let projected = [usage_frame(
+        100,
+        json!({ "currentContextTokens": 135_917, "contextWindow": 262_144 }),
+    )];
+    append(&store, &session_id, &host, &projected, 1_100);
+    let tail = event_tail(&store, &session_id);
+    assert_eq!(tail, 1, "一帧一批：批首序号与事件尾都是 1");
+
+    /*
+     * 第二条用量帧只落事件日志：控制面水位已经推进，投影水位仍停在上一批，这正是
+     * 写返回后立刻读投影的时间窗。
+     */
+    append_to_log_only(&store, &session_id, tail + 1, 200, 140_000);
+    mark_event_tail(&store, &session_id, tail + 1);
+
+    let observed = read(&store, &session_id).expect("快照必须存在");
+    assert_eq!(
+        observed.current_context_tokens,
+        Some(140_000),
+        "投影落后时必须回源到日志里更新的那条读数"
+    );
+    assert_eq!(
+        observed.updated_at_ms,
+        Some(200),
+        "时间戳取自回源读到的那一帧"
+    );
+    assert_eq!(
+        observed.context_window, None,
+        "这一帧没带窗口，窗口就是未知"
+    );
+    assert_eq!(
+        projected_tokens(&store, &session_id),
+        Some(135_917),
+        "回源结果不得写回投影表"
+    );
+}
+
+/// 投影不落后时一次事件日志都不读，结果与投影完全一致。
+#[test]
+fn caught_up_projection_never_reads_the_log() {
+    let (store, session_id, host) = fixture();
+    let latest = [usage_frame(100, json!({ "currentContextTokens": 135_917 }))];
+    append(&store, &session_id, &host, &latest, 1_100);
+    let tail = event_tail(&store, &session_id);
+
+    /*
+     * 日志里故意再写一帧更晚的读数，但事件水位不动：判定只看两个水位，不落后就不回源。
+     * 回源一旦发生，读数会被这帧顶成 140_000，用例立刻失败。
+     */
+    append_to_log_only(&store, &session_id, tail + 1, 200, 140_000);
+    // 把投影行改成一个与日志都不同的值：读数只能来自投影，不可能来自日志。
+    store
+        .with_read_connection(|connection| {
+            connection.execute(
+                "UPDATE context_snapshots SET current_context_tokens = 111_111 \
+                  WHERE session_id = ?1",
+                [session_id.as_str()],
+            )
+        })
+        .expect("改写投影行");
+
+    let observed = read(&store, &session_id).expect("快照必须存在");
+    assert_eq!(
+        observed.current_context_tokens,
+        Some(111_111),
+        "不落后时必须原样返回投影值"
+    );
+    assert_eq!(
+        observed.updated_at_ms,
+        Some(100),
+        "时间戳同样是投影里的那一份"
     );
 }

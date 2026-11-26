@@ -2,8 +2,11 @@
 //!
 //! 表是投影：一行对应一条会话，只由事件追加的唯一投影入口（`apply_projections`）写入。
 //! 写入失败向上返回错误、不阻断落盘：投影水位因此不推进，但后续批次成功会把水位越过
-//! 这一批，所以真正可靠的是重建入口而不是「等下一次覆盖」。读侧另有兜底：快照缺失或
-//! 落后时界面按「未知」降级。
+//! 这一批，所以真正可靠的是重建入口而不是「等下一次覆盖」。
+//!
+//! 读侧对「投影还没追上」有两层兜底：落后时按投影水位回源事件日志尾部，取最近一条用量
+//! 读数（见 [`projection_read_fallback`]）；回源也读不到时界面按「未知」降级，绝不用旧值
+//! 顶替现在。
 //!
 //! 读数的口径只有一处：用量帧里的 Provider 实测值。换窗不再写入任何前后读数，
 //! 头部因此只展示「最近一次请求占了多少窗口」，剩余量由消费方按窗口与实测占用派生。
@@ -15,6 +18,13 @@ use super::helpers::{i64_value, storage};
 use crate::domain::ContextSnapshot;
 use crate::ports::{ContextSnapshotStore, RuntimeStoreError};
 use axon_domain::DaemonSessionId;
+
+/// 投影落后时的读路径回源：快照与会话累计指标共用同一套水位、上界与留痕规则。
+///
+/// 模块落在同目录的独立文件里，以本文件为声明点：投影读回源是从快照读路径长出来的共用
+/// 能力，两条读路径因此共用同一份落后判定。
+#[path = "projection_read_fallback.rs"]
+mod projection_read_fallback;
 
 /// 用量帧写出的快照来源标记。
 pub(super) const SOURCE_USAGE: &str = "usage_frame";
@@ -84,12 +94,25 @@ fn fresher(current: Option<u64>, candidate: u64) -> u64 {
 }
 
 /// 读取会话级上下文快照；没有记录时返回 `None`。
+///
+/// 投影是异步的：写返回后立刻读，可能读到上一批甚至空行。因此这里按投影水位判定一次，
+/// 落后时按日志尾部定向补一次：只读不写，读不到就退回投影值。
 pub(super) fn read_snapshot(
     store: &SqliteRuntimeStore,
     session_id: &DaemonSessionId,
 ) -> Result<Option<ContextSnapshot>, RuntimeStoreError> {
-    let connection = store.connection()?;
-    Ok(read_row(&connection, session_id)?.map(snapshot_of))
+    // 连接在作用域里释放：回源要解压事件日志，不该握着池里的连接做文件 IO。
+    let (row, lag) = {
+        let connection = store.connection()?;
+        read_row_and_lag(&connection, session_id)?
+    };
+    let projected = row.map(snapshot_of);
+    let Some(lag) = lag.filter(projection_read_fallback::ProjectionLag::is_behind) else {
+        return Ok(projected);
+    };
+    Ok(projection_read_fallback::freshen_snapshot(
+        store, session_id, projected, &lag,
+    ))
 }
 
 impl ContextSnapshotStore for SqliteRuntimeStore {
@@ -139,6 +162,59 @@ fn read_row(
         .map_err(storage)
 }
 
+/// 一次查询同时读出快照行与投影水位：落后判定不必再走一次数据库往返。
+///
+/// 会话行驱动两个按主键的连接：没有快照行时快照列全空，用首列区分「没有行」与「有行但
+/// 字段全空」。会话行本身不存在时返回 `(None, None)`。
+fn read_row_and_lag(
+    connection: &rusqlite::Connection,
+    session_id: &DaemonSessionId,
+) -> Result<
+    (
+        Option<SnapshotRow>,
+        Option<projection_read_fallback::ProjectionLag>,
+    ),
+    RuntimeStoreError,
+> {
+    let found = connection
+        .query_row(
+            "SELECT (c.session_id IS NOT NULL), \
+                    c.current_context_tokens,c.context_window,c.composition_json,c.source,\
+                    c.updated_at_ms,s.last_event_sequence, \
+                    COALESCE(p.last_projected_seq, 0) \
+               FROM sessions AS s \
+               LEFT JOIN context_snapshots AS c ON c.session_id = s.session_id \
+               LEFT JOIN projection_state AS p ON p.session_id = s.session_id \
+              WHERE s.session_id = ?1",
+            params![session_id.as_str()],
+            |row| {
+                let lag = projection_read_fallback::ProjectionLag::new(
+                    u64_of(row.get(6)?),
+                    u64_of(row.get(7)?),
+                );
+                let present: i64 = row.get(0)?;
+                if present == 0 {
+                    return Ok((None, Some(lag)));
+                }
+                Ok((
+                    Some(SnapshotRow {
+                        current_context_tokens: optional_count(row.get(1)?),
+                        context_window: optional_count(row.get(2)?),
+                        composition: row
+                            .get::<_, Option<String>>(3)?
+                            .and_then(|raw| serde_json::from_str(&raw).ok()),
+                        source: row.get(4)?,
+                        updated_at_ms: optional_count(row.get(5)?),
+                    }),
+                    Some(lag),
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage)?;
+    Ok(found.unwrap_or((None, None)))
+}
+
 fn snapshot_of(row: SnapshotRow) -> ContextSnapshot {
     ContextSnapshot {
         current_context_tokens: row.current_context_tokens,
@@ -185,4 +261,8 @@ fn write_row(
 
 fn optional_count(value: Option<i64>) -> Option<u64> {
     value.and_then(|value| u64::try_from(value).ok())
+}
+
+fn u64_of(value: i64) -> u64 {
+    u64::try_from(value).unwrap_or(0)
 }

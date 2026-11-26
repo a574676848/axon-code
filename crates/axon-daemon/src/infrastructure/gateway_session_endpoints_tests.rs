@@ -9,6 +9,7 @@ use axon_domain::{
     AudienceContext, AudienceKind, DaemonSessionId, DisclosurePolicy, InteractionId,
     InteractionRecord, InteractionSource, InteractionStatus, ReplyRoute, RuntimeHostId, ScopeRef,
 };
+use axon_eventlog::{RuntimeEventKind, RuntimeEventRecord};
 use axon_session::{
     EventLogStore, InteractionQueryStore, InteractionStore, RuntimeStore, SqliteRuntimeStore,
 };
@@ -214,6 +215,142 @@ fn context_snapshot_route_projects_reading_with_gateway_field_names() {
         snapshot.get("remainingTokens").is_none(),
         "没有窗口就不派生剩余量"
     );
+}
+
+/// 投影落后时路由必须回源事件日志：写返回后立刻读，快照不能停在上一批。
+#[test]
+fn context_snapshot_route_reads_the_log_while_the_projection_lags() {
+    let fixture = Fixture::new();
+    let session_id = fixture.session("session-context-lagging");
+    let host = fixture
+        .store
+        .claim_host(
+            &RuntimeHostId::new("route-lag-host").expect("Host ID"),
+            1,
+            None,
+            NOW_MS,
+            60_000,
+        )
+        .expect("领取 Host lease");
+    let interaction_id = InteractionId::new(SNAPSHOT_INTERACTION_ID).expect("Interaction ID");
+    // 一帧一批：投影跑完后水位与事件尾都停在 1。
+    let first = usage_frame(NOW_MS, 135_917);
+    fixture
+        .store
+        .append_attributed_events(&session_id, &host, &interaction_id, &[first], NOW_MS + 1)
+        .expect("写入用量帧");
+    fixture.store.drain_for_tests();
+    let target = format!("/api/v1/sessions/{}/context-snapshot", session_id.as_str());
+    let (status, payload) = fixture.get_json(&target);
+    assert_eq!(status, 200, "{payload}");
+    assert_eq!(payload["snapshot"]["currentContextTokens"], 135_917);
+
+    /*
+     * 第二条用量帧只落事件日志：投影 worker 还没消费这一批，控制面水位已经推进。
+     * 这正是写返回后立刻读的时间窗，路由必须给出日志里的最新读数。
+     */
+    let tail = event_tail(&fixture.store, &session_id);
+    append_usage_log_only(&fixture.store, &session_id, tail + 1, NOW_MS + 9, 140_000);
+    mark_event_tail(&fixture.store, &session_id, tail + 1);
+
+    let (status, payload) = fixture.get_json(&target);
+    assert_eq!(status, 200, "{payload}");
+    assert_eq!(
+        payload["snapshot"]["currentContextTokens"], 140_000,
+        "投影落后时路由要给日志里的最新读数：{payload}"
+    );
+    assert_eq!(payload["snapshot"]["updatedAtMs"], NOW_MS + 9);
+    assert_eq!(
+        projected_tokens(&fixture.store, &session_id),
+        Some(135_917),
+        "回源结果不得写回投影表"
+    );
+}
+
+/// 一条用量帧的线上形状：`kind.type = usageUpdate`，带记录时刻。
+fn usage_frame(recorded_at_ms: u64, current_context_tokens: u64) -> (String, String) {
+    (
+        "wire_event".to_owned(),
+        json!({
+            "recordedAtMs": recorded_at_ms,
+            "interactionId": SNAPSHOT_INTERACTION_ID,
+            "kind": {
+                "type": "usageUpdate",
+                "payload": { "currentContextTokens": current_context_tokens },
+            },
+        })
+        .to_string(),
+    )
+}
+
+/// 控制面会话的事件水位。
+fn event_tail(store: &SqliteRuntimeStore, session_id: &DaemonSessionId) -> u64 {
+    store
+        .with_read_connection(|connection| {
+            connection.query_row(
+                "SELECT last_event_sequence FROM sessions WHERE session_id=?1",
+                [session_id.as_str()],
+                |row| row.get::<_, i64>(0),
+            )
+        })
+        .expect("读事件水位")
+        .try_into()
+        .expect("水位非负")
+}
+
+/// 只写事件日志、不投影：模拟投影 worker 还没消费这一批。
+fn append_usage_log_only(
+    store: &SqliteRuntimeStore,
+    session_id: &DaemonSessionId,
+    sequence: u64,
+    recorded_at_ms: u64,
+    current_context_tokens: u64,
+) {
+    let log = store.event_log(session_id);
+    let record = RuntimeEventRecord::new(
+        sequence,
+        recorded_at_ms,
+        RuntimeEventKind::Other("wire_event".to_owned()),
+        json!({
+            "recordedAtMs": recorded_at_ms,
+            "interactionId": SNAPSHOT_INTERACTION_ID,
+            "kind": {
+                "type": "usageUpdate",
+                "payload": { "currentContextTokens": current_context_tokens },
+            },
+        }),
+    )
+    .with_interaction(SNAPSHOT_INTERACTION_ID);
+    axon_eventlog::append_once(&log, sequence, recorded_at_ms, &[record]).expect("直接写日志");
+}
+
+/// 把控制面事件水位推到指定序号。
+fn mark_event_tail(store: &SqliteRuntimeStore, session_id: &DaemonSessionId, tail: u64) {
+    store
+        .with_read_connection(|connection| {
+            connection.execute(
+                "UPDATE sessions SET last_event_sequence=?1 WHERE session_id=?2",
+                rusqlite::params![
+                    i64::try_from(tail).expect("水位在范围内"),
+                    session_id.as_str()
+                ],
+            )
+        })
+        .expect("推事件水位");
+}
+
+/// 投影表里当前落着的占用读数。
+fn projected_tokens(store: &SqliteRuntimeStore, session_id: &DaemonSessionId) -> Option<i64> {
+    store
+        .with_read_connection(|connection| {
+            connection.query_row(
+                "SELECT current_context_tokens FROM context_snapshots WHERE session_id=?1",
+                [session_id.as_str()],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+        })
+        .ok()
+        .flatten()
 }
 
 #[test]
