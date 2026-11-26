@@ -17,8 +17,34 @@ use super::{
 
 const MEMORY_SQLITE_WAL_INIT_RETRIES: usize = 5;
 const MEMORY_SQLITE_WAL_INIT_BACKOFF_MS: u64 = 20;
+/// schema 初始化的有界重试：并发首次初始化时 `BEGIN IMMEDIATE` 会排队等写锁，
+/// busy_timeout 在慢盘（尤其 CI 的 Windows/macOS 共享 runner）上可能不够用。
+/// DDL 全部 `IF NOT EXISTS`，事务回滚后重试幂等。
+const MEMORY_SQLITE_SCHEMA_INIT_RETRIES: usize = 8;
+const MEMORY_SQLITE_SCHEMA_INIT_BACKOFF_MS: u64 = 150;
 /// 初始化 schema 与 WAL。
 pub(super) fn initialize_schema(connection: &Connection) -> AxonResult<()> {
+    let mut attempt = 0;
+    loop {
+        match initialize_schema_once(connection) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                // AxonError 未实现 Display，用 Debug 取底层 SQLite 报错文本。
+                let busy = format!("{error:?}").contains("database is locked");
+                if !busy || attempt >= MEMORY_SQLITE_SCHEMA_INIT_RETRIES {
+                    return Err(error);
+                }
+                attempt += 1;
+                thread::sleep(Duration::from_millis(
+                    MEMORY_SQLITE_SCHEMA_INIT_BACKOFF_MS * attempt as u64,
+                ));
+            }
+        }
+    }
+}
+
+/// 单次初始化尝试；撞锁重试由 [`initialize_schema`] 负责。
+fn initialize_schema_once(connection: &Connection) -> AxonResult<()> {
     archive_incompatible_record_schema(connection)?;
     // 建表与建索引必须整体落在**一个 IMMEDIATE 事务**里：
     //
