@@ -523,7 +523,9 @@ fn voice_envelope(
 /// 网关拒绝原因的中文稳定说法；不把内部错误原文透给客户端。
 fn reject_reason(error: &GatewayKernelError) -> &'static str {
     match error {
-        GatewayKernelError::Ingress(_) => "事件被网关拒绝",
+        GatewayKernelError::Ingress(_) | GatewayKernelError::IngressRejected { .. } => {
+            "事件被网关拒绝"
+        }
         GatewayKernelError::NotFound(_) => "目标不存在",
         GatewayKernelError::InvalidQuery(_) => "请求参数不合法",
         GatewayKernelError::Preparation(_) => "事件预处理失败",

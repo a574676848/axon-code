@@ -17,7 +17,10 @@ pub const DEFAULT_EXTERNAL_EVENT_MAX_CLOCK_SKEW_MS: u64 = 5 * 60 * 1_000;
 /// 外部事件标识的最大字符数。
 pub const MAX_EXTERNAL_EVENT_ID_LENGTH: usize = 256;
 /// 单条外部事件允许携带的附件数量上限。
-pub const MAX_EXTERNAL_EVENT_ATTACHMENTS: usize = 8;
+///
+/// 与桌面端输入坞的附件张数同源：界面加到这个数，网关就一定收得下；超出时必须在
+/// 403 回执里给出确切原因，不能只回一个「不合规」让调用方自己猜。
+pub const MAX_EXTERNAL_EVENT_ATTACHMENTS: usize = 15;
 /// 外部事件简报标题的最大字符数。
 pub const MAX_EXTERNAL_EVENT_TITLE_LENGTH: usize = 512;
 /// 外部事件业务关联键的最大字符数。
@@ -74,6 +77,24 @@ pub struct ExternalEventEnvelope {
     pub reasoning_effort: Option<String>,
 }
 
+impl ExternalEventEnvelope {
+    /// 审计身份段：只带可追溯的轻字段，不含正文与附件路径。
+    ///
+    /// HTTP 与 WS 两条提交面共用它：同一次拒绝换个入口，审计行也要能按同一套字段对上。
+    pub fn audit_identity(&self) -> String {
+        format!(
+            "channel={} workspace={} session={} event={} attachments={}",
+            self.source_channel.trim(),
+            self.workspace_id.trim(),
+            self.session_id
+                .as_ref()
+                .map_or("-", DaemonSessionId::as_str),
+            self.event_id.trim(),
+            self.attachments.len(),
+        )
+    }
+}
+
 /// 外部事件 ingress 错误。
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ExternalEventIngressError {
@@ -92,9 +113,38 @@ pub enum ExternalEventIngressError {
     /// 事件已经过期。
     #[error("外部事件已过期")]
     Expired,
+    /// 附件数量超过单条事件上限。
+    #[error("单条事件最多携带 {limit} 个附件，本次 {count} 个")]
+    AttachmentsTooMany {
+        /// 本次携带的附件数量。
+        count: usize,
+        /// 单条事件允许的上限。
+        limit: usize,
+    },
+    /// 附件路径指向的文件不存在或不是文件。
+    #[error("附件不存在或不是文件：{0}")]
+    AttachmentUnreadable(String),
     /// Interaction durable store 失败。
     #[error(transparent)]
     Store(#[from] InteractionStoreError),
+}
+
+impl ExternalEventIngressError {
+    /// 对外稳定原因码：界面据此给出处置建议，审计日志据此归集同一类拒绝。
+    ///
+    /// 码值是与客户端共享的契约，只能新增，不得改写既有取值。
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidInput(_) => "event_field_invalid",
+            Self::WorkspaceMismatch => "workspace_mismatch",
+            Self::SessionUnavailable(_) => "session_missing",
+            Self::ClockSkew => "clock_skew",
+            Self::Expired => "event_expired",
+            Self::AttachmentsTooMany { .. } => "attachments_too_many",
+            Self::AttachmentUnreadable(_) => "attachment_unreadable",
+            Self::Store(_) => "ingress_store_failed",
+        }
+    }
 }
 
 /// 外部事件统一 durable ingress。
@@ -394,9 +444,10 @@ fn bounded_field(
 /// 校验附件清单：数量有界，路径必须指向真实存在的文件。
 fn validate_attachments(attachments: &[String]) -> Result<(), ExternalEventIngressError> {
     if attachments.len() > MAX_EXTERNAL_EVENT_ATTACHMENTS {
-        return Err(ExternalEventIngressError::InvalidInput(format!(
-            "单条事件最多携带 {MAX_EXTERNAL_EVENT_ATTACHMENTS} 个附件"
-        )));
+        return Err(ExternalEventIngressError::AttachmentsTooMany {
+            count: attachments.len(),
+            limit: MAX_EXTERNAL_EVENT_ATTACHMENTS,
+        });
     }
     for path in attachments {
         let trimmed = path.trim();
@@ -406,9 +457,9 @@ fn validate_attachments(attachments: &[String]) -> Result<(), ExternalEventIngre
             ));
         }
         if !std::path::Path::new(trimmed).is_file() {
-            return Err(ExternalEventIngressError::InvalidInput(format!(
-                "附件不存在或不是文件：{trimmed}"
-            )));
+            return Err(ExternalEventIngressError::AttachmentUnreadable(
+                trimmed.to_owned(),
+            ));
         }
     }
     Ok(())

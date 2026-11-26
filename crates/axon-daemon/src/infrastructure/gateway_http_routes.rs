@@ -4,10 +4,11 @@
 //! 准入规则与业务分派。同步业务统一在线程池执行，运行时的 IO 线程不再被
 //! 慢请求占住，因此单个慢请求不会堵住其后所有请求。
 
-use super::gateway_http_events::{GatewayRoute, normalized_event};
+use super::gateway_http_events::{GatewayRoute, audit_submit_rejection, normalized_event};
 use super::gateway_http_response::{
-    accepted, bearer, chunked_transfer, declared_length, from_extension, json_error, json_ok,
-    media_type, request_head_bytes, request_target, unauthorized, unified_not_found,
+    accepted, bearer, chunked_transfer, declared_length, from_extension, json_error,
+    json_error_reason, json_ok, media_type, request_head_bytes, request_target, unauthorized,
+    unified_not_found,
 };
 use super::gateway_route_limits::{BodyAdmission, admit_body, body_limit};
 use super::{
@@ -444,15 +445,26 @@ fn interaction_response(state: &GatewayHttpState, interaction_id: &str) -> Respo
 }
 
 /// 外部事件提交。
+///
+/// 被入口策略拒绝时，回执带 `reason` 与 `message`，同时留一条带原因的审计日志：
+/// 只有一行 403 的访问日志无法区分附件过多、已过期与时钟偏差。
 fn submit_event(state: &GatewayHttpState, route: &GatewayRoute, body: &[u8]) -> Response {
     let audit = |level: &str, message: &str| state.log(level, message);
     let event = match normalized_event(route, body, &state.providers, &audit) {
         Ok(event) => event,
         Err(response) => return response,
     };
+    // 审计要用到事件身份，但它随后会被 move 进 ingress。
+    let identity = event.audit_identity();
     match state.context.submit_external_event(event) {
         Ok(receipt) => accepted(&receipt),
-        Err(GatewayKernelError::Ingress(_)) => json_error(403, "event_rejected"),
+        Err(
+            error @ (GatewayKernelError::IngressRejected { .. } | GatewayKernelError::Ingress(_)),
+        ) => {
+            let (reason, message) = error.ingress_rejection();
+            audit_submit_rejection(&audit, &identity, reason, message);
+            json_error_reason(403, "event_rejected", reason, message)
+        }
         Err(GatewayKernelError::NotFound(_)) => json_error(404, "not_found"),
         Err(GatewayKernelError::InvalidQuery(_)) => json_error(400, "invalid_pagination"),
         Err(GatewayKernelError::Preparation(_)) => json_error(503, "event_prepare_failed"),

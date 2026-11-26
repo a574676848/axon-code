@@ -68,6 +68,7 @@ ws://<remote.gateway.websocket_bind>/gateway/v1/ws
 {"type":"event","subscribeId":"interaction:<interaction-id>","event_type":"wire_event","payload":{...},"cursor":"<cursor>","replay":true}
 {"type":"error","error":"<code>"}
 {"type":"error","error":"<code>","subscribeId":"<subscribe-id>"}
+{"type":"error","error":"event_rejected","reason":"<原因码>","message":"<中文原因>"}
 ```
 
 事件帧的字段命名是混合的，解析时不要按单一风格推断：`type` 与 `subscribeId` 为 camelCase，`event_type`、`payload`、`cursor`、`replay` 为 snake_case；`payload` 是**内嵌的 JSON 对象**，不再套一层字符串转义。`replay` 为 `true` 表示历史回放帧。
@@ -96,7 +97,7 @@ ws://<remote.gateway.websocket_bind>/gateway/v1/ws
 | `message_too_large` | 文本帧超过 16 MiB（或整条消息超过 64 MiB）；拆分或改用 HTTP 面提交 |
 | `text_message_required` | 发送了二进制帧；改发文本帧 |
 | `gateway_busy` | 连接数达上限；稍后重试 |
-| `event_rejected` | 提交的事件被入口策略拒绝，未入账 |
+| `event_rejected` | 提交的事件被入口策略拒绝，未入账。错误帧另带 `reason`（稳定原因码）与 `message`（可直接展示的中文原因），与 HTTP 面同一套取值：`attachments_too_many`（附件超过 15 个）、`attachment_unreadable`（附件路径不存在或不是文件）、`event_expired`（已过期）、`clock_skew`（与网关时钟偏差超过 5 分钟）、`session_missing`（未携带会话标识）、`workspace_mismatch`（会话不属于该 Workspace）、`event_field_invalid`（字段为空、超长或取值非法）、`ingress_store_failed`（durable 存储写入失败）、`ingress_failed`（其它入口失败）、`ingress_internal`（阻塞池任务未返回）。Daemon 侧按 WARNING 记 `[gateway-ws] 事件被拒绝 <身份> reason=<原因码>` |
 | `subscribe_missing_id` | `subscribe` 未带 `subscribeId`；该帧不回显标识 |
 | `subscribe_duplicate_id` | 同一连接复用了 `subscribeId`；只拒这一次，连接保持 |
 | `subscription_rejected` | 目标 Interaction 不存在、所属会话与请求工作区不匹配，或受众边界受限；回显 `subscribeId`，Daemon 侧日志留有具体原因 |

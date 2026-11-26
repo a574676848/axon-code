@@ -43,6 +43,38 @@ fn event_submission_round_trips_with_receipt() {
 }
 
 #[test]
+fn rejected_event_reports_reason_and_leaves_an_audit_line() {
+    let server = TestServer::start(RecordingIngress::rejecting(
+        "attachments_too_many",
+        "单条事件最多携带 15 个附件，本次 12 个",
+    ));
+    let (status, body) = request(
+        &server,
+        &post(
+            "/gateway/v1/events",
+            Some(TEST_AUTH_TOKEN),
+            Some("application/json"),
+            EVENT_BODY,
+        ),
+    );
+    assert_eq!(status, 403, "入口策略拒绝必须是 403：{body}");
+    assert!(body.contains(r#""error":"event_rejected""#), "{body}");
+    assert!(
+        body.contains(r#""reason":"attachments_too_many""#),
+        "回执必须带分类原因，否则界面只能猜：{body}"
+    );
+    assert!(body.contains("最多携带 15 个附件"), "{body}");
+
+    let messages = server.sink.messages();
+    assert!(
+        messages.iter().any(|line| line.contains("[gateway-events]")
+            && line.contains("reason=attachments_too_many")
+            && line.contains("attachments=0")),
+        "拒绝必须留一条带原因的审计行：{messages:?}"
+    );
+}
+
+#[test]
 fn auth_content_type_and_body_limit_precede_parsing() {
     let server = TestServer::start(RecordingIngress::idle());
 

@@ -77,6 +77,18 @@ pub enum GatewayKernelError {
     /// Adapter ingress 失败。
     #[error("Gateway ingress 失败：{0}")]
     Ingress(String),
+    /// 入口策略拒绝：稳定原因码加可直接展示的中文原因。
+    ///
+    /// 与 [`Self::Ingress`] 分工明确：`Ingress` 是网关内部没做成（读写失败、实现缺失），
+    /// 原文不透给调用方；本变体是报文不符合入口策略（附件过多、已过期、时钟偏差），
+    /// 必须把原因交回调用方，否则界面只能给出「内容、附件或时效不合规」这类猜测。
+    #[error("{message}")]
+    IngressRejected {
+        /// 对外稳定原因码，出现在 403 回执的 `reason` 字段。
+        code: &'static str,
+        /// 可直接展示给用户的中文原因。
+        message: String,
+    },
     /// 查询目标不存在。
     #[error("{0}")]
     NotFound(String),
@@ -86,6 +98,21 @@ pub enum GatewayKernelError {
     /// 事件进入 durable ingress 之前的预处理失败（正文归档等）。
     #[error("Gateway 事件预处理失败：{0}")]
     Preparation(String),
+}
+
+impl GatewayKernelError {
+    /// 提交面拒绝口径：`(reason, message)`。
+    ///
+    /// HTTP 与 WS 两条提交面共用它：同一次拒绝换个入口也必须给同一个原因码，
+    /// 否则同一份事件在两个通道上换一套说法。
+    pub fn ingress_rejection(&self) -> (&'static str, &str) {
+        match self {
+            Self::IngressRejected { code, message } => (code, message.as_str()),
+            Self::Ingress(reason) => ("ingress_failed", reason.as_str()),
+            // 提交面只会出现上面两种；其余按通用不可用对外，不猜原因。
+            _ => ("gateway_unavailable", ""),
+        }
+    }
 }
 
 /// Adapter 使用的 durable ingress 桥。

@@ -3,6 +3,10 @@
 //! 响应体口径与既有契约逐字一致：网关自身错误一律是 `{"error":"<code>"}`，
 //! 扩展路由族的未授权与未命中则是统一错误模型。两者都由本模块产出，
 //! 处理逻辑里不再出现任何手写的 HTTP 报文拼接。
+//!
+//! 唯一例外是事件提交被入口策略拒绝：`error` 取值照旧，额外补 `reason` 与
+//! `message` 两个字段说明是哪一类不合规。没有这两个字段，客户端只能列出
+//! 「内容、附件或时效」三选一的猜测，用户拿不到任何可执行的处置办法。
 
 use crate::infrastructure::gateway_http_handler::GatewayHttpResponse;
 use axum::body::Body;
@@ -33,6 +37,24 @@ pub(super) fn json_error(status: u16, code: &str) -> Response {
         serde_json::json!({ "error": code })
             .to_string()
             .into_bytes(),
+    )
+}
+
+/// 带拒绝原因的错误响应：`{"error":"<code>","reason":"<原因码>","message":"<可读原因>"}`。
+///
+/// `error` 沿用既有取值，老客户端按它分流的行为一字不变；新增的两个字段只补充
+/// 「为什么被拒」，新客户端据此给出确切处置，审计日志据此归集同类拒绝。
+pub(super) fn json_error_reason(status: u16, code: &str, reason: &str, message: &str) -> Response {
+    raw(
+        status,
+        HeaderValue::from_static("application/json"),
+        serde_json::json!({
+            "error": code,
+            "reason": reason,
+            "message": message,
+        })
+        .to_string()
+        .into_bytes(),
     )
 }
 

@@ -25,8 +25,8 @@ use super::gateway_session_turns_stream::SessionTurnsStream;
 use crate::application::event_stream_bridge::STREAM_RESET_REASON_GENERATION_CHANGE;
 use crate::application::{
     EventStreamBridge, EventStreamSubscription, ExternalEventEnvelope, ExternalEventIngress,
-    GatewayHostDependencies, SettleSilentTurnRequest, SilentTurnSettlementOutcome,
-    SilentTurnSettlementService, StreamEvent, StreamNotification,
+    ExternalEventIngressError, GatewayHostDependencies, SettleSilentTurnRequest,
+    SilentTurnSettlementOutcome, SilentTurnSettlementService, StreamEvent, StreamNotification,
 };
 use axon_domain::{ConsumerCursor, DaemonSessionId, InteractionId};
 use axon_protocol::SubmitInteractionReceipt;
@@ -215,10 +215,8 @@ where
             self.dependencies.action_lease_duration_ms,
             crate::application::DEFAULT_EXTERNAL_EVENT_MAX_CLOCK_SKEW_MS,
         )
-        .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
-        let receipt = ingress
-            .submit(event)
-            .map_err(|error| GatewayKernelError::Ingress(error.to_string()))?;
+        .map_err(ingress_rejected)?;
+        let receipt = ingress.submit(event).map_err(ingress_rejected)?;
         // 只有真正落 durable 的新事件才唤醒主 turn：防抖吸收与重复事件不产生新工作。
         if receipt.inserted
             && let Some(options) = self.events.as_ref()
@@ -620,6 +618,16 @@ fn non_empty(value: String, field: &str) -> Result<String, GatewayKernelError> {
 /// 订阅拒绝：客户端只看到 `subscription_rejected`，具体原因写进 Daemon 日志。
 fn rejection(reason: &str) -> GatewayKernelError {
     GatewayKernelError::Ingress(reason.to_owned())
+}
+
+/// 入口策略拒绝：保留稳定原因码，错误原文只作为可直接展示的中文原因。
+///
+/// 这条映射是「分类」的唯一出口：入口层新增原因时只改枚举，不用在路由里补分支。
+fn ingress_rejected(error: ExternalEventIngressError) -> GatewayKernelError {
+    GatewayKernelError::IngressRejected {
+        code: error.code(),
+        message: error.to_string(),
+    }
 }
 
 /// 根目录归一：统一分隔符并去掉尾部分隔符。

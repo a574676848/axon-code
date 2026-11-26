@@ -328,3 +328,77 @@ fn blank_turn_settings_are_rejected_before_durable_append() {
             if message.contains("reasoning_effort")
     ));
 }
+
+/// 附件上限是入口契约的一部分：上限内必须受理，超出必须按分类拒绝并说清数量。
+///
+/// 桌面端一次贴 12 张截图就是真实用法，上限与「超限原因可见」缺一不可。
+#[test]
+fn attachment_count_is_bounded_at_the_published_limit() {
+    let directory = axon_test_support::test_temp_dir();
+    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    let adapter = ingress(store);
+    let files = write_attachments(directory.path(), MAX_EXTERNAL_EVENT_ATTACHMENTS);
+
+    let mut within_limit = event("workspace-a");
+    within_limit.attachments = files.clone();
+    adapter
+        .submit(within_limit)
+        .expect("上限之内的附件必须受理");
+
+    let mut over_limit = event("workspace-a");
+    over_limit.event_id = "push-too-many".to_owned();
+    let mut extra = files.clone();
+    extra.push(files[0].clone());
+    over_limit.attachments = extra;
+
+    let error = adapter.submit(over_limit).expect_err("超出上限必须拒绝");
+    assert_eq!(error.code(), "attachments_too_many");
+    assert!(
+        matches!(
+            &error,
+            ExternalEventIngressError::AttachmentsTooMany { count, limit }
+                if *count == MAX_EXTERNAL_EVENT_ATTACHMENTS + 1
+                    && *limit == MAX_EXTERNAL_EVENT_ATTACHMENTS
+        ),
+        "{error:?}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains(&MAX_EXTERNAL_EVENT_ATTACHMENTS.to_string()),
+        "原因必须写明上限：{error}"
+    );
+}
+
+#[test]
+fn missing_attachment_is_rejected_with_its_own_code() {
+    let directory = axon_test_support::test_temp_dir();
+    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    let adapter = ingress(store);
+    let mut missing = event("workspace-a");
+    missing.attachments = vec![
+        directory
+            .path()
+            .join("not-here.png")
+            .to_string_lossy()
+            .to_string(),
+    ];
+
+    let error = adapter.submit(missing).expect_err("路径不存在必须拒绝");
+    assert_eq!(error.code(), "attachment_unreadable");
+    assert!(
+        matches!(error, ExternalEventIngressError::AttachmentUnreadable(_)),
+        "附件不可读必须与数量超限分开归类"
+    );
+}
+
+/// 在临时目录里放 `count` 个附件文件，返回它们的绝对路径。
+fn write_attachments(root: &std::path::Path, count: usize) -> Vec<String> {
+    (0..count)
+        .map(|index| {
+            let path = root.join(format!("shot-{index}.png"));
+            std::fs::write(&path, b"png").expect("写附件");
+            path.to_string_lossy().to_string()
+        })
+        .collect()
+}

@@ -69,7 +69,7 @@ Authorization: Bearer <token>
 - `workspaceId` 省略或仅空白时由服务端解析默认 Workspace；显式给出时必须已注册，否则整条事件被拒。
 - `sessionId` 可省略；给出时表示这一轮落进该已登记会话，其归属必须与 `workspaceId` 一致。桌面工作台提交时携带当前打开的会话；省略时服务端按 `workspaceId` 新建一条主会话；外部 webhook 两者都不给，落到服务端固定会话。
 - `client` 可省略；给出时表示按下发送的一端（`cli`、`desktop`、`tui`、`cron`、`webhook` 或自定入口名）。省略时按 `sourceChannel` 标注：会话历史逐轮显示的就是这个值，因此第三方 webhook 的事件显示为它自己的渠道名，不会冒充桌面或 CLI。
-- `localFiles` 为本地附件的绝对路径数组，可省略。
+- `localFiles` 为本地附件的绝对路径数组，可省略；单条事件最多 15 个，每个路径必须是真实存在的文件。超限或路径不可读时整条事件被拒（`403 event_rejected`，`reason` 分别为 `attachments_too_many` 与 `attachment_unreadable`）。
 - `model` 可省略；给出时表示这一轮显式使用该模型（引用已配置模型的 `name` 或 `id`）。它优先于会话记录的模型与 `agent.default_model`，空白值按未指定处理。桌面工作台在输入坞改过模型时才填它。
 - `reasoningEffort` 可省略；给出时表示这一轮显式使用该思考强度（`none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`），优先于 `agent.reasoning_effort`，空白值按未指定处理。它与 `model` 同源同生命周期：只作用于该轮，不写回配置，桌面工作台与 TUI 在会话内改过档位时才填它。
 - `sourceChannel` 为 `desktop` 时提交方同时给出显式 `workspaceId`。
@@ -213,14 +213,14 @@ Cron：
 
 ### 错误码
 
-错误体有两种形态：网关自身拒绝返回 `{"error":"<code>"}`；鉴权失败与可观测性等扩展路由族返回统一错误模型 `{"error":{"code":"...","message":"...","details":...}}`，工作台族的 `error` 为消息字符串。
+错误体有两种形态：网关自身拒绝返回 `{"error":"<code>"}`；鉴权失败与可观测性等扩展路由族返回统一错误模型 `{"error":{"code":"...","message":"...","details":...}}`，工作台族的 `error` 为消息字符串。事件提交被入口策略拒绝时，`error` 之外另带 `reason` 与 `message` 两个字段，见下表 `event_rejected` 一行。
 
 | 状态 | `error` | 含义与处置 |
 |---|---|---|
 | 401 | `UNAUTHORIZED` | token 缺失或不匹配，或实例未配置 token；先核对 token 名与取值 |
 | 400 | `invalid_json`、`invalid_event` | 报文不合法；核对 JSON、字段拼写与取值 |
 | 400 | `event_filtered` | provider 解析脚本按业务纪律主动丢弃该事件（非受理事件类型、自身回声、未带触发前缀等）；属确定性结果，不要重试。逐条原因按 INFO 记运行日志，需要追溯时先把 `agent.log_level` 调到 `info`，再按 `[gateway-events]` 检索 `data/logs/axon-<日期>.log` |
-| 403 | `event_rejected` | 事件被入口策略拒绝，事件未入账 |
+| 403 | `event_rejected` | 事件被入口策略拒绝，事件未入账。回执另带 `reason`（稳定原因码）与 `message`（可直接展示的中文原因），并按 WARNING 记一行 `[gateway-events] 事件被拒绝 <身份> reason=<原因码> 原因：<原因>` 到 `data/logs/axon-<日期>.log`。原因码：`attachments_too_many`（附件超过 15 个）、`attachment_unreadable`（附件路径不存在或不是文件）、`event_expired`（已过期）、`clock_skew`（与网关时钟偏差超过 5 分钟）、`session_missing`（未携带会话标识）、`workspace_mismatch`（会话不属于该 Workspace）、`event_field_invalid`（字段为空、超长或取值非法）、`ingress_store_failed`（durable 存储写入失败）、`ingress_failed`（其它入口失败） |
 | 404 | `not_found`、`provider_not_configured`、`interaction_not_found` | 路由未命中，或 provider 未在 `events/<provider>/` 配置 |
 | 405 | `method_not_allowed` | 方法不被该路由接受 |
 | 431 | `headers_too_large` | 请求头总长超过 16 KiB |

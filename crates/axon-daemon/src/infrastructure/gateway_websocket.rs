@@ -278,22 +278,8 @@ async fn handle_request(
     };
     match request {
         WsClientRequest::Submit(event) => {
-            // durable append 是同步 sqlite 写入（含 FULL 同步刷盘），必须离开 runtime 线程。
-            let submit_context = context.clone();
-            let result = tokio::task::spawn_blocking(move || {
-                submit_context.submit_external_event(event.into_event())
-            })
-            .await;
-            let response = match result {
-                Ok(Ok(receipt)) => serde_json::json!({ "type": "accepted", "receipt": receipt }),
-                // 阻塞池任务 panic 与 ingress 拒绝同属「未 durable 入账」，对外回执一致。
-                Ok(Err(_)) | Err(_) => {
-                    serde_json::json!({ "type": "error", "error": "event_rejected" })
-                }
-            };
-            socket
-                .send(Message::Text(response.to_string().into()))
-                .await?;
+            let response = gateway_websocket_submit::submit_response(context, event).await;
+            socket.send(Message::Text(response.into())).await?;
         }
         WsClientRequest::Subscribe {
             subscribe_id,
@@ -536,6 +522,8 @@ use gateway_websocket_frames::*;
 pub(super) use gateway_websocket_frames::{TaggedEvent, subscription_error_json};
 #[path = "gateway_websocket_peer.rs"]
 mod gateway_websocket_peer;
+#[path = "gateway_websocket_submit.rs"]
+mod gateway_websocket_submit;
 use gateway_websocket_peer::*;
 #[cfg(test)]
 mod tests {

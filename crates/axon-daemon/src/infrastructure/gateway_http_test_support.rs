@@ -31,6 +31,8 @@ pub(super) struct RecordingIngress {
     submitted: StdMutex<Vec<ExternalEventEnvelope>>,
     entered: Option<std_mpsc::Sender<()>>,
     release: Option<Arc<(StdMutex<bool>, Condvar)>>,
+    /// 配置后每次提交都按该原因码拒绝，用于核对 403 的分类回执与审计行。
+    rejection: Option<(&'static str, &'static str)>,
 }
 
 /// 阻塞闸门：提交进入后停在这里，直到测试放行。
@@ -61,6 +63,17 @@ impl RecordingIngress {
             submitted: StdMutex::new(Vec::new()),
             entered: None,
             release: None,
+            rejection: None,
+        })
+    }
+
+    /// 提交一律按入口策略拒绝：用于核对 403 的分类回执与审计行。
+    pub(super) fn rejecting(code: &'static str, message: &'static str) -> Arc<Self> {
+        Arc::new(Self {
+            submitted: StdMutex::new(Vec::new()),
+            entered: None,
+            release: None,
+            rejection: Some((code, message)),
         })
     }
 
@@ -72,6 +85,7 @@ impl RecordingIngress {
             submitted: StdMutex::new(Vec::new()),
             entered: Some(sender),
             release: Some(Arc::clone(&gate)),
+            rejection: None,
         });
         GatedIngress {
             ingress,
@@ -101,6 +115,12 @@ impl GatewayIngress for RecordingIngress {
         &self,
         event: ExternalEventEnvelope,
     ) -> Result<SubmitInteractionReceipt, GatewayKernelError> {
+        if let Some((code, message)) = self.rejection {
+            return Err(GatewayKernelError::IngressRejected {
+                code,
+                message: message.to_owned(),
+            });
+        }
         if let Some(entered) = self.entered.as_ref() {
             let _ = entered.send(());
         }

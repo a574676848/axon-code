@@ -44,6 +44,20 @@ pub(super) fn error_json(code: &str) -> String {
     serde_json::json!({ "type": "error", "error": code }).to_string()
 }
 
+/// 事件提交被入口策略拒绝的错误帧。
+///
+/// `error` 沿用 `event_rejected`，另带 `reason` 与 `message` 说明是哪一类不合规：
+/// 只回一个泛化错误码时，客户端与运维都只能猜。
+pub(super) fn event_rejected_json(reason: &str, message: &str) -> String {
+    serde_json::json!({
+        "type": "error",
+        "error": "event_rejected",
+        "reason": reason,
+        "message": message,
+    })
+    .to_string()
+}
+
 /// 订阅级错误帧：带回 `subscribeId`，让客户端能定位是哪一路订阅被拒。
 pub(crate) fn subscription_error_json(code: &str, subscribe_id: Option<&str>) -> String {
     let mut payload = serde_json::json!({ "type": "error", "error": code });

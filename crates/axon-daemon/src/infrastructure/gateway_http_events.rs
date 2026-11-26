@@ -168,6 +168,22 @@ fn audit_event_rejection(audit: EventAudit<'_>, level: &str, provider: &str, rea
     );
 }
 
+/// 提交被入口策略拒绝的审计。
+///
+/// 访问日志只有一行 403，看不出是哪一类不合规：附件过多、已过期、时钟偏差的处置
+/// 完全不同，因此拒绝必须单独留一条带 `reason` 的行。
+pub(super) fn audit_submit_rejection(
+    audit: EventAudit<'_>,
+    identity: &str,
+    reason: &str,
+    message: &str,
+) {
+    audit(
+        "WARNING",
+        &format!("[gateway-events] 事件被拒绝 {identity} reason={reason} 原因：{message}"),
+    );
+}
+
 fn system_now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

@@ -531,5 +531,22 @@ fn parse_frame(text: &str) -> Option<serde_json::Value> {
     serde_json::from_str::<serde_json::Value>(text).ok()
 }
 
+/// 事件被入口策略拒绝的错误帧必须带分类原因。
+///
+/// `error` 取值是既有契约，老客户端按它分流；`reason` 与 `message` 才是判据，
+/// 缺了它们只能回一句「内容、附件或时效不合规」让对端自己猜。
+#[test]
+fn rejected_submission_frame_carries_its_reason() {
+    let frame = event_rejected_json(
+        "attachments_too_many",
+        "单条事件最多携带 15 个附件，本次 16 个",
+    );
+    let value = parse_frame(&frame).expect("错误帧必须是 JSON 对象");
+    assert_eq!(value["type"], "error");
+    assert_eq!(value["error"], "event_rejected");
+    assert_eq!(value["reason"], "attachments_too_many");
+    assert_eq!(value["message"], "单条事件最多携带 15 个附件，本次 16 个");
+}
+
 #[path = "gateway_websocket_flow_tests.rs"]
 mod gateway_websocket_flow_tests;

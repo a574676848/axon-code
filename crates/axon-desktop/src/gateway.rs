@@ -481,7 +481,25 @@ pub(crate) fn gateway_status_message(status: u16, body: &str) -> String {
         // 两者的修复动作不同，共用一句「凭据不匹配」会把内容问题报成配置问题。
         401 => format!("网关拒绝访问：凭据缺失或不匹配{suffix}"),
         403 if code == "event_rejected" => {
-            format!("网关拒绝了这条消息：内容、附件或时效不合规{suffix}")
+            // 服务端补了 reason/message 时直接照它的说法报：附件过多、已过期与时钟
+            // 偏差的处置完全不同，三选一的猜测只会让用户原样重发同一条消息。
+            let payload = serde_json::from_str::<serde_json::Value>(body).unwrap_or_default();
+            let reason = payload
+                .get("reason")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            let message = payload
+                .get("message")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .trim();
+            if message.is_empty() {
+                format!("网关拒绝了这条消息：内容、附件或时效不合规{suffix}")
+            } else if reason.is_empty() {
+                format!("网关拒绝了这条消息：{message}{suffix}")
+            } else {
+                format!("网关拒绝了这条消息：{message}（{reason}）")
+            }
         }
         403 => format!("网关拒绝访问：凭据缺失或不匹配{suffix}"),
         // 目标详情 404 说「这个目标不在了」，路由缺失 404 说「后台版本过旧」：
@@ -526,6 +544,22 @@ mod tests {
         assert!(rejected.contains("内容、附件或时效"), "{rejected}");
         assert!(!rejected.contains("凭据"), "{rejected}");
         assert!(rejected.contains("event_rejected"), "{rejected}");
+    }
+
+    #[test]
+    fn classified_rejection_uses_the_server_reason_instead_of_a_guess() {
+        // 服务端给了分类原因时必须照它报：只回「不合规」会让用户原样重发同一条消息。
+        let message = gateway_status_message(
+            403,
+            r#"{"error":"event_rejected","reason":"attachments_too_many","message":"单条事件最多携带 15 个附件，本次 12 个"}"#,
+        );
+        assert!(
+            message.contains("单条事件最多携带 15 个附件，本次 12 个"),
+            "{message}"
+        );
+        assert!(message.contains("attachments_too_many"), "{message}");
+        assert!(!message.contains("内容、附件或时效不合规"), "{message}");
+        assert!(!message.contains("凭据"), "{message}");
     }
 
     #[test]
