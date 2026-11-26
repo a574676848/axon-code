@@ -40,6 +40,19 @@ mod tests {
 
     use super::reclaim;
 
+    /// 端点文件必须落在 `sun_path` 的容量内。
+    ///
+    /// 本模块只在 Unix 下编译（Windows 用命名管道，崩了不留文件）。POSIX 上本地 socket
+    /// 名就是磁盘路径，长度上限只有 104（macOS）/108（Linux）字节，超长时 `bind` 直接
+    /// 返回 `InvalidInput`；三方 CI 的工作目录很深（如
+    /// `/Users/runner/work/axon-code/axon-code`），测试临时目录再拼上端点名必然越界，
+    /// 因此端点改放系统临时目录下的短名。
+    fn endpoint_path(tag: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("axon-ipc-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
     /// 一个无人监听的普通文件冒充残留端点：回收后必须消失。
     #[test]
     fn reclaims_endpoint_file_that_nobody_listens_on() {
@@ -55,8 +68,7 @@ mod tests {
     /// 有活监听者的端点：回收后文件必须仍在，否则会拆掉运行中的守护进程。
     #[test]
     fn keeps_endpoint_file_that_has_a_live_listener() {
-        let temp = axon_test_support::test_temp_dir();
-        let path = temp.path().join("live");
+        let path = endpoint_path("live");
         let endpoint = path.to_string_lossy().into_owned();
         let name = endpoint
             .as_str()
@@ -70,5 +82,7 @@ mod tests {
         reclaim(&endpoint);
 
         assert!(Path::new(&endpoint).exists(), "有活监听者的端点不得被删除");
+        // Unix 上端点落在系统临时目录，由测试自行清理，避免残留 socket 文件。
+        let _ = std::fs::remove_file(&path);
     }
 }
