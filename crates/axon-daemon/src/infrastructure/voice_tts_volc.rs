@@ -248,7 +248,12 @@ fn repair_wav(mut wav: Vec<u8>) -> Vec<u8> {
     // 顺序扫 chunk，找到 data 并把长度改成剩余字节数。
     let mut offset = 12usize;
     while offset + 8 <= wav.len() {
-        let id = [wav[offset], wav[offset + 1], wav[offset + 2], wav[offset + 3]];
+        let id = [
+            wav[offset],
+            wav[offset + 1],
+            wav[offset + 2],
+            wav[offset + 3],
+        ];
         let size = u32::from_le_bytes([
             wav[offset + 4],
             wav[offset + 5],
@@ -287,9 +292,7 @@ fn build_request(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        REQUEST_HEADER, ServerFrame, parse_frame, repair_wav, request_frame,
-    };
+    use super::{REQUEST_HEADER, ServerFrame, parse_frame, repair_wav, request_frame};
 
     fn text_frame(event: i32) -> Vec<u8> {
         let mut frame = vec![0x11, 0x94, 0x10, 0x00];
@@ -359,7 +362,11 @@ mod tests {
         wav.extend_from_slice(&[7u8; 10]);
         let fixed = repair_wav(wav);
         let riff = u32::from_le_bytes([fixed[4], fixed[5], fixed[6], fixed[7]]);
-        assert_eq!(riff as usize, fixed.len() - 8, "RIFF 长度必须是文件长度减 8");
+        assert_eq!(
+            riff as usize,
+            fixed.len() - 8,
+            "RIFF 长度必须是文件长度减 8"
+        );
         let data_start = 12 + 8 + 16;
         let data_len = u32::from_le_bytes([
             fixed[data_start + 4],

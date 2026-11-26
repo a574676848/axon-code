@@ -1,8 +1,8 @@
 //! 宿主工作线程的单测：有界队列、背压窗口与事件映射。
 
 use super::{AUDIO_QUEUE_CAPACITY, Command, CommandQueue, PushOutcome, VoiceOut, event_out};
-use crate::infrastructure::gateway_http::gateway_voice_ready::ready_json;
 use crate::infrastructure::gateway_http::VoiceRuntime;
+use crate::infrastructure::gateway_http::gateway_voice_ready::ready_json;
 
 fn audio(tag: u8) -> Vec<u8> {
     vec![tag; 4]
@@ -67,8 +67,7 @@ fn overload_window_clears_after_recovery_gap() {
 #[test]
 fn ready_has_contract_fields() {
     let runtime = VoiceRuntime::new(None, None, None);
-    let value: serde_json::Value =
-        serde_json::from_str(&ready_json(&runtime)).expect("合法 JSON");
+    let value: serde_json::Value = serde_json::from_str(&ready_json(&runtime)).expect("合法 JSON");
     for field in [
         "asrModel",
         "ttsModel",

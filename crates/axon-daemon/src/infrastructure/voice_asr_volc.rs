@@ -71,6 +71,8 @@ const SERIALIZATION_JSON: u8 = 0b0001;
 const SERIALIZATION_NONE: u8 = 0b0000;
 /// gzip 压缩。
 const COMPRESSION_GZIP: u8 = 0b0001;
+/// 不压缩。
+const COMPRESSION_NONE: u8 = 0b0000;
 
 /// 附加头：凭据。
 const HEADER_API_KEY: HeaderName = HeaderName::from_static("x-api-key");
@@ -203,10 +205,10 @@ impl VolcAsrTransport {
         }
         let connected = self
             .runtime
-            .block_on(tokio::time::timeout(
-                CONNECT_TIMEOUT,
-                tokio_tungstenite::connect_async(request),
-            ))
+            .block_on(async {
+                tokio::time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(request))
+                    .await
+            })
             .map_err(|_| TransportError::Timeout)?
             .map_err(|error| TransportError::Write(format!("识别握手失败：{error}")))?;
         self.socket = Some(connected.0);
@@ -237,7 +239,10 @@ impl VolcAsrTransport {
             return Err(TransportError::Timeout);
         };
         let runtime = &self.runtime;
-        match runtime.block_on(tokio::time::timeout(timeout, socket.next())) {
+        // `timeout` 的构造要用到 Tokio 定时器，必须发生在 `block_on` 内部：
+        // 在实参位置构造会因缺 reactor 而 panic。
+        let waited = runtime.block_on(async { tokio::time::timeout(timeout, socket.next()).await });
+        match waited {
             Ok(Some(Ok(message))) => Ok(Some(message)),
             Ok(Some(Err(error))) => Err(TransportError::Read(format!("识别下行失败：{error}"))),
             Ok(None) => Ok(None),
@@ -289,27 +294,9 @@ impl VolcAsrTransport {
     /// 发送一片上行音频；`last` 为末帧标记。
     fn send_audio(&mut self, pcm: &[u8], last: bool) -> Result<(), TransportError> {
         // 末帧用负序号标记，与服务端约定一致。
-        let seq = if last {
-            -self.next_seq
-        } else {
-            self.next_seq
-        };
+        let seq = if last { -self.next_seq } else { self.next_seq };
         self.next_seq = self.next_seq.saturating_add(1);
-        let body = if pcm.is_empty() {
-            Vec::new()
-        } else {
-            gzip(pcm)?
-        };
-        let flags = if last {
-            FLAG_LAST_WITH_SEQ
-        } else {
-            FLAG_POSITIVE_SEQ
-        };
-        let mut frame = header(MT_AUDIO_ONLY, flags, SERIALIZATION_NONE, COMPRESSION_GZIP);
-        frame.extend_from_slice(&seq.to_be_bytes());
-        frame.extend_from_slice(&(body.len() as u32).to_be_bytes());
-        frame.extend_from_slice(&body);
-        self.send_binary(frame)
+        self.send_binary(audio_frame(pcm, seq, last)?)
     }
 
     fn send_binary(&mut self, bytes: Vec<u8>) -> Result<(), TransportError> {
@@ -563,6 +550,28 @@ fn header(message_type: u8, flags: u8, serialization: u8, compression: u8) -> Ve
         (serialization << 4) | compression,
         0x00,
     ]
+}
+
+/// 组装一片上行音频帧。
+///
+/// 空载荷不能标 gzip：服务端会按标志去解压空 body，报 `ungzip payload: EOF`
+/// （`asr_45000000`）并拒绝整条请求。
+fn audio_frame(pcm: &[u8], seq: i32, last: bool) -> Result<Vec<u8>, TransportError> {
+    let (body, compression) = if pcm.is_empty() {
+        (Vec::new(), COMPRESSION_NONE)
+    } else {
+        (gzip(pcm)?, COMPRESSION_GZIP)
+    };
+    let flags = if last {
+        FLAG_LAST_WITH_SEQ
+    } else {
+        FLAG_POSITIVE_SEQ
+    };
+    let mut frame = header(MT_AUDIO_ONLY, flags, SERIALIZATION_NONE, compression);
+    frame.extend_from_slice(&seq.to_be_bytes());
+    frame.extend_from_slice(&(body.len() as u32).to_be_bytes());
+    frame.extend_from_slice(&body);
+    Ok(frame)
 }
 
 /// gzip 压缩。

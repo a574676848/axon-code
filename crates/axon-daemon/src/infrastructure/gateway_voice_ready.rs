@@ -75,12 +75,10 @@ pub(super) fn ready_json(runtime: &VoiceRuntime) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        degraded_detail, provider_ready, ready_json, tts_degraded_detail, tts_ready,
-    };
-    use super::super::voice_asr_volc::VolcAsrConfig;
     use super::super::gateway_voice_provider::VoiceRuntime;
+    use super::super::voice_asr_volc::VolcAsrConfig;
     use super::super::voice_tts_volc::VolcTtsConfig;
+    use super::{degraded_detail, provider_ready, ready_json, tts_degraded_detail, tts_ready};
 
     fn tts_only() -> VoiceRuntime {
         VoiceRuntime::new(
@@ -123,8 +121,14 @@ mod tests {
         assert_eq!(value["ttsModel"], "speaker");
         assert_eq!(value["tts"], true);
         assert_eq!(value["cues"], true);
-        assert!(value["degraded"]["detail"].is_string(), "会话不可用要说明原因");
-        assert!(value["degraded"]["ttsDetail"].is_null(), "合成可用时不报降级");
+        assert!(
+            value["degraded"]["detail"].is_string(),
+            "会话不可用要说明原因"
+        );
+        assert!(
+            value["degraded"]["ttsDetail"].is_null(),
+            "合成可用时不报降级"
+        );
     }
 
     #[test]

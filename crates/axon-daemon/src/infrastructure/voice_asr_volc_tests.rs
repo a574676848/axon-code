@@ -14,8 +14,8 @@ use super::super::voice_tts_volc::{
     DEFAULT_TTS_ENDPOINT, DEFAULT_TTS_RESOURCE_ID, DEFAULT_TTS_SPEAKER, VolcTtsConfig, synth_wav,
 };
 use super::{
-    COMPRESSION_GZIP, FLAG_LAST_WITH_SEQ, FLAG_POSITIVE_SEQ, MT_SERVER_RESPONSE,
-    SERIALIZATION_JSON, VolcAsrConfig, gzip, header, utterance_span,
+    COMPRESSION_GZIP, COMPRESSION_NONE, FLAG_LAST_WITH_SEQ, FLAG_POSITIVE_SEQ, MT_SERVER_RESPONSE,
+    SERIALIZATION_JSON, VolcAsrConfig, audio_frame, gzip, header, utterance_span,
 };
 
 #[test]
@@ -51,6 +51,21 @@ fn gzip_round_trips() {
     let raw = b"hello";
     let compressed = gzip(raw).expect("压缩应成功");
     assert_ne!(compressed.as_slice(), raw, "压缩后应当变化");
+}
+
+#[test]
+fn empty_audio_frame_skips_gzip_flag() {
+    // 空载荷若仍标 gzip，服务端会解压空 body 失败并整条拒单（asr_45000000）。
+    let frame = audio_frame(&[], -3, true).expect("空末帧应能组装");
+    assert_eq!(frame[1] & 0x0F, FLAG_LAST_WITH_SEQ, "末帧标志");
+    assert_eq!(frame[2] & 0x0F, COMPRESSION_NONE, "空载荷不标 gzip");
+    let size = u32::from_be_bytes([frame[8], frame[9], frame[10], frame[11]]);
+    assert_eq!(size, 0, "空载荷长度为 0");
+    assert_eq!(frame.len(), 12, "头 4 + 序号 4 + 长度 4");
+
+    let frame = audio_frame(&[1u8; 32], 2, false).expect("音频帧应能组装");
+    assert_eq!(frame[1] & 0x0F, FLAG_POSITIVE_SEQ, "普通帧标志");
+    assert_eq!(frame[2] & 0x0F, COMPRESSION_GZIP, "非空载荷走 gzip");
 }
 
 #[test]
@@ -155,6 +170,9 @@ fn live_recognition_returns_expected_text() {
             Ok(Frame::Control(Control::Final(message))) => {
                 final_text = Some(message.text);
                 break;
+            }
+            Ok(Frame::Control(Control::Error(error))) => {
+                panic!("服务端拒绝：{error:?}");
             }
             Ok(_) => {}
             Err(error) => panic!("识别失败：{error:?}"),

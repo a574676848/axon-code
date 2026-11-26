@@ -126,11 +126,7 @@ impl VoiceRuntime {
         tts: Option<VolcTtsConfig>,
         asr: Option<VolcAsrConfig>,
     ) -> Self {
-        Self {
-            realtime,
-            tts,
-            asr,
-        }
+        Self { realtime, tts, asr }
     }
 
     /// realtime 车道参数；缺凭据时为 `None`。
@@ -328,9 +324,9 @@ fn with_model_query(base: &str, model: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Lane, VoiceRuntime, with_model_query};
     use super::super::voice_asr_volc::VolcAsrConfig;
     use super::super::voice_tts_volc::VolcTtsConfig;
+    use super::{Lane, VoiceRuntime, with_model_query};
 
     fn tts_config() -> VolcTtsConfig {
         VolcTtsConfig {

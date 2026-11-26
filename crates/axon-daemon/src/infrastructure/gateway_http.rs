@@ -39,16 +39,16 @@ mod gateway_voice_turn;
 mod gateway_voice_turn_stream;
 #[path = "gateway_voice_worker.rs"]
 mod gateway_voice_worker;
-#[path = "voice_tts_volc.rs"]
-mod voice_tts_volc;
 #[path = "voice_asr_volc.rs"]
 mod voice_asr_volc;
-pub use gateway_voice_provider::{Lane, RealtimeEndpoint, VoiceRuntime};
-pub use gateway_voice_realtime_protocol::{SessionConfig, TurnDetection};
-pub use voice_tts_volc::VolcTtsConfig;
-pub use voice_asr_volc::VolcAsrConfig;
+#[path = "voice_tts_volc.rs"]
+mod voice_tts_volc;
 pub use super::gateway_http_handler::{GatewayHttpResponse, GatewayHttpRouteHandler};
 pub use gateway_voice::VoiceTimeouts;
+pub use gateway_voice_provider::{Lane, RealtimeEndpoint, VoiceRuntime};
+pub use gateway_voice_realtime_protocol::{SessionConfig, TurnDetection};
+pub use voice_asr_volc::VolcAsrConfig;
+pub use voice_tts_volc::VolcTtsConfig;
 
 use super::event_scripts::EventProviderRegistry;
 use super::gateway_kernel::{GatewayAdapter, GatewayContext};
@@ -224,10 +224,7 @@ impl HttpGatewayAdapter {
 
     /// 注入语音运行参数（渠道、模型、音色与凭据的唯一来源）。
     #[must_use]
-    pub fn with_voice_runtime(
-        mut self,
-        runtime: gateway_voice_provider::VoiceRuntime,
-    ) -> Self {
+    pub fn with_voice_runtime(mut self, runtime: gateway_voice_provider::VoiceRuntime) -> Self {
         self.voice_runtime = runtime;
         self
     }
