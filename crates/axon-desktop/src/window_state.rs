@@ -100,7 +100,7 @@ impl WindowGeometry {
 
     /// 尺寸变化后的记忆。
     ///
-    /// 最小化与最大化都不改写尺寸：前者会把宽高报成 0，后者报的是满屏尺寸。
+    /// 最小化会把宽高报成 0，最大化与全屏报的是满屏尺寸，三者都不是用户的还原尺寸。
     fn with_resize(
         self,
         inner: PhysicalSize<u32>,
@@ -117,7 +117,7 @@ impl WindowGeometry {
             fullscreen,
             ..self
         };
-        if maximized || inner.width == 0 || inner.height == 0 {
+        if maximized || fullscreen || inner.width == 0 || inner.height == 0 {
             return next;
         }
         next.width = f64::from(inner.width) / scale;
@@ -125,15 +125,16 @@ impl WindowGeometry {
         next
     }
 
-    /// 位置变化后的记忆。只有既没最大化也没最小化时才记用户的摆放。
+    /// 位置变化后的记忆。只有普通态才记用户的摆放。
     fn with_move(
         self,
         outer: PhysicalPosition<i32>,
         scale: f64,
         minimized: bool,
         maximized: bool,
+        fullscreen: bool,
     ) -> Self {
-        if minimized || maximized {
+        if minimized || maximized || fullscreen {
             return self;
         }
         Self {
@@ -296,9 +297,10 @@ fn watch(window: WebviewWindow) {
         WindowEvent::Moved(position) => {
             let minimized = handle.is_minimized().unwrap_or(false);
             let maximized = handle.is_maximized().unwrap_or(false);
+            let fullscreen = handle.is_fullscreen().unwrap_or(false);
             let scale = handle.scale_factor().unwrap_or(1.0);
             let before = current();
-            let after = before.with_move(*position, scale, minimized, maximized);
+            let after = before.with_move(*position, scale, minimized, maximized, fullscreen);
             if after != before {
                 store(after);
             }
@@ -420,7 +422,7 @@ mod tests {
         assert_eq!(after.width, 620.0);
         assert_eq!(after.height, 460.0);
 
-        let moved = after.with_move(PhysicalPosition::new(-200, -200), 2.0, true, false);
+        let moved = after.with_move(PhysicalPosition::new(-200, -200), 2.0, true, false, false);
         assert_eq!(moved.x, 120.0);
         assert_eq!(moved.y, 90.0);
     }
@@ -437,7 +439,7 @@ mod tests {
     #[test]
     fn maximizing_does_not_record_the_screen_origin() {
         // 最大化那一瞬窗口被搬到屏幕外的负坐标，那是系统的最大化原点。
-        let after = base().with_move(PhysicalPosition::new(-7, -7), 2.0, false, true);
+        let after = base().with_move(PhysicalPosition::new(-7, -7), 2.0, false, true, false);
         assert_eq!(after.x, 120.0);
         assert_eq!(after.y, 90.0);
     }
@@ -446,7 +448,7 @@ mod tests {
     fn resizing_and_moving_in_the_normal_state_are_recorded_in_logical_pixels() {
         let after = base()
             .with_resize(PhysicalSize::new(1600, 1200), 2.0, false, false, false)
-            .with_move(PhysicalPosition::new(400, 300), 2.0, false, false);
+            .with_move(PhysicalPosition::new(400, 300), 2.0, false, false, false);
         assert_eq!((after.width, after.height), (800.0, 600.0));
         assert_eq!((after.x, after.y), (200.0, 150.0));
         assert!(!after.maximized);
