@@ -309,7 +309,17 @@ export function applyUserMessage(
       const cells = current.cells
         .map((cell) => (cell.id === owner.cell.id ? claimed : cell))
         .filter((cell) => !drop.includes(cell.id));
-      return { ...current, cells, index: indexCells(cells), pendingChannel: null };
+      /*
+       * 附件与来源是「还没落地的那条消息」的暂存事实：认领之后它已经贴到这一格上，
+       * 再留着就会被同一轮后面的消息继承，界面上多出一张重复的附件卡。
+       */
+      return {
+        ...current,
+        cells,
+        index: indexCells(cells),
+        pendingChannel: null,
+        pendingAttachments: [],
+      };
     }
     const drop = dropping.get(index);
     return drop === undefined ? current : detachCells(current, drop);

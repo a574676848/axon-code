@@ -370,3 +370,30 @@ test('never_empties_a_turn：宁可留一格气泡，也不造一个永远在跑
     const previous = state.turns.find((turn) => turn.id === RUNNING);
     assert.equal(previous.cells.length, 1, '被摘空的那一轮会以运行中永远留在时间线上，因此不摘');
 });
+
+test('claimed_message_clears_pending_attachments：认领后附件暂存必须清空', () => {
+    let state = steer(runningTurn(), VISIBLE);
+    const turn = state.turns[0];
+    // 索引先把附件记在轮次上：用户消息还没重放出来，暂存等它落地。
+    const withPending = {
+        ...turn,
+        pendingAttachments: [
+            { path: '/tmp/pasted-notes.md', name: 'pasted-notes.md', image: false, bytes: 20480 },
+        ],
+    };
+    state = conversationReducer(state, { type: 'replace-turn', turn: withPending });
+    assert.equal(state.turns[0].pendingAttachments.length, 1, '构造出待贴的附件');
+
+    state = conversationReducer(state, {
+        type: 'frames',
+        frames: [userFrame('user:with-attachment', VISIBLE, RUNNING)],
+        nowMs: 3_000,
+    });
+
+    assert.equal(bubbles(state, VISIBLE).length, 1, '认领后仍只有一格气泡');
+    assert.equal(
+        state.turns[0].pendingAttachments.length,
+        0,
+        '认领之后附件暂存必须清空，否则同一轮后面的消息会再挂一张重复附件卡',
+    );
+});
