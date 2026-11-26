@@ -250,13 +250,30 @@ impl WindowRolloverPolicyRuntime {
         }
         current_context_tokens.is_some_and(|tokens| {
             tokens > 0
-                && tokens
-                    >= self.token_budget.forced_rollover_tokens(
-                        self.policy.trigger_tokens,
-                        self.policy.context_window,
-                    )
+                && tokens >= self.rollover_threshold()
                 && self.auto_rollover_backoff_satisfied(tokens)
         })
+    }
+
+    /// 仅供测试：置位「本窗口已发过 fallback 提示」标记。
+    #[cfg(test)]
+    pub(crate) fn mark_fallback_emitted_for_test(&mut self) {
+        self.fallback_emitted = true;
+    }
+
+    /// 自动换窗的当前阈值。
+    ///
+    /// 平时用「触发线 + fallback 缓冲」；一旦已经发过「窗口已耗尽」提示却还在同一窗口里
+    /// 跑，阈值就降回触发线本身：下一迭代直接自动换窗，不再等模型自觉调用
+    /// `builtin.new_context`。真机现场：模型写完便签只在答复里说「现在换窗继续」，工具
+    /// 没调用，本轮正常收口，任务半途停下等用户再发一条消息。
+    fn rollover_threshold(&self) -> u64 {
+        if self.fallback_emitted {
+            self.policy.trigger_tokens
+        } else {
+            self.token_budget
+                .forced_rollover_tokens(self.policy.trigger_tokens, self.policy.context_window)
+        }
     }
 
     /// 记一次自动换窗失败，并把重试门槛抬到「本次读数加一个退避步长」。

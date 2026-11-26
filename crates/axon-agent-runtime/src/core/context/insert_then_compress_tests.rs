@@ -134,36 +134,6 @@ fn test_estimated_history_tokens_includes_structured_provider_fields() {
 }
 
 #[test]
-fn test_should_compress() {
-    let runtime = WindowRolloverPolicyRuntime::new(policy(100));
-    let system = AgentModelMessage::context("system", "x".repeat(4_000));
-
-    // 前缀之外不足 2 条可压缩消息：不触发。
-    let only_prefix = vec![system.clone(), message_with_chars("user", 4_000)];
-    assert!(!runtime.should_compress(&only_prefix, Some(100)));
-
-    // 达到 trigger 后先进入 fallback 缓冲，直到完整窗口边界才强制轮转。
-    let compressible = vec![
-        system,
-        message_with_chars("user", 200),
-        message_with_chars("assistant", 200),
-    ];
-    assert!(!runtime.should_compress(&compressible, Some(100)));
-    assert!(!runtime.should_compress(&compressible, Some(199)));
-    assert!(runtime.should_compress(&compressible, Some(200)));
-
-    // 未达到阈值：不触发。
-    let below = vec![
-        message_with_chars("system", 10),
-        message_with_chars("user", 10),
-        message_with_chars("assistant", 10),
-    ];
-    assert!(!runtime.should_compress(&below, Some(99)));
-    assert!(!runtime.should_compress(&compressible, Some(0)));
-    assert!(!runtime.should_compress(&compressible, None));
-}
-
-#[test]
 fn test_rebuild_with_compression_starts_fresh_window_with_stable_context_and_checkpoint() {
     let mut runtime = WindowRolloverPolicyRuntime::new(policy(1_000));
     let messages = vec![
@@ -603,6 +573,9 @@ fn commit_failure_keeps_the_current_history_for_the_next_turn() {
 }
 
 mod insert_then_compress_projection_tests;
+
+#[path = "insert_then_compress_threshold_tests.rs"]
+mod threshold_tests;
 
 /// 换窗时稳定前缀按内容去重：每开一个新窗口都会重新注入一组，不去重就会逐窗累积。
 ///

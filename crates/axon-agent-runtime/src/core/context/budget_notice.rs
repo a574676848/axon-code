@@ -213,7 +213,7 @@ pub(crate) fn warn_note(
         _ => "（步均样本不足，暂不折算步数）".to_owned(),
     };
     format!(
-        "{WARN_NOTE_PREFIX}{remaining_tokens} tokens{pace_clause}。判断：这个工作单元能在这些步内收口，就继续做完；不能就先落到可中断点——等正在进行的工具调用回执落地、检查跑完、结论确定——再用 builtin.notes_write_file 覆盖写入 checkpoint.md（上限 {max_tokens} tokens，超限会被拒绝），然后调用 builtin.new_context。便签按固定小节写：目标 / 已完成步骤（含文件路径、命令、关键 ID）/ 待办 / 已验证证据 / 下一步命令；旧窗口的原文与输出可用 history_list_windows、history_search_contents、history_read_item 回读。不要在工具调用中途换窗：窗口结束后才落地的回执没有调用可以挂靠。若要读大文件或跑长测试，按更坏的估计，一步就可能吃掉这几步的预算。",
+        "{WARN_NOTE_PREFIX}{remaining_tokens} tokens{pace_clause}。判断：这个工作单元能在这些步内收口，就继续做完；不能就先落到可中断点，等正在进行的工具调用回执落地、检查跑完、结论确定，再用 builtin.notes_write_file 覆盖写入 checkpoint.md（上限 {max_tokens} tokens，超限会被拒绝），然后调用 builtin.new_context。便签按固定小节写：目标 / 已完成步骤（含文件路径、命令、关键 ID）/ 待办 / 已验证证据 / 下一步命令；旧窗口的原文与输出可用 history_list_windows、history_search_contents、history_read_item 回读。不要在工具调用中途换窗：窗口结束后才落地的回执没有调用可以挂靠。若要读大文件或跑长测试，按更坏的估计，一步就可能吃掉这几步的预算。注意：便签写完必须在本轮真的调用 builtin.new_context，只在答复里说一句要换窗不会切换窗口，本轮会正常结束，任务就此停在半途。",
         max_tokens = crate::session_notes::SESSION_NOTES_CHECKPOINT_MAX_TOKENS,
     )
 }
