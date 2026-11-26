@@ -102,6 +102,36 @@ impl RuntimeStore for SqliteRuntimeStore {
         interrupted_execution_repository::quarantine_host_executions(self, host, now_ms)
     }
 
+    fn requeue_stale_running(&self, now_ms: u64) -> Result<u32, RuntimeStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)?;
+        let now = i64_value(now_ms)?;
+        // 启动瞬间不可能存在属于本进程的 running 执行：命中的都是上一个进程留下的在途轮次。
+        let requeued = transaction
+            .execute(
+                "UPDATE work_items SET status='queued',lease_json=NULL,lease_expires_at_ms=NULL,\
+                 claimed_by=NULL,claimed_generation=NULL,retry_at_ms=NULL,updated_at_ms=?1 \
+                 WHERE status='running'",
+                params![now],
+            )
+            .map_err(storage)?;
+        if requeued > 0 {
+            // 会话必须回到可派发状态，否则重排后的执行没有会话肯领。
+            transaction
+                .execute(
+                    "UPDATE sessions SET status='idle',updated_at_ms=?1 \
+                     WHERE status IN ('running','waiting','compacting','recovering')",
+                    params![now],
+                )
+                .map_err(storage)?;
+        }
+        transaction.commit().map_err(storage)?;
+        u32::try_from(requeued)
+            .map_err(|_| RuntimeStoreError::Storage("重排执行数量超出范围".to_owned()))
+    }
+
     fn claim_upgrade_replacement(
         &self,
         host_id: &RuntimeHostId,

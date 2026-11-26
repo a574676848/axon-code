@@ -5,7 +5,13 @@
 
 use super::SqliteRuntimeStore;
 use super::sqlite_runtime_store_interaction_fixtures::{interaction_record, test_session};
+use crate::SessionActionRecord;
 use crate::ports::InteractionStore as _;
+use crate::ports::{ExecutionStore, GoalStore, RuntimeStore};
+use axon_domain::{
+    DaemonSessionId, ExecutionId, ExecutionStatus, GoalPlan, GoalRecord, GoalStatus, RuntimeHostId,
+    ScopeRef, SessionActionId, SessionActionStatus,
+};
 
 /// 与生产同量级的租约窗口，只为让领取条件里的时间比较有意义。
 const LEASE_DURATION_MS: u64 = 100;
@@ -119,4 +125,87 @@ fn requeue_is_idempotent_and_never_stacks_work_items() {
         .claim_processing(10, 60, LEASE_DURATION_MS)
         .expect("领取");
     assert_eq!(claimed.len(), 1, "同一条入站事实只能有一个工作项");
+}
+
+/// 重启时把在途执行排回队列，并由新进程重新领取。
+///
+/// 反向判据：把 `requeue_stale_running` 的 WHERE 条件改掉（不再命中 running），
+/// 第一条断言立刻失败。
+#[test]
+fn restart_requeues_running_execution_instead_of_settling_uncertain() {
+    let directory = axon_test_support::test_temp_dir();
+    let store = SqliteRuntimeStore::new(directory.path().join("runtime.sqlite3"));
+    let host = store
+        .claim_host(
+            &RuntimeHostId::new("host-restart").expect("host"),
+            1,
+            None,
+            10,
+            10_000,
+        )
+        .expect("claim");
+    let session_id = DaemonSessionId::new("session-restart").expect("session");
+    store.create_session(&session_id, ".", 10).expect("session");
+    let mut goal = GoalRecord::new(
+        axon_domain::GoalId::new("task-restart").expect("task"),
+        ScopeRef::global(),
+        "重启续跑",
+        GoalPlan {
+            objective: "验证重启后执行被排回队列".to_owned(),
+            steps: Vec::new(),
+            write_policy: Default::default(),
+        },
+        Vec::new(),
+        11,
+    )
+    .expect("goal");
+    goal.transition(GoalStatus::Active, 12).expect("active");
+    store.create_goal(&goal).expect("save goal");
+    let execution_id = ExecutionId::new("execution-restart").expect("execution");
+    let action = SessionActionRecord {
+        action_id: SessionActionId::new(execution_id.as_str()).expect("action"),
+        goal_id: Some(axon_domain::GoalId::new("task-restart").expect("task")),
+        session_id: session_id.clone(),
+        kind: "user_input".to_owned(),
+        priority: 50,
+        status: SessionActionStatus::Queued,
+        dedupe_key: None,
+        payload_json: r#"{"prompt":"重启续跑验证"}"#.to_owned(),
+        goal_revision: None,
+        context_version: None,
+        claimed_by: None,
+        claimed_generation: None,
+        lease_expires_at_ms: None,
+        attempt: 0,
+    };
+    store.enqueue_action(&action, 20).expect("入队");
+    store
+        .claim_next_action(&session_id, &host, 30, 10_000)
+        .expect("claim action")
+        .expect("应领取");
+
+    let requeued = store.requeue_stale_running(40).expect("重排");
+    assert_eq!(requeued, 1, "上一进程留下的 running 执行应被排回队列");
+
+    let execution = store
+        .get_execution(&execution_id)
+        .expect("get_execution")
+        .expect("execution");
+    assert_eq!(execution.status, ExecutionStatus::Queued);
+    assert!(execution.lease.is_none(), "重排必须清掉旧租约");
+
+    // 幂等：已经在队列里的执行不会再被重排命中。
+    assert_eq!(
+        store.requeue_stale_running(60).expect("二次重排"),
+        0,
+        "重排是幂等的"
+    );
+
+    assert!(
+        !store
+            .claim_executions(1, "worker-next", 50, 10_000)
+            .expect("新进程应能领取重排后的执行")
+            .is_empty(),
+        "重排后的执行必须能被新进程领走"
+    );
 }

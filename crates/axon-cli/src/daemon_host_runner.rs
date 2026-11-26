@@ -206,7 +206,8 @@ fn try_run_daemon_host(
         primary_turn_wake_hook(Arc::clone(&primary_turn_signal)),
     );
     // durable 落点要用同一份运行态存储：问答 sink 建在宿主之前，安装在其后。
-    let question_store = store.clone();
+    // store 马上会被 host 拿走：问答与重启续跑各留一份克隆。
+    let (question_store, resume_store) = (store.clone(), store.clone());
     // 关停标志先于宿主构建：后台 Worker 启动后立即依赖它判断是否需要收口。
     let workers_running = Arc::new(AtomicBool::new(true));
     // fence 判据与关停判据必须分开：停机是零退出码的正常收尾，fence 必须非零退出，
@@ -221,6 +222,7 @@ fn try_run_daemon_host(
         Arc::clone(&primary_turn_signal),
     )?;
     host.start().map_err(|error| error.to_string())?;
+    requeue::requeue_running_after_restart(&resume_store, axon_time::unix_now_ms());
     // 指标写入通道复用宿主代际：注册必须放在 host 启动之后，未启动时拿不到 host 记录。
     // 注册后每轮指标只追加一次事件，不再与其他 Host 争抢单活跃租约。
     if let Ok(record) = host.host_record() {

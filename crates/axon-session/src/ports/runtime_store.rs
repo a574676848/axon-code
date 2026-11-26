@@ -244,6 +244,18 @@ pub trait RuntimeStore:
         host: &DaemonHostRecord,
         now_ms: u64,
     ) -> Result<u32, RuntimeStoreError>;
+
+    /// 把上一次进程留下的 `running` 执行重新排回队列，供 Daemon 启动时续跑。
+    ///
+    /// 与 [`Self::interrupt_host_actions`] 的方向相反：那条路径表达「外部结果未知，禁止
+    /// 自动重跑」，这条只在**新进程刚启动、还没有任何自有执行**的瞬间使用，把旧进程的
+    /// 在途执行交还调度器。必须在第一次 supervisor tick 之前调用，否则
+    /// `quarantine_interrupted_executions` 会先把它们收敛成 `uncertain` 并落一条终态结果，
+    /// 之后再重排就会撞结果主键。
+    ///
+    /// 只清租约、不改结果：旧执行从未提交过结果，重排后由新一轮 run 用 Thread 里已落库的
+    /// 工具回执接着跑。改回 `queued` 后不再命中本条件，天然幂等。
+    fn requeue_stale_running(&self, now_ms: u64) -> Result<u32, RuntimeStoreError>;
     /// 使用一次性 token 原子接管旧 Host 的运行态。
     fn claim_upgrade_replacement(
         &self,
