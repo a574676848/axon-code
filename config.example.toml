@@ -88,10 +88,6 @@ voice = "zh_female_shuangkuaisisi_uranus_bigtts"
 speech_rate = 20
 # 轮次检测；可选值：server_vad、smart_turn_v2、manual；默认值："server_vad"。
 turn_detection = "server_vad"
-# 会话系统提示词；仅 role 为 realtime 时生效，留空用内置语音版人格。
-# instructions = "只答一句，不寒暄。"
-# 会话系统提示词文件；相对 Axon 主目录解析，instructions 直填优先。
-# instructions_file = "data/voice/persona.md"
 
 # 识别渠道：与合成分开配置——两者端点路径不同，不能共用一个 base_url。
 [[voice.channels]]

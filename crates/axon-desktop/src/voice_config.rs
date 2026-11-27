@@ -58,12 +58,6 @@ pub struct VoiceModelDto {
     pub speech_rate: i32,
     /// 轮次检测策略。
     pub turn_detection: String,
-    /// 会话系统提示词；仅 realtime 角色生效，留空用内置语音版人格。
-    #[serde(default)]
-    pub instructions: String,
-    /// 会话系统提示词文件；相对 Axon 主目录解析，`instructions` 直填优先。
-    #[serde(default)]
-    pub instructions_file: Option<String>,
 }
 
 /// 整段语音配置 DTO：读写共用；写回时 `api_keyConfigured` 由后端忽略并按名保留明文。
@@ -115,8 +109,6 @@ fn to_dto(config: &VoiceConfig) -> VoiceConfigDto {
                 voice: model.voice.clone(),
                 speech_rate: model.speech_rate,
                 turn_detection: model.turn_detection.clone(),
-                instructions: model.instructions.clone(),
-                instructions_file: model.instructions_file.clone(),
             })
             .collect(),
     }
@@ -159,8 +151,6 @@ fn from_dto(
                 voice: model.voice,
                 speech_rate: model.speech_rate,
                 turn_detection: model.turn_detection,
-                instructions: model.instructions,
-                instructions_file: model.instructions_file,
             })
             .collect(),
     }

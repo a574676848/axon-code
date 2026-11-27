@@ -105,10 +105,6 @@ pub struct VoiceModelConfig {
     pub speech_rate: i32,
     /// 轮次检测策略：server_vad / smart_turn_v2 / manual。
     pub turn_detection: String,
-    /// 会话系统提示词，仅 realtime 角色生效；留空用内置语音版人格。
-    pub instructions: String,
-    /// 会话系统提示词文件，相对路径按 Axon 主目录解析；`instructions` 直填优先。
-    pub instructions_file: Option<String>,
 }
 
 impl Default for VoiceModelConfig {
@@ -121,8 +117,6 @@ impl Default for VoiceModelConfig {
             voice: String::new(),
             speech_rate: 0,
             turn_detection: VOICE_TURN_SERVER_VAD.to_owned(),
-            instructions: String::new(),
-            instructions_file: None,
         }
     }
 }

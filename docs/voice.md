@@ -86,11 +86,9 @@ Axon 的语音把「说话」当作输入方式，把「朗读」当作输出方
 
 角色分工：`role = "realtime"` 的模型决定会话车道，`role = "tts"` 的模型决定合成渠道，`role = "asr"` 的模型决定级联识别渠道。缺配置或凭据时该能力如实报不可用，不拿空值去连。
 
-realtime 模型的 `instructions` 决定语音人格，留空时用内置的语音版人格骨架（身份、性情、语气与语音红线：短句、不列点、不用 markdown）。整份 `SOUL.md` 不进语音通道——`instructions` 每轮随会话重发，长提示会拖慢首包并稀释指令，完整人格由桌面文字侧承载。
+语音人格只有一份真源：`~/.axon/SOUL.md`。daemon 每次建会话时从它抽茧出语音版骨架（身份、性情、语气与语音红线：短句、不列点、不用 markdown），再下发给 realtime 模型；`[voice]` 段不承载人格文本，不存在第二份可漂移的配置。整份 SOUL 不进语音通道——`instructions` 每轮随会话重发，长提示会拖慢首包并稀释指令。改 SOUL 不用重启、不用同步，下一次会话即生效；SOUL 缺失或解析失败时回落到内置兜底人格。
 
-要让语音人格跟着 `SOUL.md` 走，跑一次 `axon setup voice --persona-sync`：它把 SOUL 渲染成语音版骨架写到 `data/voice/persona.md`，并让 `role = "realtime"` 的模型改用 `instructions_file` 引用它（`instructions` 直填仍然优先）。SOUL 改完重跑一次即可，不需要重启。相对路径一律按 Axon 主目录解析。
-
-级联车道没有 LLM 环节（ASR 直连 TTS），不需要 `instructions`：人格只作用在 realtime 会话上。
+级联车道没有 LLM 环节（ASR 直连 TTS），不需要人格提示词：人格只作用在 realtime 会话上。
 
 没有任何 `[voice]` 配置时，按环境变量兜底（仅用于开发机与排障）：
 

@@ -53,7 +53,11 @@ pub(super) fn spawn_realtime(
     let Some(endpoint) = runtime.realtime() else {
         return Err((error_json("provider_unavailable", STAGE_ARMING), false));
     };
-    Ok(spawn_realtime_with(endpoint.clone(), out, warmup, metrics))
+    // 人格只有一份真源：每次建会话从 SOUL 现算，刷新配置或重启都不需要。
+    let endpoint = endpoint
+        .clone()
+        .with_instructions(runtime.persona_instructions());
+    Ok(spawn_realtime_with(endpoint, out, warmup, metrics))
 }
 
 /// 用给定端点拉起会话；测试直接注入本地端点，不依赖进程环境变量。

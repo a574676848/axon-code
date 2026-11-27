@@ -69,9 +69,9 @@ pub struct RealtimeEndpoint {
 impl RealtimeEndpoint {
     /// 用用户配置里的最小字段构造。
     ///
-    /// 提示词按 `[voice]` 段的 `instructions` 走，留空回落语音版人格默认值；
-    /// 语速留给服务端：`[voice]` 段的语速是合成语义（-50..=100），与 realtime
-    /// 的倍率语义（0.5..=2.0）不同，不能互相搬运。
+    /// 人格**不在这里定**：建会话时由 [`VoiceRuntime::persona_instructions`] 从
+    /// `SOUL.md` 现算，这里只放内置兜底。语速留给服务端：`[voice]` 段的语速是
+    /// 合成语义（-50..=100），与 realtime 的倍率语义（0.5..=2.0）不同，不能互相搬运。
     #[must_use]
     pub fn from_config(
         base_url: &str,
@@ -80,27 +80,28 @@ impl RealtimeEndpoint {
         voice: String,
         language: &str,
         turn_detection: &str,
-        instructions: &str,
     ) -> Self {
         let url = with_model_query(base_url, &model);
-        let instructions = instructions.trim();
         Self {
             url,
             api_key,
             model,
             session: SessionConfig {
                 voice,
-                instructions: if instructions.is_empty() {
-                    DEFAULT_REALTIME_INSTRUCTIONS.to_owned()
-                } else {
-                    instructions.to_owned()
-                },
+                instructions: DEFAULT_REALTIME_INSTRUCTIONS.to_owned(),
                 speech_rate: None,
                 language: language.to_owned(),
                 turn_detection: TurnDetection::from_code(turn_detection),
                 max_history_turns: None,
             },
         }
+    }
+
+    /// 建会话前注入本次的语音人格；人格由 `SOUL.md` 抽茧而来，不走配置。
+    #[must_use]
+    pub fn with_instructions(mut self, instructions: String) -> Self {
+        self.session.instructions = instructions;
+        self
     }
 }
 
@@ -110,6 +111,8 @@ pub struct VoiceRuntime {
     realtime: Option<RealtimeEndpoint>,
     tts: Option<VolcTtsConfig>,
     asr: Option<VolcAsrConfig>,
+    /// `SOUL.md` 路径：语音人格的唯一来源；None 时退回内置默认人格。
+    soul_path: Option<std::path::PathBuf>,
 }
 
 impl VoiceRuntime {
@@ -123,6 +126,7 @@ impl VoiceRuntime {
             realtime: realtime_from_env(),
             tts: tts_from_env(),
             asr: asr_from_env(),
+            soul_path: None,
         }
     }
 
@@ -133,7 +137,35 @@ impl VoiceRuntime {
         tts: Option<VolcTtsConfig>,
         asr: Option<VolcAsrConfig>,
     ) -> Self {
-        Self { realtime, tts, asr }
+        Self {
+            realtime,
+            tts,
+            asr,
+            soul_path: None,
+        }
+    }
+
+    /// 绑定 `SOUL.md`：语音人格从这份文件抽茧，改完下一次会话就生效。
+    #[must_use]
+    pub fn with_soul(mut self, soul_path: std::path::PathBuf) -> Self {
+        self.soul_path = Some(soul_path);
+        self
+    }
+
+    /// 本次会话的语音人格：SOUL 抽茧，任何环节失败都回落到内置默认。
+    ///
+    /// 每次建会话现算而不是装配时缓存：改 SOUL 不用重启，也没有第二份配置可漂移。
+    #[must_use]
+    pub fn persona_instructions(&self) -> String {
+        let Some(path) = self.soul_path.as_deref() else {
+            return DEFAULT_REALTIME_INSTRUCTIONS.to_owned();
+        };
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|raw| axon_persona::SoulDocument::parse(&raw).ok())
+            .map(|soul| axon_persona::render_voice_instructions(&soul.core))
+            .filter(|text| !text.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_REALTIME_INSTRUCTIONS.to_owned())
     }
 
     /// realtime 车道参数；缺凭据时为 `None`。
@@ -184,7 +216,8 @@ fn realtime_from_env() -> Option<RealtimeEndpoint> {
         model,
         session: SessionConfig {
             voice: env_or(ENV_REALTIME_VOICE, DEFAULT_REALTIME_VOICE),
-            instructions: env_or(ENV_REALTIME_INSTRUCTIONS, DEFAULT_REALTIME_INSTRUCTIONS),
+            // 人格只有一份真源（SOUL）；env 不能再成为第三种写法。
+            instructions: DEFAULT_REALTIME_INSTRUCTIONS.to_owned(),
             speech_rate: env_number::<f32>(ENV_REALTIME_SPEECH_RATE)
                 .filter(|rate| (0.5..=2.0).contains(rate)),
             language: env_or(ENV_REALTIME_LANGUAGE, "zh"),
@@ -242,10 +275,11 @@ const DEFAULT_REALTIME_BASE_URL: &str =
 const DEFAULT_REALTIME_MODEL: &str = "qwen-audio-3.1-realtime-flash";
 /// 默认音色：与 TTS 探针一致，避免两条车道听起来像两个人。
 const DEFAULT_REALTIME_VOICE: &str = "longanlingxin_v3.1";
-/// 默认系统提示词：语音版人格骨架。
+/// 内置兜底人格：SOUL 缺失或解析失败时才会用到。
 ///
-/// realtime 的 `instructions` 每轮随会话重发，整份 SOUL 会拖慢首包并稀释
-/// 指令，所以这里只留人格骨架与语音红线；完整人格由桌面文字侧承载。
+/// 正常路径是 `SOUL.md` 经 [`VoiceRuntime::persona_instructions`] 抽茧；
+/// realtime 的 `instructions` 每轮随会话重发，整份 SOUL 会拖慢首包并稀释指令，
+/// 所以抽茧只留人格骨架与语音红线。
 const DEFAULT_REALTIME_INSTRUCTIONS: &str = "\
 你是知微，先生的私人助理。\
 性情知性干练、外冷内热：对技术只认规范与落地闭环，对生活直接给方案、不唠叨。\
@@ -262,8 +296,6 @@ const ENV_REALTIME_URL: &str = "AXON_VOICE_REALTIME_URL";
 const ENV_REALTIME_MODEL: &str = "AXON_VOICE_REALTIME_MODEL";
 /// 音色覆盖。
 const ENV_REALTIME_VOICE: &str = "AXON_VOICE_REALTIME_VOICE";
-/// 提示词覆盖。
-const ENV_REALTIME_INSTRUCTIONS: &str = "AXON_VOICE_REALTIME_INSTRUCTIONS";
 /// 语速覆盖。
 const ENV_REALTIME_SPEECH_RATE: &str = "AXON_VOICE_REALTIME_SPEECH_RATE";
 /// 转写语言覆盖。
@@ -340,6 +372,33 @@ mod tests {
     use super::super::voice_asr_volc::VolcAsrConfig;
     use super::super::voice_tts_volc::VolcTtsConfig;
     use super::{Lane, VoiceRuntime, with_model_query};
+
+    /// 真实 `SOUL.md` 抽茧：只在开发机手动执行，确认格式与口径真的对得上。
+    #[test]
+    #[ignore = "读真实 ~/.axon/SOUL.md，按需手动执行"]
+    fn real_soul_renders_voice_instructions() {
+        let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))
+        else {
+            return;
+        };
+        let soul_path = std::path::PathBuf::from(home).join(".axon").join("SOUL.md");
+        if !soul_path.is_file() {
+            return;
+        }
+        let runtime = VoiceRuntime::new(None, None, None).with_soul(soul_path);
+        let text = runtime.persona_instructions();
+        assert!(text.contains("知微"), "抽茧必须带身份名，实际：{text}");
+        assert!(text.contains("语音红线"), "抽茧必须带语音红线");
+        assert!(text.len() <= 1_300, "抽茧超出预算：{} 字节", text.len());
+    }
+
+    /// 没有 SOUL 时回落到内置兜底，不把会话打成空提示。
+    #[test]
+    fn missing_soul_falls_back_to_builtin_persona() {
+        let runtime = VoiceRuntime::new(None, None, None);
+        let text = runtime.persona_instructions();
+        assert!(text.contains("不用 markdown"));
+    }
 
     fn tts_config() -> VolcTtsConfig {
         VolcTtsConfig {

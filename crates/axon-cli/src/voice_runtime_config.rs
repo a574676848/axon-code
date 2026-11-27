@@ -9,22 +9,23 @@ use axon_config::voice::{
     VoiceModelConfig,
 };
 use axon_daemon::{RealtimeEndpoint, VoiceRuntime, VolcAsrConfig, VolcTtsConfig};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// 默认转写语言：与协议缺省一致。
 const DEFAULT_LANGUAGE: &str = "zh";
 
 /// 把 `[voice]` 段映射成运行参数。
 ///
-/// `axon_root` 是相对提示词文件的解析基准：CLI 在装配网关前已经解析过一次
-/// Axon 根目录，这里复用同一份结论，避免同一路径出现两种解读。
+/// `axon_root` 只用于定位 `SOUL.md`：语音人格从那份文件抽茧，`[voice]` 段
+/// 不承载人格文本，避免出现第二份可漂移的真源。
 #[must_use]
 pub fn voice_runtime_from_config(voice: &VoiceConfig, axon_root: &Path) -> VoiceRuntime {
     VoiceRuntime::new(
-        realtime_endpoint(voice, axon_root),
+        realtime_endpoint(voice),
         tts_config(voice),
         asr_config(voice),
     )
+    .with_soul(axon_root.join("SOUL.md"))
 }
 
 /// 找出某个角色的模型定义。
@@ -69,7 +70,7 @@ fn endpoint_of(channel: &VoiceChannelConfig) -> Option<String> {
 }
 
 /// 端到端车道：`realtime` 角色。
-fn realtime_endpoint(voice: &VoiceConfig, axon_root: &Path) -> Option<RealtimeEndpoint> {
+fn realtime_endpoint(voice: &VoiceConfig) -> Option<RealtimeEndpoint> {
     let model = model_of(voice, VOICE_ROLE_REALTIME)?;
     let channel = channel_of(voice, model)?;
     let api_key = credential(channel)?;
@@ -81,39 +82,7 @@ fn realtime_endpoint(voice: &VoiceConfig, axon_root: &Path) -> Option<RealtimeEn
         model.voice.clone(),
         DEFAULT_LANGUAGE,
         &model.turn_detection,
-        &instructions_for(model, axon_root),
     ))
-}
-
-/// 会话提示词：直填优先，其次读文件，最后交回 daemon 的内置默认。
-///
-/// 文件读不到时静默回落空串：缺一个提示词文件不该让整个语音能力标红，
-/// daemon 侧仍有内置语音版人格兜底。
-fn instructions_for(model: &VoiceModelConfig, axon_root: &Path) -> String {
-    let direct = model.instructions.trim();
-    if !direct.is_empty() {
-        return direct.to_owned();
-    }
-    let Some(path) = model
-        .instructions_file
-        .as_deref()
-        .map(str::trim)
-        .filter(|path| !path.is_empty())
-    else {
-        return String::new();
-    };
-    std::fs::read_to_string(resolve_instructions_path(path, axon_root))
-        .map(|text| text.trim().to_owned())
-        .unwrap_or_default()
-}
-
-/// 提示词文件路径：绝对路径原样用，相对路径按 Axon 主目录解析。
-fn resolve_instructions_path(path: &str, axon_root: &Path) -> PathBuf {
-    let candidate = Path::new(path);
-    if candidate.is_absolute() {
-        return candidate.to_path_buf();
-    }
-    axon_root.join(candidate)
 }
 
 /// 合成渠道：`tts` 角色。
@@ -228,86 +197,7 @@ mod tests {
         let endpoint = runtime.realtime().expect("realtime 车道必须装配出来");
         assert!(endpoint.url.contains("model=qwen-audio-3.1-realtime-flash"));
         assert_eq!(endpoint.session.voice, "longanlingxin_v3.1");
-        assert!(
-            endpoint.session.instructions.contains("说话短句"),
-            "留空时回落内置语音版人格"
-        );
         assert!(runtime.tts().is_none());
-    }
-
-    #[test]
-    fn realtime_instructions_come_from_the_model_entry() {
-        let voice = VoiceConfig {
-            channel_balancer: VOICE_LANE_REALTIME.to_owned(),
-            channels: vec![channel("bailian")],
-            models: vec![VoiceModelConfig {
-                name: "qwen-realtime".to_owned(),
-                channel: "bailian".to_owned(),
-                id: "qwen-audio-3.1-realtime-flash".to_owned(),
-                role: VOICE_ROLE_REALTIME.to_owned(),
-                voice: "longanlingxin_v3.1".to_owned(),
-                instructions: "只答一句，不寒暄。".to_owned(),
-                ..VoiceModelConfig::default()
-            }],
-            ..VoiceConfig::default()
-        };
-        let runtime = voice_runtime_from_config(&voice);
-        let endpoint = runtime.realtime().expect("realtime 车道必须装配出来");
-        assert_eq!(endpoint.session.instructions, "只答一句，不寒暄。");
-    }
-
-    #[test]
-    fn realtime_instructions_file_is_read_from_disk() {
-        let path = std::env::temp_dir().join(format!(
-            "axon-voice-instructions-{}-{}.txt",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |elapsed| elapsed.as_nanos())
-        ));
-        std::fs::write(&path, "  从文件来的人格。  \n").expect("临时文件应可写");
-        let voice = VoiceConfig {
-            channel_balancer: VOICE_LANE_REALTIME.to_owned(),
-            channels: vec![channel("bailian")],
-            models: vec![VoiceModelConfig {
-                name: "qwen-realtime".to_owned(),
-                channel: "bailian".to_owned(),
-                id: "qwen-audio-3.1-realtime-flash".to_owned(),
-                role: VOICE_ROLE_REALTIME.to_owned(),
-                voice: "longanlingxin_v3.1".to_owned(),
-                instructions_file: Some(path.to_string_lossy().into_owned()),
-                ..VoiceModelConfig::default()
-            }],
-            ..VoiceConfig::default()
-        };
-        let runtime = voice_runtime_from_config(&voice);
-        let endpoint = runtime.realtime().expect("realtime 车道必须装配出来");
-        assert_eq!(endpoint.session.instructions, "从文件来的人格。");
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn missing_instructions_file_falls_back_to_builtin_persona() {
-        let voice = VoiceConfig {
-            channel_balancer: VOICE_LANE_REALTIME.to_owned(),
-            channels: vec![channel("bailian")],
-            models: vec![VoiceModelConfig {
-                name: "qwen-realtime".to_owned(),
-                channel: "bailian".to_owned(),
-                id: "qwen-audio-3.1-realtime-flash".to_owned(),
-                role: VOICE_ROLE_REALTIME.to_owned(),
-                voice: "longanlingxin_v3.1".to_owned(),
-                instructions_file: Some("data/voice/does-not-exist.md".to_owned()),
-                ..VoiceModelConfig::default()
-            }],
-            ..VoiceConfig::default()
-        };
-        let runtime = voice_runtime_from_config(&voice);
-        let endpoint = runtime.realtime().expect("realtime 车道必须装配出来");
-        assert!(
-            endpoint.session.instructions.contains("不用 markdown"),
-            "缺文件时回落内置语音版人格，不把会话打成空提示"
-        );
     }
 
     #[test]
