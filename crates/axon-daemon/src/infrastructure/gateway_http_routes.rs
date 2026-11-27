@@ -85,7 +85,12 @@ pub(super) fn router(state: Arc<GatewayHttpState>, max_body_bytes: usize) -> Rou
         .layer(DefaultBodyLimit::max(max_body_bytes))
 }
 
-/// 访问日志：状态码与耗时落在同一行，偶发卡顿事后可归因。
+/// 访问日志：状态码、耗时与慢请求标记落在同一行，偶发卡顿事后可归因。
+///
+/// 只有服务端错误（5xx）才记 WARNING。慢请求与客户端 4xx 属于正常运行时现象，
+/// 用 `slow=true` 保留可检索性即可：实测单日 1399 条访问日志告警里没有一条 5xx，
+/// 全是 status=200 的慢请求（1240 条）与探活 404（139 条），一律按 WARNING 记
+/// 只会把真正的告警淹掉。
 async fn access_log(
     State(state): State<Arc<GatewayHttpState>>,
     request: Request,
@@ -97,15 +102,12 @@ async fn access_log(
     let response = next.run(request).await;
     let elapsed_ms = started.elapsed().as_millis();
     let status = response.status().as_u16();
-    let level = if status >= 400 || elapsed_ms >= SLOW_REQUEST_MS {
-        "WARNING"
-    } else {
-        "INFO"
-    };
+    let slow = elapsed_ms >= SLOW_REQUEST_MS;
+    let level = if status >= 500 { "WARNING" } else { "INFO" };
     state.log_access(
         level,
         &format!(
-            "gateway-http method={method} path={path} status={status} elapsed_ms={elapsed_ms}"
+            "gateway-http method={method} path={path} status={status} elapsed_ms={elapsed_ms} slow={slow}"
         ),
     );
     response

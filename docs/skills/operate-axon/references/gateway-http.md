@@ -249,8 +249,8 @@ Cron：
 
 ### 访问日志
 
-- 每个请求写一条 `gateway-http method=<方法> path=<路径> status=<状态码> elapsed_ms=<耗时>` 的日志；状态码 >= 400 或耗时 >= 500ms 记为 `WARNING`，其余记为 `INFO`。
-- 可见级别由 `agent.log_level` 决定（`axon config get agent.log_level`）：要看全部访问日志设为 `info`，只想看慢请求与失败设为 `warning`；默认的 `error` 下这两类都不会落盘。
+- 每个请求写一条 `gateway-http method=<方法> path=<路径> status=<状态码> elapsed_ms=<耗时> slow=<true|false>` 的日志；只有状态码 >= 500 记为 `WARNING`，其余（含 4xx 与慢请求）记为 `INFO`，慢请求用 `slow=true` 检索。
+- 可见级别由 `agent.log_level` 决定（`axon config get agent.log_level`）：要看全部访问日志（含 4xx 与慢请求）设为 `info`，只想看服务端错误设为 `warning`；默认的 `error` 下两者都不会落盘。
 - 日志写在运行根的 `data/logs/axon-<日期>.log`（运行根即 `axon config path` 所在目录）；排查偶发卡顿时先看 `elapsed_ms`，再对照同分钟的其它错误行。
 
 Gateway 面只在 Daemon 运行时可达：先用 `axon daemon status` 确认 `installed` 与 `running`，再发请求。扩展路由族的未命中子路径返回该族自己的 404 错误体，不要以统一的 `not_found` 判断。

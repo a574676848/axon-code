@@ -27,9 +27,16 @@ use helpers::{
     provider_transport_outcome_from_axon_error, transport_result, websocket_protocol_supported,
 };
 
-const PROVIDER_RAW_REQUEST_BYTES_LIMIT: usize = 131_072;
+/// 单个失败行内嵌请求体的字节上限。
+///
+/// 失败报文整行落盘，捕获上限直接决定日志体量：128 KiB 的捕获在「每天数十次
+/// provider 失败」的量级下会把主日志顶到 10 MB 以上（实测 2026-11-25 有 92 条
+/// 失败行，占当日 11.4 MB 日志的 96.6%，单行最大 179,365 字节）。8 KiB 的
+/// 「首部 + 省略标记 + 尾部」足以定位模型、参数与消息结构，单行随之下压到 20 KB 以内。
+const PROVIDER_RAW_REQUEST_BYTES_LIMIT: usize = 8_192;
 const PROVIDER_RAW_RESPONSE_FRAME_LIMIT: usize = 128;
-const PROVIDER_RAW_RESPONSE_BYTES_LIMIT: usize = 131_072;
+/// 单个失败行内嵌响应体的字节上限，口径同请求体。
+const PROVIDER_RAW_RESPONSE_BYTES_LIMIT: usize = 8_192;
 /// 请求体超限时，中间省略标记预留的字节数上限。
 ///
 /// 标记最长形态为「前缀 29 字节 + 十进制省略字节数 ≤ 20 字节 + 后缀 12 字节」，

@@ -398,7 +398,7 @@ ERROR [provider] Failed to connect to https://api.openai.com
 provider_raw_exchange_failed protocol=anthropic ... provider_event_type=Some("response.failed") ... request_body="..." response_tail=["..."]
 ```
 
-该记录仅在请求、流读取或聚合失败时生成，适用于 OpenAI Responses、Chat Completions 和 Anthropic Messages。`provider_event_type` 是触发失败的 Provider 终态事件类型（如 `response.failed`、`response.incomplete`），非事件类失败为 `None`；同一请求的归因还记录在 `agent_run_send_provider_request 返回 Error` 的 `failure_kind`、`request_id` 与 `elapsed_ms` 上。若响应已经收到协议终止事件，但 tool-call 参数是空 JSON、非法 JSON 或缺少必填字段，Axon 不会执行该调用，也不会把整轮升级为配置错误；它会生成 Forbidden 工具回执，把失败结果交回模型继续修正。只有缺少 tool-call ID/名称、重复 ID 或无法解析协议边界时才进入 `provider_tool_call_incomplete` RuntimeFailure。日志中的 `request_body` 与 `response_tail` 均为有界内容，可能包含用户输入或模型输出，提交 Issue 前必须先脱敏；鉴权 header 不会记录。
+该记录仅在请求、流读取或聚合失败时生成，适用于 OpenAI Responses、Chat Completions 和 Anthropic Messages。`provider_event_type` 是触发失败的 Provider 终态事件类型（如 `response.failed`、`response.incomplete`），非事件类失败为 `None`；同一请求的归因还记录在 `agent_run_send_provider_request 返回 Error` 的 `failure_kind`、`request_id` 与 `elapsed_ms` 上。若响应已经收到协议终止事件，但 tool-call 参数是空 JSON、非法 JSON 或缺少必填字段，Axon 不会执行该调用，也不会把整轮升级为配置错误；它会生成 Forbidden 工具回执，把失败结果交回模型继续修正。只有缺少 tool-call ID/名称、重复 ID 或无法解析协议边界时才进入 `provider_tool_call_incomplete` RuntimeFailure。日志中的 `request_body` 与 `response_tail` 均为有界内容，请求体与响应体各自最多保留 8 KiB，超出部分在中间省略并标注省略字节数；内容可能包含用户输入或模型输出，提交 Issue 前必须先脱敏；鉴权 header 不会记录。
 
 Provider 只回一句「无法继续转发上游流」而不给错误码时，Axon 按消息归因成稳定错误码 `upstream_stream_aborted` 并判为上游侧失败，不再写成无法归因的 `unknown`；同渠道最多再试一次，其余预算留给换渠道。
 
