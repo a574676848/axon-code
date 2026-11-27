@@ -251,15 +251,29 @@ export const VoiceSettings: React.FC = () => {
                 </label>
               </div>
               {model.role === 'realtime' && (
-                <label className="space-y-1">
-                  <Text size="xs" tone="secondary">人格提示词（留空用内置语音人格）</Text>
-                  <textarea
-                    aria-label={`模型 ${index + 1} 人格提示词`}
-                    className="w-full min-h-16 px-2.5 py-1.5 rounded-sm bg-surface text-row text-text-primary"
-                    value={model.instructions}
-                    onChange={(event) => patch((draft) => { draft.models[index].instructions = event.target.value; })}
-                  />
-                </label>
+                <>
+                  <label className="space-y-1">
+                    <Text size="xs" tone="secondary">人格提示词（填了就优先用它）</Text>
+                    <textarea
+                      aria-label={`模型 ${index + 1} 人格提示词`}
+                      className="w-full min-h-16 px-2.5 py-1.5 rounded-sm bg-surface text-row text-text-primary"
+                      value={model.instructions}
+                      onChange={(event) => patch((draft) => { draft.models[index].instructions = event.target.value; })}
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <Text size="xs" tone="secondary">人格文件（相对 Axon 主目录，如 data/voice/persona.md）</Text>
+                    <Input
+                      aria-label={`模型 ${index + 1} 人格文件`}
+                      placeholder="data/voice/persona.md"
+                      value={model.instructionsFile ?? ''}
+                      onChange={(event) => patch((draft) => {
+                        const value = event.target.value.trim();
+                        draft.models[index].instructionsFile = value.length > 0 ? value : null;
+                      })}
+                    />
+                  </label>
+                </>
               )}
               <div className="grid grid-cols-2 gap-2">
                 <select
