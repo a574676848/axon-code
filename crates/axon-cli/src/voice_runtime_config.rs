@@ -8,7 +8,7 @@ use axon_config::voice::{
     VOICE_ROLE_ASR, VOICE_ROLE_REALTIME, VOICE_ROLE_TTS, VoiceChannelConfig, VoiceConfig,
     VoiceModelConfig,
 };
-use axon_daemon::{RealtimeEndpoint, VoiceRuntime, VolcAsrConfig, VolcTtsConfig};
+use axon_daemon::{RealtimeEndpoint, RealtimeProtocol, VoiceRuntime, VolcAsrConfig, VolcTtsConfig};
 use std::path::Path;
 
 /// 默认转写语言：与协议缺省一致。
@@ -82,6 +82,7 @@ fn realtime_endpoint(voice: &VoiceConfig) -> Option<RealtimeEndpoint> {
         model.voice.clone(),
         DEFAULT_LANGUAGE,
         &model.turn_detection,
+        RealtimeProtocol::from_code(&channel.protocol),
     ))
 }
 

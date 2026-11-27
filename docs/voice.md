@@ -131,7 +131,27 @@ Axon 的语音把「说话」当作输入方式，把「朗读」当作输出方
 
 ---
 
-## 8. 相关文档
+## 8. 性能约束与指标
+
+音频热路径按 20 ms/帧的软实时要求实现，以下七条在 M4 逐条落地并审计：
+
+| # | 约束 | 落地情况 |
+|---|---|---|
+| P1 | 音频热路径零堆分配 | 上行编码复用同一个 `Vec<Message>` 缓冲，每帧只 `clear()` 不重建；下行重采样器持有跨包余量。唯一无法消除的是 `VoiceOut` 消息载体与 `Message::Text` 的字符串——两者都要跨 channel 交给下游，所有权必须转移，这是协议层下限。 |
+| P2 | base64 只编解码一次 | `audio_append_json` 用 `String::with_capacity` 手拼，base64 通过 `encode_string` 直接写进目标缓冲，不再经 `serde_json::json!` 的中间对象。`hand_built_audio_append_matches_serde_output` 钉住手拼结果与序列化器语义一致。 |
+| P3 | 有界队列 | `CommandQueue` 容量 8 帧（约 2 s），满则丢最旧并累加 `droppedFrames` / `droppedBytes`；控制命令不受容量约束，不会因为音频挤占被丢。 |
+| P4 | 锁竞争最小 | 队列锁只包住 `VecDeque` 的入队出队，锁内没有 IO、没有 base64、没有重采样；热路径没有持锁 `await`。 |
+| P5 | 采样率转换流式一次成型 | `Resampler24kTo16k` 按 3:2 抽取加半步插值，跨分片余量与落单字节都留在结构里，分片边界不产生接缝（`resampler_carries_*` 三个用例钉住）。 |
+| P6 | 预热期完成握手与配置 | arming 阶段建连、下发 `session.update`、等到 `session.updated` 才发 `listening`；超时分别报 `worker_unavailable` 与 `model_unusable`。 |
+| P7 | 指标可观测 | `frameLatency`（下行事件解码耗时）与 `firstAudioLatency`（`speech_stopped` → 首片音频）各输出 `count / meanUs / p50Us / p99Us / maxUs`；零观测时输出 `null`，不拿 0 冒充「很快」。 |
+
+直方图实现：24 个对数桶加 `AtomicU64`，桶 `i` 覆盖 `[2^i, 2^(i+1))` 微秒；写入只做一次 `fetch_add`，读取按累计计数取桶上界。无锁、无分配、无扩容，不引第三方 histogram 依赖。
+
+指标入口：`GET /api/v1/voice/status` 的 `metrics` 字段。
+
+---
+
+## 9. 相关文档
 
 - [桌面工作台](./desktop.md) - 语音入口在界面中的位置
 - [配置参考指南](./configuration.md) - 配置总览

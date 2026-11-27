@@ -1,6 +1,9 @@
+use base64::Engine as _;
+
+use super::super::gateway_voice_realtime_provider::RealtimeEvent;
 use super::{
-    Resampler24kTo16k, ServerEvent, SessionConfig, TurnDetection, audio_append_json,
-    merge_transcript, parse_server_event, playback_chunks,
+    Resampler24kTo16k, SessionConfig, TurnDetection, audio_append_json, merge_transcript,
+    parse_server_event, playback_chunks,
 };
 
 fn s16(values: &[i16]) -> Vec<u8> {
@@ -86,6 +89,23 @@ fn audio_append_is_base64_of_raw_pcm() {
     assert_eq!(value["audio"], "AQL/");
 }
 
+/// 手拼的 JSON 必须与序列化器产物**语义一致**：省掉中间对象分配不能改变线上形状。
+///
+/// 比较解析后的值而不是字节：JSON 对象字段无序，`json!` 宏走 BTreeMap 会按字母序输出，
+/// 逐字节比较只会把「字段顺序」这种无关差异变成假失败。
+#[test]
+fn hand_built_audio_append_matches_serde_output() {
+    for pcm in [&[][..], &[0x00][..], &[0x01, 0x02, 0xff][..], &[0x7f; 640][..]] {
+        let actual: serde_json::Value =
+            serde_json::from_str(&audio_append_json(pcm)).expect("合法 JSON");
+        let expected = serde_json::json!({
+            "type": "input_audio_buffer.append",
+            "audio": base64::engine::general_purpose::STANDARD.encode(pcm),
+        });
+        assert_eq!(actual, expected, "PCM 长度 {}", pcm.len());
+    }
+}
+
 #[test]
 fn transcript_delta_keeps_both_accumulated_halves() {
     let event = parse_server_event(
@@ -93,7 +113,7 @@ fn transcript_delta_keeps_both_accumulated_halves() {
     );
     assert_eq!(
         event,
-        ServerEvent::InputTranscriptDelta {
+        RealtimeEvent::InputTranscriptDelta {
             text: "今天".to_owned(),
             stash: "天气".to_owned(),
         }
@@ -109,7 +129,7 @@ fn transcript_completed_is_the_authoritative_text() {
     );
     assert_eq!(
         event,
-        ServerEvent::InputTranscriptCompleted {
+        RealtimeEvent::InputTranscriptCompleted {
             transcript: "今天天气怎么样".to_owned(),
         }
     );
@@ -120,7 +140,7 @@ fn audio_delta_is_decoded_from_base64() {
     let event = parse_server_event(r#"{"type":"response.audio.delta","delta":"AQL/"}"#);
     assert_eq!(
         event,
-        ServerEvent::AudioDelta {
+        RealtimeEvent::AudioDelta {
             pcm: vec![0x01, 0x02, 0xff]
         }
     );
@@ -130,7 +150,7 @@ fn audio_delta_is_decoded_from_base64() {
 fn broken_audio_delta_does_not_break_the_session() {
     assert_eq!(
         parse_server_event(r#"{"type":"response.audio.delta","delta":"@@@"}"#),
-        ServerEvent::Ignored
+        RealtimeEvent::Ignored
     );
 }
 
@@ -138,37 +158,37 @@ fn broken_audio_delta_does_not_break_the_session() {
 fn lifecycle_and_speech_events_are_recognized() {
     assert_eq!(
         parse_server_event(r#"{"type":"session.created","session":{"id":"s"}}"#),
-        ServerEvent::SessionCreated
+        RealtimeEvent::SessionCreated
     );
     assert_eq!(
         parse_server_event(r#"{"type":"session.updated","session":{"id":"s"}}"#),
-        ServerEvent::SessionUpdated
+        RealtimeEvent::SessionUpdated
     );
     assert_eq!(
         parse_server_event(r#"{"type":"input_audio_buffer.speech_started"}"#),
-        ServerEvent::SpeechStarted
+        RealtimeEvent::SpeechStarted
     );
     assert_eq!(
         parse_server_event(r#"{"type":"input_audio_buffer.speech_stopped","reason":"vad"}"#),
-        ServerEvent::SpeechStopped
+        RealtimeEvent::SpeechStopped
     );
     assert_eq!(
         parse_server_event(r#"{"type":"response.created","response":{"id":"r"}}"#),
-        ServerEvent::ResponseCreated
+        RealtimeEvent::ResponseCreated
     );
     assert_eq!(
         parse_server_event(r#"{"type":"response.done","response":{"status":"completed"}}"#),
-        ServerEvent::ResponseDone
+        RealtimeEvent::ResponseDone
     );
     assert_eq!(
         parse_server_event(r#"{"type":"response.audio_transcript.delta","delta":"你好"}"#),
-        ServerEvent::OutputTranscriptDelta {
+        RealtimeEvent::OutputTranscriptDelta {
             text: "你好".to_owned()
         }
     );
     assert_eq!(
         parse_server_event(r#"{"type":"response.text.delta","delta":"你好"}"#),
-        ServerEvent::OutputTranscriptDelta {
+        RealtimeEvent::OutputTranscriptDelta {
             text: "你好".to_owned()
         }
     );
@@ -176,7 +196,7 @@ fn lifecycle_and_speech_events_are_recognized() {
         parse_server_event(
             r#"{"type":"response.audio_transcript.done","transcript":"你好，先生。"}"#
         ),
-        ServerEvent::OutputTranscriptDone {
+        RealtimeEvent::OutputTranscriptDone {
             transcript: "你好，先生。".to_owned()
         }
     );
@@ -184,17 +204,17 @@ fn lifecycle_and_speech_events_are_recognized() {
 
 #[test]
 fn unknown_and_malformed_frames_are_ignored() {
-    assert_eq!(parse_server_event("not json"), ServerEvent::Ignored);
-    assert_eq!(parse_server_event(r#"{"no":"type"}"#), ServerEvent::Ignored);
+    assert_eq!(parse_server_event("not json"), RealtimeEvent::Ignored);
+    assert_eq!(parse_server_event(r#"{"no":"type"}"#), RealtimeEvent::Ignored);
     assert_eq!(
         parse_server_event(r#"{"type":"response.audio_transcript.delta"}"#),
-        ServerEvent::OutputTranscriptDelta {
+        RealtimeEvent::OutputTranscriptDelta {
             text: String::new()
         }
     );
     assert_eq!(
         parse_server_event(r#"{"type":"conversation.item.created"}"#),
-        ServerEvent::Ignored
+        RealtimeEvent::Ignored
     );
 }
 
@@ -204,21 +224,21 @@ fn error_code_prefers_the_nested_error_object() {
         parse_server_event(
             r#"{"type":"error","error":{"code":"invalid_parameter","message":"voice 不支持"}}"#
         ),
-        ServerEvent::Error {
+        RealtimeEvent::Error {
             code: "invalid_parameter".to_owned(),
             message: "voice 不支持".to_owned(),
         }
     );
     assert_eq!(
         parse_server_event(r#"{"type":"error","code":"rate_limited","message":"太快"}"#),
-        ServerEvent::Error {
+        RealtimeEvent::Error {
             code: "rate_limited".to_owned(),
             message: "太快".to_owned(),
         }
     );
     assert_eq!(
         parse_server_event(r#"{"type":"error"}"#),
-        ServerEvent::Error {
+        RealtimeEvent::Error {
             code: "provider_error".to_owned(),
             message: "语音提供方返回错误".to_owned(),
         }

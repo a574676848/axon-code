@@ -27,6 +27,8 @@ mod gateway_voice_out_frames;
 mod gateway_voice_provider;
 #[path = "gateway_voice_ready.rs"]
 mod gateway_voice_ready;
+#[path = "gateway_voice_realtime_provider.rs"]
+mod gateway_voice_realtime_provider;
 #[path = "gateway_voice_realtime.rs"]
 mod gateway_voice_realtime;
 #[path = "gateway_voice_realtime_protocol.rs"]
@@ -45,7 +47,7 @@ mod voice_asr_volc;
 mod voice_tts_volc;
 pub use super::gateway_http_handler::{GatewayHttpResponse, GatewayHttpRouteHandler};
 pub use gateway_voice::VoiceTimeouts;
-pub use gateway_voice_provider::{Lane, RealtimeEndpoint, VoiceRuntime};
+pub use gateway_voice_provider::{Lane, RealtimeEndpoint, RealtimeProtocol, VoiceRuntime};
 pub use gateway_voice_realtime_protocol::{SessionConfig, TurnDetection};
 pub use voice_asr_volc::VolcAsrConfig;
 pub use voice_tts_volc::VolcTtsConfig;

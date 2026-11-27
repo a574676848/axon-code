@@ -7,9 +7,17 @@
 //! - 最终文本以 `.completed.transcript` 为准，它在 `response.done` 之后才到；
 //! - 服务端不按实时节奏推音频，节流是客户端的事。
 //!
-//! 本模块只做纯计算，不碰 IO，因此协议口径全部可以用单测钉住。
+//! 本模块只做纯计算与协议编解码，不碰 IO，因此协议口径全部可以用单测钉住。
+//! 会话循环通过 [`RealtimeProvider`] 使用本实现，不直接依赖任何百炼细节。
 
 use base64::Engine as _;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::handshake::client::Request;
+use tokio_tungstenite::tungstenite::http::HeaderValue;
+use tokio_tungstenite::tungstenite::http::header::{AUTHORIZATION, HeaderName};
+use tokio_tungstenite::tungstenite::protocol::Message;
+
+use super::gateway_voice_realtime_provider::{RealtimeControl, RealtimeEvent, RealtimeProvider};
 
 /// 单个上行分片：20 ms @ 16 kHz 单声道 s16le。
 pub(super) const APPEND_CHUNK_BYTES: usize = 640;
@@ -21,6 +29,8 @@ pub(super) const DEFAULT_TRANSCRIPTION_LANGUAGE: &str = "zh";
 pub(super) const DEFAULT_VAD_THRESHOLD: f32 = 0.5;
 /// 轮次检测的缺省静音时长。
 pub(super) const DEFAULT_SILENCE_MS: u32 = 800;
+/// 百炼的额外请求头：关闭数据巡检，端到端语音不上送内容审核。
+const DATA_INSPECTION_HEADER: HeaderName = HeaderName::from_static("x-dashscope-datainspection");
 
 /// 轮次检测策略。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -127,13 +137,19 @@ impl SessionConfig {
 }
 
 /// 构造 `input_audio_buffer.append` 事件。
+///
+/// 手拼而不是走 `serde_json`：字段名与结构是编译期常量，序列化器在这里只增加
+/// 一次中间对象分配；base64 也只编一次，直接写进预分配容量的字符串。
 pub(super) fn audio_append_json(pcm: &[u8]) -> String {
-    let audio = base64::engine::general_purpose::STANDARD.encode(pcm);
-    serde_json::json!({
-        "type": "input_audio_buffer.append",
-        "audio": audio,
-    })
-    .to_string()
+    const PREFIX: &str = r#"{"type":"input_audio_buffer.append","audio":""#;
+    const SUFFIX: &str = r#""}"#;
+    // base64 输出长度：每 3 字节 4 字符，向上取整。
+    let encoded_len = pcm.len().div_ceil(3) * 4;
+    let mut out = String::with_capacity(PREFIX.len() + encoded_len + SUFFIX.len());
+    out.push_str(PREFIX);
+    base64::engine::general_purpose::STANDARD.encode_string(pcm, &mut out);
+    out.push_str(SUFFIX);
+    out
 }
 
 /// 构造 `input_audio_buffer.commit` 事件；服务端 VAD 下会被忽略。
@@ -145,103 +161,116 @@ pub(super) const CANCEL_JSON: &str = r#"{"type":"response.cancel"}"#;
 /// 构造 `session.finish` 事件，正常收线用。
 pub(super) const FINISH_JSON: &str = r#"{"type":"session.finish"}"#;
 
-/// 服务端事件；只保留会话循环真正消费的形状。
-#[derive(Debug, Clone, PartialEq)]
-pub(super) enum ServerEvent {
-    /// 连接建立，携带会话标识。
-    SessionCreated,
-    /// 配置生效；到这一刻才能开始送音频。
-    SessionUpdated,
-    /// 服务端 VAD 判定语音开始。
-    SpeechStarted,
-    /// 服务端 VAD 判定语音结束。
-    SpeechStopped,
-    /// 输入转写增量：`text` 是已确定前缀，`stash` 是未确定尾部。
-    InputTranscriptDelta {
-        /// 已确定前缀。
-        text: String,
-        /// 未确定尾部。
-        stash: String,
-    },
-    /// 输入转写定稿，权威结果。
-    InputTranscriptCompleted {
-        /// 定稿文本。
-        transcript: String,
-    },
-    /// 一轮回复开始；新一轮播放从这里分配轮次。
-    ResponseCreated,
-    /// 助手文字增量。
-    OutputTranscriptDelta {
-        /// 增量文本。
-        text: String,
-    },
-    /// 助手文字定稿。
-    OutputTranscriptDone {
-        /// 定稿文本；服务端没给时为空。
-        transcript: String,
-    },
-    /// 助手音频分片，已从 base64 解码，24 kHz s16le。
-    AudioDelta {
-        /// 解码后的 PCM。
-        pcm: Vec<u8>,
-    },
-    /// 一轮回复结束。
-    ResponseDone,
-    /// 服务端错误。
-    Error {
-        /// 稳定错误码。
-        code: String,
-        /// 服务端给出的说明。
-        message: String,
-    },
-    /// 不需要消费的事件。
-    Ignored,
+/// 百炼 realtime 提供方：JSON 事件 + Bearer 凭据 + 24 kHz 下行。
+pub(super) struct BailianProvider {
+    url: String,
+    api_key: String,
+    session: SessionConfig,
+    resampler: Resampler24kTo16k,
+}
+
+impl BailianProvider {
+    /// 用连接参数与会话配置构造。
+    #[must_use]
+    pub(super) fn new(url: String, api_key: String, session: SessionConfig) -> Self {
+        Self {
+            url,
+            api_key,
+            session,
+            resampler: Resampler24kTo16k::new(),
+        }
+    }
+}
+
+impl RealtimeProvider for BailianProvider {
+    fn handshake_request(&self) -> Result<Request, String> {
+        let mut request = self
+            .url
+            .as_str()
+            .into_client_request()
+            .map_err(|_| "provider_unavailable".to_owned())?;
+        let headers = request.headers_mut();
+        let bearer = format!("Bearer {}", self.api_key);
+        let value =
+            HeaderValue::from_str(&bearer).map_err(|_| "provider_unavailable".to_owned())?;
+        headers.insert(AUTHORIZATION, value);
+        headers.insert(DATA_INSPECTION_HEADER, HeaderValue::from_static("disable"));
+        Ok(request)
+    }
+
+    fn session_update(&self) -> String {
+        self.session.session_update_json()
+    }
+
+    fn encode_audio(&self, pcm: &[u8], out: &mut Vec<Message>) {
+        for chunk in pcm.chunks(APPEND_CHUNK_BYTES) {
+            out.push(Message::Text(audio_append_json(chunk).into()));
+        }
+    }
+
+    fn encode_control(&self, control: RealtimeControl) -> Message {
+        let payload = match control {
+            RealtimeControl::Commit => COMMIT_JSON,
+            RealtimeControl::Clear => CLEAR_JSON,
+            RealtimeControl::Cancel => CANCEL_JSON,
+            RealtimeControl::Finish => FINISH_JSON,
+        };
+        Message::Text(payload.into())
+    }
+
+    fn decode_event(&self, text: &str) -> RealtimeEvent {
+        parse_server_event(text)
+    }
+
+    fn resample_downlink(&mut self, pcm: &[u8]) -> Vec<u8> {
+        self.resampler.push(pcm)
+    }
 }
 
 /// 解析一条服务端事件；非法 JSON 视为 `Ignored`，不让脏帧打断会话。
-pub(super) fn parse_server_event(text: &str) -> ServerEvent {
+pub(super) fn parse_server_event(text: &str) -> RealtimeEvent {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
-        return ServerEvent::Ignored;
+        return RealtimeEvent::Ignored;
     };
     let Some(kind) = value.get("type").and_then(serde_json::Value::as_str) else {
-        return ServerEvent::Ignored;
+        return RealtimeEvent::Ignored;
     };
     match kind {
-        "session.created" => ServerEvent::SessionCreated,
-        "session.updated" => ServerEvent::SessionUpdated,
-        "input_audio_buffer.speech_started" => ServerEvent::SpeechStarted,
-        "input_audio_buffer.speech_stopped" => ServerEvent::SpeechStopped,
-        "conversation.item.input_audio_transcription.delta" => ServerEvent::InputTranscriptDelta {
+        "session.created" => RealtimeEvent::SessionCreated,
+        "session.updated" => RealtimeEvent::SessionUpdated,
+        "input_audio_buffer.speech_started" => RealtimeEvent::SpeechStarted,
+        "input_audio_buffer.speech_stopped" => RealtimeEvent::SpeechStopped,
+        "conversation.item.input_audio_transcription.delta" => RealtimeEvent::InputTranscriptDelta {
             text: string_field(&value, "text"),
             stash: string_field(&value, "stash"),
         },
         "conversation.item.input_audio_transcription.completed" => {
-            ServerEvent::InputTranscriptCompleted {
+            RealtimeEvent::InputTranscriptCompleted {
                 transcript: string_field(&value, "transcript"),
             }
         }
-        "response.created" => ServerEvent::ResponseCreated,
+        "response.created" => RealtimeEvent::ResponseCreated,
         "response.audio_transcript.delta" | "response.text.delta" => {
-            ServerEvent::OutputTranscriptDelta {
+            RealtimeEvent::OutputTranscriptDelta {
                 text: string_field(&value, "delta"),
             }
         }
-        "response.audio_transcript.done" => ServerEvent::OutputTranscriptDone {
+        "response.audio_transcript.done" => RealtimeEvent::OutputTranscriptDone {
             transcript: string_field(&value, "transcript"),
         },
         "response.audio.delta" => {
             let encoded = string_field(&value, "delta");
             match base64::engine::general_purpose::STANDARD.decode(encoded) {
-                Ok(pcm) => ServerEvent::AudioDelta { pcm },
-                Err(_) => ServerEvent::Ignored,
+                Ok(pcm) => RealtimeEvent::AudioDelta { pcm },
+                Err(_) => RealtimeEvent::Ignored,
             }
         }
-        "response.done" => ServerEvent::ResponseDone,
-        "error" => ServerEvent::Error {
+        "response.done" => RealtimeEvent::ResponseDone,
+        "error" => RealtimeEvent::Error {
             code: error_code(&value),
             message: error_message(&value),
         },
-        _ => ServerEvent::Ignored,
+        _ => RealtimeEvent::Ignored,
     }
 }
 

@@ -1,10 +1,10 @@
 //! realtime 车道的会话闭环：真实本地 WS 服务扮演百炼，断言全部落在对外帧上。
 
 use super::super::gateway_voice_metrics::VoiceMetrics;
-use super::super::gateway_voice_provider::RealtimeEndpoint;
-use super::super::gateway_voice_realtime_protocol::SessionConfig;
+use super::super::gateway_voice_realtime_protocol::{BailianProvider, SessionConfig};
+use super::super::gateway_voice_realtime_provider::RealtimeProvider;
 use super::super::gateway_voice_worker::VoiceOut;
-use super::{build_request, spawn_realtime_with};
+use super::spawn_realtime_with;
 use futures_util::{SinkExt, StreamExt};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -22,17 +22,16 @@ fn runtime() -> tokio::runtime::Runtime {
         .expect("测试运行时")
 }
 
-fn endpoint(address: SocketAddr) -> RealtimeEndpoint {
-    RealtimeEndpoint {
-        url: format!("ws://{address}/api-ws/v1/realtime?model=test-model"),
-        api_key: "test-key".to_owned(),
-        model: "test-model".to_owned(),
-        session: SessionConfig {
+fn provider(address: SocketAddr) -> BailianProvider {
+    BailianProvider::new(
+        format!("ws://{address}/api-ws/v1/realtime?model=test-model"),
+        "test-key".to_owned(),
+        SessionConfig {
             voice: "test-voice".to_owned(),
             instructions: "回答简短".to_owned(),
             ..SessionConfig::default()
         },
-    }
+    )
 }
 
 async fn next_json<S>(socket: &mut S) -> serde_json::Value
@@ -53,13 +52,12 @@ where
 
 #[test]
 fn handshake_carries_bearer_and_disables_data_inspection() {
-    let endpoint = RealtimeEndpoint {
-        url: "wss://example.com/api-ws/v1/realtime?model=m".to_owned(),
-        api_key: "sk-test".to_owned(),
-        model: "m".to_owned(),
-        session: SessionConfig::default(),
-    };
-    let request = build_request(&endpoint).expect("请求应可构造");
+    let provider = BailianProvider::new(
+        "wss://example.com/api-ws/v1/realtime?model=m".to_owned(),
+        "sk-test".to_owned(),
+        SessionConfig::default(),
+    );
+    let request = provider.handshake_request().expect("请求应可构造");
     assert_eq!(request.headers()["authorization"], "Bearer sk-test");
     assert_eq!(request.headers()["x-dashscope-datainspection"], "disable");
     assert!(
@@ -121,7 +119,7 @@ fn realtime_session_relays_transcript_and_audio() {
         let (out_tx, mut out_rx) = tokio_mpsc::unbounded_channel();
         let metrics = Arc::new(VoiceMetrics::default());
         let worker = spawn_realtime_with(
-            endpoint(address),
+            provider(address),
             out_tx,
             Duration::from_secs(2),
             Arc::clone(&metrics),
@@ -212,7 +210,7 @@ fn provider_error_is_reported_and_session_ends() {
         let (out_tx, mut out_rx) = tokio_mpsc::unbounded_channel();
         let metrics = Arc::new(VoiceMetrics::default());
         let _worker = spawn_realtime_with(
-            endpoint(address),
+            provider(address),
             out_tx,
             Duration::from_secs(2),
             Arc::clone(&metrics),

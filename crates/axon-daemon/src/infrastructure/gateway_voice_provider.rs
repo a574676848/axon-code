@@ -53,6 +53,30 @@ pub enum Lane {
     Realtime,
 }
 
+/// realtime 车道的协议实现。
+///
+/// 配置里 `channel.protocol` 的厂商名在这里映射，构造期一次性分派到具体实现，
+/// 会话循环不感知厂商，也不在每帧做字符串匹配。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RealtimeProtocol {
+    /// 阿里百炼 Qwen-Audio Realtime：JSON 事件 + 24 kHz 下行。
+    #[default]
+    Bailian,
+    /// 火山方舟实时语音：二进制帧 + 原生采样率下行。
+    Volc,
+}
+
+impl RealtimeProtocol {
+    /// 按配置里的协议名构造；未知取值回落百炼（M3 已验证的默认车道）。
+    #[must_use]
+    pub fn from_code(code: &str) -> Self {
+        match code {
+            "volcengine_ark" | "volc" => Self::Volc,
+            _ => Self::Bailian,
+        }
+    }
+}
+
 /// realtime 车道的连接参数与会话配置。
 #[derive(Debug, Clone, PartialEq)]
 pub struct RealtimeEndpoint {
@@ -62,6 +86,8 @@ pub struct RealtimeEndpoint {
     pub api_key: String,
     /// 上报给运行态与 `ready` 帧的模型标识。
     pub model: String,
+    /// 提供方协议；决定会话循环实例化哪个实现。
+    pub protocol: RealtimeProtocol,
     /// 会话配置。
     pub session: SessionConfig,
 }
@@ -80,12 +106,14 @@ impl RealtimeEndpoint {
         voice: String,
         language: &str,
         turn_detection: &str,
+        protocol: RealtimeProtocol,
     ) -> Self {
         let url = with_model_query(base_url, &model);
         Self {
             url,
             api_key,
             model,
+            protocol,
             session: SessionConfig {
                 voice,
                 instructions: DEFAULT_REALTIME_INSTRUCTIONS.to_owned(),
@@ -211,6 +239,8 @@ fn realtime_from_env() -> Option<RealtimeEndpoint> {
     let model = env_or(ENV_REALTIME_MODEL, DEFAULT_REALTIME_MODEL);
     let base = env_or(ENV_REALTIME_URL, DEFAULT_REALTIME_BASE_URL);
     Some(RealtimeEndpoint {
+        // 环境兜底路径没有 `[voice]` 段可读，固定走 M3 已验证的百炼车道。
+        protocol: RealtimeProtocol::Bailian,
         url: with_model_query(&base, &model),
         api_key,
         model,
