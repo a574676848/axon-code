@@ -129,6 +129,7 @@ pub(super) fn print_dashboard(
             "[3] Agent Behaviors".to_owned(),
             "[4] Remote".to_owned(),
             "[5] Advanced Config".to_owned(),
+            "[V] Voice".to_owned(),
             paint(SetupStyle::Warning, "[R] Reset"),
             paint(SetupStyle::Success, "[S] Save & Preview"),
             paint(SetupStyle::Error, "[Q] Cancel"),

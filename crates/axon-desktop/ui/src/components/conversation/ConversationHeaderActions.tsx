@@ -4,7 +4,6 @@ import { PanelRightIcon } from '../../icons';
 import { RuntimeActions } from './RuntimeActions';
 import { GoalActions } from './GoalActions';
 import { VoiceSessionToggle } from './VoiceSessionToggle';
-import { VOICE_UI_ENABLED } from '../../speech/enabled';
 import type { JobRow, SubagentRow } from '../../conversation/transcript';
 import type { GoalCardView } from '../../goalTypes';
 
@@ -45,7 +44,7 @@ export const ConversationHeaderActions: React.FC<{
   onToggleRail,
 }) => (
   <>
-    {VOICE_UI_ENABLED && <VoiceSessionToggle sessionKey={sessionKey} />}
+    <VoiceSessionToggle sessionKey={sessionKey} />
     <GoalActions goals={goals} onOpenGoal={onOpenGoal} />
     <RuntimeActions
       subagents={subagents}

@@ -35,6 +35,7 @@ import { UsageStatistics } from './settings/UsageStatistics';
 import { PricingSettings } from './settings/PricingSettings';
 import { HeaderDocumentAction } from './settings/HeaderDocumentAction';
 import { SettingsHeaderProvider } from './settings/SettingsHeaderSlot';
+import { VoiceSettings } from './settings/VoiceSettings';
 
 /*
  * 设置弹窗：左侧二级分区，右侧正文。
@@ -75,6 +76,14 @@ const SECTIONS: SectionSpec[] = [
     footer: '每一项改动即时写入 config.toml',
     icon: SlidersIcon,
     prefixes: ['agent.'],
+  },
+  {
+    id: 'voice',
+    label: '语音',
+    description: '语音渠道、模型音色与车道',
+    footer: '每一项改动即时写入 config.toml 的独立 voice 段',
+    icon: PulseIcon,
+    prefixes: [],
   },
   {
     id: 'models',
@@ -449,6 +458,8 @@ export const BasicSettingsPanel: React.FC<BasicSettingsPanelProps> = ({
                     )}
 
                     {section === 'connection' && <ConnectionSettings />}
+
+                    {section === 'voice' && <VoiceSettings />}
 
                     {section === 'mcp' && <McpSettings />}
 

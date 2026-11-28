@@ -1,17 +1,15 @@
 import React from 'react';
 import { speech } from './instance';
-import { VOICE_UI_ENABLED } from './enabled';
 import { voicePreferences } from './preferences';
 import type { SpeechState } from './controller';
 
 /*
  * 语音播报的 React 接口。
  *
- * 状态与开关都存在模块里（朗读只有一份、偏好落在本地存储），
+ * 状态与偏好都存在模块里（朗读只有一份、偏好落在本地存储），
  * 因此组件用 useSyncExternalStore 订阅，不另建一层上下文。
  *
- * 语音入口隐藏期间（本机模型已移除、云端提供方尚未接入），自动朗读一律视为关闭：
- * 界面上的开关全部收起，后台也不该再发起合成请求。
+ * 自动朗读偏好只决定要不要朗读；提供方是否就绪由运行时自己判断。
  */
 
 /** 朗读状态：静息、准备、播放、不可用与失败都由这一份快照驱动。 */
@@ -23,7 +21,7 @@ export function useSpeechState(): SpeechState {
 export function useGlobalAutoRead(): boolean {
   return React.useSyncExternalStore(
     voicePreferences.subscribe,
-    () => VOICE_UI_ENABLED && voicePreferences.globalAutoRead(),
+    () => voicePreferences.globalAutoRead(),
     () => false,
   );
 }
@@ -32,7 +30,7 @@ export function useGlobalAutoRead(): boolean {
 export function useSessionAutoRead(sessionKey: string | null): boolean {
   return React.useSyncExternalStore(
     voicePreferences.subscribe,
-    () => VOICE_UI_ENABLED && voicePreferences.effectiveAutoRead(sessionKey),
+    () => voicePreferences.effectiveAutoRead(sessionKey),
     () => false,
   );
 }

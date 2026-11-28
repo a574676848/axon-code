@@ -85,6 +85,36 @@ Axon 使用以下用户级目录布局：
 
 `supports_embedding = true` 的模型只能使用支持 embedding 的 Provider 协议（`openai`、`openai-chatcompletions`、`dashscope` 或 `volcengine-ark-multimodal`）。
 
+### 语音
+
+语音配置独立成 `[voice]` 段，默认关闭；公共字段与 `[[providers]]` / `[[models]]` 同构，密钥同样只读 `.env`。
+
+| 配置项 | 类型 | 可选值/范围 | 默认值 |
+| --- | --- | --- | --- |
+| `voice.enabled` | 布尔值 | `true`、`false` | `false` |
+| `voice.channel_balancer` | 字符串 | `cascade`、`realtime`、`auto` | `"cascade"` |
+| `voice.channels[].name` | 字符串 | 段内唯一，模型 `channel` 引用它 | `""` |
+| `voice.channels[].enabled` | 布尔值 | `true`、`false` | `true` |
+| `voice.channels[].protocol` | 字符串 | provider 协议族，如 `dashscope`、`volcengine-ark-multimodal` | `"volcengine-ark-multimodal"` |
+| `voice.channels[].base_url` | 字符串 | API 基址 | `""` |
+| `voice.channels[].api_key_env` | 字符串或省略 | 环境变量名，密钥只放 `.env` | 无 |
+| `voice.channels[].api_key` | 字符串或省略 | 直接密钥，优先级高于 `api_key_env` | 无 |
+| `voice.channels[].wire_transport` | 字符串 | `http`、`websocket` | `"websocket"` |
+| `voice.channels[].websocket_url` | 字符串或省略 | WebSocket URL，空串时由 `base_url` 推导 | 无 |
+| `voice.channels[].priority` | 整数 | 数值越大越优先 | `0` |
+| `voice.channels[].weight` | 无符号整数 | 同优先级组内权重 | `1` |
+| `voice.models[].name` | 字符串 | 段内唯一 | `""` |
+| `voice.models[].channel` | 字符串 | 必须引用已配置的 `voice.channels[].name` | `""` |
+| `voice.models[].id` | 字符串 | 上游模型标识 | `""` |
+| `voice.models[].role` | 字符串 | `asr`、`tts`、`realtime` | `"asr"` |
+| `voice.models[].voice` | 字符串 | 音色标识；`role` 为 `tts` / `realtime` 时必填 | `""` |
+| `voice.models[].speech_rate` | 整数 | `-50..=100`，`0` 为默认 | `0` |
+| `voice.models[].turn_detection` | 字符串 | `server_vad`、`smart_turn_v2`、`manual` | `"server_vad"` |
+
+完整可复制样例见 [`config.example.toml`](../config.example.toml) 的 `[voice]` 段。
+
+也可用 `axon setup voice` 读写该段：省略写入参数时读取当前配置，指定 `--channel`、`--model`、`--enable` 等参数时写入；写入经语音段校验后由受锁事务落盘。详见 [`cli.md`](./cli.md)。
+
 ### 渠道负载均衡
 
 | 配置项 | 类型 | 可选值/范围 | 默认值 |

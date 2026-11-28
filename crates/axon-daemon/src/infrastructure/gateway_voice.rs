@@ -123,7 +123,7 @@ async fn serve_session(
     timeouts: &VoiceTimeouts,
     metrics: &Arc<VoiceMetrics>,
 ) -> bool {
-    send_json(&mut socket, ready_json()).await;
+    send_json(&mut socket, ready_json(&state.voice_runtime)).await;
     let mut started = false;
     let mut request: Option<StartRequest> = None;
     let mut connection_session_id = String::new();
@@ -321,7 +321,13 @@ async fn serve_session(
                     }
                 }
                 VoiceOut::Audio { epoch, seq, pcm } => {
-                    if voice.accepts_audio(epoch) {
+                    // realtime 的轮次由提供方回复决定，不经过文本提交；
+                    // 因此不能再用「提交成功才分配 epoch」的判据挡掉音频。
+                    let audible = worker
+                        .as_ref()
+                        .is_some_and(|handle| handle.is_realtime())
+                        || voice.accepts_audio(epoch);
+                    if audible {
                         let _ = socket
                             .send(Message::Binary(audio_frame(epoch, seq, &pcm).into()))
                             .await;

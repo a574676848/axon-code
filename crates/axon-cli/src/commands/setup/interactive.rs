@@ -4,7 +4,7 @@ use std::{
     path::Path,
 };
 
-use crate::{OutputFormat, SetupCommand};
+use crate::{OutputFormat, SetupCommand, VoiceSetupCommand};
 use axon_config::{AxonConfig, ModelConfig};
 
 use super::setup_interactive_canvas::{
@@ -17,6 +17,7 @@ use super::setup_interactive_style::{SetupStyle, paint};
 use super::setup_interactive_views::{
     collect_advanced_config_input, collect_remote_input, collect_reset_menu_input, print_dashboard,
 };
+use super::setup_interactive_voice::collect_voice_input;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct InteractiveSetupInput {
@@ -53,6 +54,8 @@ pub(crate) struct InteractiveSetupInput {
     pub reset_provider: Option<String>,
     pub reset_agent_models: bool,
     pub config_values: BTreeMap<String, String>,
+    /// TUI 语音页收集的参数；None 表示未进入语音页。
+    pub voice: Option<VoiceSetupCommand>,
 }
 
 #[derive(Default)]
@@ -115,10 +118,11 @@ pub(crate) fn collect_interactive_setup_input(
     let mut model = ModelInteractiveInput::default();
     let mut reset_actions = SetupResetInteractiveInput::default();
     let mut config_values = BTreeMap::new();
+    let mut voice: Option<VoiceSetupCommand> = None;
     let mut cancelled = false;
 
     loop {
-        let choices = ["1", "2", "3", "4", "5", "R", "S", "Q"]
+        let choices = ["1", "2", "3", "4", "5", "V", "R", "S", "Q"]
             .into_iter()
             .map(str::to_owned)
             .collect::<Vec<_>>();
@@ -126,7 +130,7 @@ pub(crate) fn collect_interactive_setup_input(
             |prompt, focus, selected| print_dashboard(config, env_path, prompt, focus, selected),
             "选择操作",
             &choices,
-            6,
+            7,
             false,
         );
         match choice.to_ascii_uppercase().as_str() {
@@ -150,6 +154,9 @@ pub(crate) fn collect_interactive_setup_input(
             "5" | "5." | "ADVANCED" => {
                 collect_advanced_config_input(config, &mut config_values);
             }
+            "V" | "V." | "VOICE" => {
+                voice = Some(collect_voice_input(config));
+            }
             "R" | "RESET" => {
                 collect_reset_menu_input(&mut reset_actions);
             }
@@ -164,6 +171,7 @@ pub(crate) fn collect_interactive_setup_input(
                     &model,
                     &reset_actions,
                     &config_values,
+                    &voice,
                 ) =>
             {
                 cancelled = true;
@@ -207,6 +215,7 @@ pub(crate) fn collect_interactive_setup_input(
         reset_provider: reset_actions.reset_provider,
         reset_agent_models: reset_actions.reset_agent_models,
         config_values,
+        voice,
     }
 }
 
@@ -215,8 +224,9 @@ fn should_discard_pending_changes(
     model: &ModelInteractiveInput,
     reset_actions: &SetupResetInteractiveInput,
     config_values: &BTreeMap<String, String>,
+    voice: &Option<VoiceSetupCommand>,
 ) -> bool {
-    if !has_pending_changes(provider, model, reset_actions, config_values) {
+    if !has_pending_changes(provider, model, reset_actions, config_values, voice) {
         return true;
     }
     read_frame_choice(
@@ -240,6 +250,7 @@ fn has_pending_changes(
     model: &ModelInteractiveInput,
     reset_actions: &SetupResetInteractiveInput,
     config_values: &BTreeMap<String, String>,
+    voice: &Option<VoiceSetupCommand>,
 ) -> bool {
     provider.configure_provider
         || model.configure_model
@@ -248,6 +259,7 @@ fn has_pending_changes(
         || reset_actions.reset_provider.is_some()
         || reset_actions.reset_agent_models
         || !config_values.is_empty()
+        || voice.as_ref().is_some_and(VoiceSetupCommand::has_mutation)
 }
 
 pub(crate) fn provider_protocol_summary(config: &AxonConfig, provider_name: &str) -> String {
@@ -309,6 +321,7 @@ mod tests {
             &ModelInteractiveInput::default(),
             &SetupResetInteractiveInput::default(),
             &BTreeMap::new(),
+            &None,
         ));
     }
 
@@ -319,6 +332,7 @@ mod tests {
             &ModelInteractiveInput::default(),
             &SetupResetInteractiveInput::default(),
             &BTreeMap::new(),
+            &None,
         ));
     }
 }

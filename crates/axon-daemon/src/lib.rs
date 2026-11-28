@@ -28,7 +28,10 @@ pub use infrastructure::gateway_bridge::{
     DaemonGatewayBridge, EVENT_CONTENT_INLINE_LIMIT_CHARS, GatewayEventOptions,
 };
 pub use infrastructure::gateway_debounce::{GATEWAY_DEBOUNCE_DEFAULT_WINDOW, GatewayDebouncer};
-pub use infrastructure::gateway_http::HttpGatewayAdapter;
+pub use infrastructure::gateway_http::{
+    HttpGatewayAdapter, Lane, RealtimeEndpoint, RealtimeProtocol, SessionConfig, TurnDetection,
+    VoiceRuntime, VolcAsrConfig, VolcTtsConfig,
+};
 pub use infrastructure::gateway_http_handler::{GatewayHttpResponse, GatewayHttpRouteHandler};
 pub use infrastructure::gateway_kernel::{
     GatewayAdapter, GatewayConnectionLimiter, GatewayConnectionPermit, GatewayContext,

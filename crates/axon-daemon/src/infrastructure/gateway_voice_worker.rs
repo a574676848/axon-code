@@ -5,7 +5,7 @@
 
 use super::gateway_voice_metrics::VoiceMetrics;
 use super::gateway_voice_out_frames::{error_json, error_json_with_family, state_json};
-use super::gateway_voice_provider::{ProviderSession, open};
+use super::gateway_voice_provider::{Lane, ProviderSession, VoiceRuntime, open};
 use axon_voice_bridge::{BridgeError, HostTransport, VoiceBridge};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -19,6 +19,11 @@ const AUDIO_QUEUE_CAPACITY: usize = 8;
 pub(super) const MAX_AUDIO_FRAME_BYTES: usize = 8 * 1024 + 1;
 /// 工作线程轮询步长。
 const WORKER_TICK: Duration = Duration::from_millis(20);
+/// 上行采样率与单样本字节数：实测 RTF 的音频时长按这两个常量折算。
+const ASR_SAMPLE_RATE_HZ: f64 = 16_000.0;
+const ASR_BYTES_PER_SAMPLE: f64 = 2.0;
+/// 管道音频帧头：kind 1 字节 + 载荷长度 4 字节，不计入音频时长。
+const FRAME_HEADER_BYTES: usize = 5;
 /// 丢帧时最多每秒上报一次 `backpressure`，避免错误帧自己形成洪水。
 const BACKPRESSURE_REPORT_INTERVAL: Duration = Duration::from_secs(1);
 /// 连续超限的恢复间隔：超过这个时长没有新的丢帧才算恢复。
@@ -26,7 +31,7 @@ const OVERLOAD_RECOVERY_GAP: Duration = Duration::from_secs(2);
 
 /// 会话开始后要处理的命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Command {
+pub(super) enum Command {
     /// 上行音频。
     Audio(Vec<u8>),
     /// 结束当前句。
@@ -93,7 +98,7 @@ pub(super) enum PushOutcome {
 
 /// 有界命令队列。
 #[derive(Debug)]
-struct CommandQueue {
+pub(super) struct CommandQueue {
     state: Mutex<QueueState>,
     capacity: usize,
     dropped_frames: AtomicU64,
@@ -110,7 +115,7 @@ struct QueueState {
 }
 
 impl CommandQueue {
-    fn new(capacity: usize) -> Self {
+    pub(super) fn new(capacity: usize) -> Self {
         Self {
             state: Mutex::new(QueueState::default()),
             capacity: capacity.max(1),
@@ -126,7 +131,7 @@ impl CommandQueue {
     }
 
     /// 推入一帧音频；满则丢最旧的一帧（不关连接）。
-    fn push_audio(&self, bytes: Vec<u8>) -> PushOutcome {
+    pub(super) fn push_audio(&self, bytes: Vec<u8>) -> PushOutcome {
         let mut state = self.guard();
         let mut dropped = PushOutcome::Queued;
         // 容量只约束音频帧：控制命令必须能进来，绝不因为音频挤占而被丢弃。
@@ -163,7 +168,7 @@ impl CommandQueue {
         dropped
     }
 
-    fn push_control(&self, command: Command) {
+    pub(super) fn push_control(&self, command: Command) {
         let mut state = self.guard();
         state.commands.push_back(command);
     }
@@ -172,16 +177,16 @@ impl CommandQueue {
     ///
     /// 注意：排空不等于恢复。持续超限时每轮都会排空，若在这里清计时，
     /// 「连续 10 s 超限才断连」永远不可达，因此恢复判定按丢帧间隔做。
-    fn drain(&self) -> Vec<Command> {
+    pub(super) fn drain(&self) -> Vec<Command> {
         self.guard().commands.drain(..).collect()
     }
 
-    fn depth(&self) -> u64 {
+    pub(super) fn depth(&self) -> u64 {
         self.guard().commands.len() as u64
     }
 
     /// 连续超限时长；未超限时为 `None`。
-    fn overload_for(&self) -> Option<Duration> {
+    pub(super) fn overload_for(&self) -> Option<Duration> {
         let mut state = self.guard();
         let last_drop = state.last_drop?;
         if last_drop.elapsed() >= OVERLOAD_RECOVERY_GAP {
@@ -193,7 +198,7 @@ impl CommandQueue {
         state.overload_since.map(|since| since.elapsed())
     }
 
-    fn totals(&self) -> (u64, u64) {
+    pub(super) fn totals(&self) -> (u64, u64) {
         (
             self.dropped_frames.load(Ordering::Relaxed),
             self.dropped_bytes.load(Ordering::Relaxed),
@@ -206,9 +211,25 @@ pub(super) struct VoiceWorker {
     queue: Arc<CommandQueue>,
     metrics: Arc<VoiceMetrics>,
     last_backpressure_at: Mutex<Option<Instant>>,
+    lane: Lane,
 }
 
 impl VoiceWorker {
+    /// 按车道构造句柄；队列与指标由两条车道共享。
+    pub(super) fn new(queue: Arc<CommandQueue>, metrics: Arc<VoiceMetrics>, lane: Lane) -> Self {
+        Self {
+            queue,
+            metrics,
+            last_backpressure_at: Mutex::new(None),
+            lane,
+        }
+    }
+
+    /// 本会话是否走端到端 realtime；会话循环据此跳过 epoch 过滤。
+    pub(super) fn is_realtime(&self) -> bool {
+        self.lane == Lane::Realtime
+    }
+
     /// 推入一帧音频。
     pub(super) fn push_audio(&self, bytes: Vec<u8>) -> PushOutcome {
         let outcome = self.queue.push_audio(bytes);
@@ -276,8 +297,9 @@ pub(super) fn spawn_worker(
     out: tokio_mpsc::UnboundedSender<VoiceOut>,
     warmup: Duration,
     metrics: Arc<VoiceMetrics>,
+    runtime: &VoiceRuntime,
 ) -> Result<Arc<VoiceWorker>, (String, bool)> {
-    let session = open().map_err(|code| (error_json(code, "arming"), false))?;
+    let session = open(runtime).map_err(|code| (error_json(code, "arming"), false))?;
     Ok(spawn_worker_with(
         session,
         session_id.to_owned(),
@@ -303,11 +325,11 @@ pub(super) fn spawn_worker_with(
     metrics: Arc<VoiceMetrics>,
 ) -> Arc<VoiceWorker> {
     let queue = Arc::new(CommandQueue::new(AUDIO_QUEUE_CAPACITY));
-    let worker = Arc::new(VoiceWorker {
-        queue: Arc::clone(&queue),
-        metrics: Arc::clone(&metrics),
-        last_backpressure_at: Mutex::new(None),
-    });
+    let worker = Arc::new(VoiceWorker::new(
+        Arc::clone(&queue),
+        Arc::clone(&metrics),
+        Lane::Cascade,
+    ));
     std::thread::spawn(move || {
         run_worker(
             WorkerConfig {
@@ -348,7 +370,21 @@ impl super::GatewayHttpState {
                 metrics,
             ));
         }
-        spawn_worker(session_id, out, warmup, metrics)
+        #[cfg(test)]
+        {
+            // 测试恒走级联脚本宿主：真实 realtime 连接只在生产运行，用例不依赖网络与凭据。
+            spawn_worker(session_id, out, warmup, metrics, &self.voice_runtime)
+        }
+        #[cfg(not(test))]
+        match self.voice_runtime.lane() {
+            Lane::Realtime => super::gateway_voice_realtime::spawn_realtime(
+                &self.voice_runtime,
+                out,
+                warmup,
+                metrics,
+            ),
+            Lane::Cascade => spawn_worker(session_id, out, warmup, metrics, &self.voice_runtime),
+        }
     }
 }
 
@@ -401,12 +437,27 @@ fn run_worker(
     }
     let _ = out.send(VoiceOut::Text(state_json("listening")));
 
+    // 实测 RTF：音频时长按 16 kHz/16 bit 单声道折算，处理耗时从「结束一句」算到定稿。
+    let mut utterance_pcm_bytes: usize = 0;
+    let mut utterance_wait_started: Option<std::time::Instant> = None;
     loop {
         for command in queue.drain() {
             let outcome = match command {
-                Command::Audio(bytes) => bridge.push_audio(&bytes),
-                Command::Stop(utterance_seq) => bridge.end_utterance(utterance_seq),
-                Command::Cancel(reason) => bridge.cancel(&reason),
+                Command::Audio(bytes) => {
+                    utterance_pcm_bytes = utterance_pcm_bytes
+                        .saturating_add(bytes.len().saturating_sub(FRAME_HEADER_BYTES));
+                    bridge.push_audio(&bytes)
+                }
+                Command::Stop(utterance_seq) => {
+                    utterance_wait_started = Some(std::time::Instant::now());
+                    bridge.end_utterance(utterance_seq)
+                }
+                Command::Cancel(reason) => {
+                    // 取消的一句不产生定稿，计量状态必须清掉，避免串到下一句。
+                    utterance_pcm_bytes = 0;
+                    utterance_wait_started = None;
+                    bridge.cancel(&reason)
+                }
                 Command::Speak {
                     turn_id,
                     epoch,
@@ -428,6 +479,16 @@ fn run_worker(
         metrics.set_queue_depth(queue.depth());
         match bridge.poll(WORKER_TICK) {
             Ok(Some(event)) => {
+                if matches!(&event, axon_voice_bridge::VoiceEvent::Final(_)) {
+                    if let Some(started) = utterance_wait_started.take() {
+                        let audio_secs = utterance_pcm_bytes as f64
+                            / (ASR_SAMPLE_RATE_HZ * ASR_BYTES_PER_SAMPLE);
+                        if audio_secs > 0.0 {
+                            metrics.set_rtf(started.elapsed().as_secs_f64() / audio_secs);
+                        }
+                    }
+                    utterance_pcm_bytes = 0;
+                }
                 if let Some(text) = event_out(event) {
                     let _ = out.send(text);
                 }

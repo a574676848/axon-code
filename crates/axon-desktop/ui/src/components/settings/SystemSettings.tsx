@@ -4,7 +4,6 @@ import { Banner, Panel, Text, ToggleField } from '../ui/surfaces';
 import * as ipc from '../../ipc';
 import { applyTheme } from '../../theme';
 import { isSupported, useGlobalAutoRead, voicePreferences } from '../../speech';
-import { VOICE_UI_ENABLED } from '../../speech/enabled';
 import { AlertCircleIcon, CheckIcon } from '../../icons';
 import type { ThemeId } from '../../types';
 import { VoiceInputSettings } from './VoiceInputSettings';
@@ -232,28 +231,26 @@ export const SystemSettings: React.FC = () => {
           />
         </div>
 
-        {VOICE_UI_ENABLED && <VoiceInputSettings />}
+        <VoiceInputSettings />
 
-        {VOICE_UI_ENABLED && (
-          <div className="px-3.5 py-3 hairline-b border-border-hairline">
-            <ToggleField
-              label="语音播报"
-              description={
-                voiceSupported
-                  ? '新回复完成后自动朗读，音色取人设页里选中的那一档；每个会话还能在标题栏单独关闭'
-                  : '当前窗口不支持音频播放，语音播报不可用'
-              }
-              control={
-                <Switch
-                  checked={voiceAutoRead}
-                  disabled={!voiceSupported}
-                  onChange={(next) => voicePreferences.setGlobalAutoRead(next)}
-                  label="语音播报"
-                />
-              }
-            />
-          </div>
-        )}
+        <div className="px-3.5 py-3 hairline-b border-border-hairline">
+          <ToggleField
+            label="语音播报"
+            description={
+              voiceSupported
+                ? '新回复完成后自动朗读，音色取人设页里选中的那一档；每个会话还能在标题栏单独关闭'
+                : '当前窗口不支持音频播放，语音播报不可用'
+            }
+            control={
+              <Switch
+                checked={voiceAutoRead}
+                disabled={!voiceSupported}
+                onChange={(next) => voicePreferences.setGlobalAutoRead(next)}
+                label="语音播报"
+              />
+            }
+          />
+        </div>
 
         <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       </Panel>

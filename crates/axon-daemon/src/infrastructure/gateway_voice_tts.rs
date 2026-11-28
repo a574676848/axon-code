@@ -1,13 +1,17 @@
 //! 朗读合成与音色查询：`/api/v1/voice/tts`、`/cue`、`/preview`、`/presets`、`/status`。
 //!
-//! 本机合成模型已移除：合成由云端提供方（阿里百炼、火山引擎）承担，当前尚未接入，
-//! 因此三个合成接口统一回 `provider_unavailable`，音色清单与运行态照常可读。
-//! 朗读稿渲染与人格融合仍是共享基础设施：流式朗读走 `gateway_voice_turn`，
-//! 提供方接入后在这里补一次合成调用即可，无需改动帧与回合编排。
+//! 合成由云端提供方（火山方舟 Agent Plan）承担：daemon 持凭据、直连它的单向
+//! 流式通道，收齐后按裸 WAV 下发——桌面端的 `accept: audio/wav` 与
+//! `read_to_vec` 是既定契约，不改播放模型。朗读稿渲染与人格融合仍是共享基础
+//! 设施：流式朗读走 `gateway_voice_turn`，这里只负责「给定文本 → 一段音频」。
+//!
+//! 没有合成渠道时如实回 `409 provider_unavailable`，不假装就绪、也不产出
+//! 静音占位；音色清单与运行态读数在任何情况下都照常可读。
 
 use super::GatewayHttpState;
 use super::gateway_http_response::bearer;
-use super::gateway_voice_ready::provider_ready;
+use super::gateway_voice_ready::{provider_ready, tts_ready};
+use super::voice_tts_volc::synth_wav;
 use crate::infrastructure::gateway_auth::query_token;
 use axon_voice::VoiceFailure;
 use axon_voice::presets;
@@ -19,6 +23,8 @@ use std::sync::Arc;
 
 /// 一次合成请求的上限。
 const TTS_MAX_CHARS: usize = 4_000;
+/// 试听句：短、含开口音，方便判断音色是否合意。
+const PREVIEW_TEXT: &str = "你好，我是知微。现在的声音是这样。";
 
 /// `POST /api/v1/voice/tts`：用当前音色预设合成一段朗读音频。
 pub(super) async fn voice_tts(
@@ -55,7 +61,7 @@ pub(super) async fn voice_tts(
             serde_json::json!({"error":"unknown_preset"}),
         );
     }
-    provider_unavailable_response()
+    synth_response(&state, &request.text).await
 }
 
 /// cue 种类与对应文案。
@@ -110,13 +116,13 @@ pub(super) async fn voice_cue(
         .filter(|id| !id.is_empty())
         .and_then(presets::resolve);
     let preset = requested.unwrap_or_else(presets::default_preset);
-    if cue_text(preset, kind).is_none() {
+    let Some(text) = cue_text(preset, kind) else {
         return json_response(
             StatusCode::BAD_REQUEST,
             serde_json::json!({"error":"unknown_cue"}),
         );
-    }
-    provider_unavailable_response()
+    };
+    synth_response(&state, text).await
 }
 
 /// `GET /api/v1/voice/presets`：给设置页列出音色与可用性。
@@ -160,6 +166,28 @@ fn json_response(status: StatusCode, value: serde_json::Value) -> Response {
         .unwrap_or_else(|_| Response::new(Body::empty()))
 }
 
+/// 合成一段文本并按 WAV 下发；没有渠道或合成失败都如实报错。
+async fn synth_response(state: &GatewayHttpState, text: &str) -> Response {
+    let Some(config) = state.voice_runtime.tts() else {
+        return provider_unavailable_response();
+    };
+    match synth_wav(config, text).await {
+        Ok(wav) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "audio/wav")
+            .header(header::CACHE_CONTROL, "no-store")
+            .body(Body::from(wav))
+            .unwrap_or_else(|_| Response::new(Body::empty())),
+        Err(error) => json_response(
+            StatusCode::BAD_GATEWAY,
+            serde_json::json!({
+                "error": error.code(),
+                "message": VoiceFailure::TtsFailed.user_message(),
+            }),
+        ),
+    }
+}
+
 /// 合成提供方未接入：三个合成接口的统一回执，文案只有一处来源。
 fn provider_unavailable_response() -> Response {
     json_response(
@@ -172,6 +200,8 @@ fn provider_unavailable_response() -> Response {
 }
 
 struct TtsRequest {
+    /// 待合成文本；已做非空与长度校验。
+    text: String,
     /// 音色预设；空表示跟随人格。
     preset_id: Option<String>,
 }
@@ -179,7 +209,6 @@ struct TtsRequest {
 fn parse_tts_body(body: &Bytes) -> Result<TtsRequest, (StatusCode, &'static str)> {
     let value: serde_json::Value =
         serde_json::from_slice(body).map_err(|_| (StatusCode::BAD_REQUEST, "invalid_json"))?;
-    // 文本只做校验：非空且不超上限；真正送去合成的仍是客户端原文。
     let text = value
         .get("text")
         .and_then(|value| value.as_str())
@@ -193,7 +222,10 @@ fn parse_tts_body(body: &Bytes) -> Result<TtsRequest, (StatusCode, &'static str)
         .get("presetId")
         .and_then(|value| value.as_str())
         .map(str::to_owned);
-    Ok(TtsRequest { preset_id: preset })
+    Ok(TtsRequest {
+        text: text.to_owned(),
+        preset_id: preset,
+    })
 }
 
 /// `GET /api/v1/voice/status`：运行时可观测面。
@@ -216,7 +248,8 @@ pub(super) async fn voice_status(
         );
     }
     // 与 `ready` 帧共用同一判据，不允许「建连说可用、status 说不可用」。
-    let available = provider_ready();
+    let available = provider_ready(&state.voice_runtime);
+    let speakable = tts_ready(&state.voice_runtime);
     let metrics = state.voice_metrics.snapshot();
     // 降级必须显式可见：提供方不可用时给出稳定原因码，不静默。
     let degraded = (!available).then_some("voice_provider_unavailable");
@@ -224,6 +257,7 @@ pub(super) async fn voice_status(
         StatusCode::OK,
         serde_json::json!({
             "runtimeAvailable": available,
+            "ttsAvailable": speakable,
             "buildVersion": env!("CARGO_PKG_VERSION"),
             "presetIds": presets::PRESETS.iter().map(|preset| preset.id).collect::<Vec<_>>(),
             "defaultPreset": presets::default_preset().id,
@@ -277,7 +311,7 @@ pub(super) async fn voice_preview(
             serde_json::json!({"error":"unknown_preset"}),
         );
     }
-    provider_unavailable_response()
+    synth_response(&state, PREVIEW_TEXT).await
 }
 
 #[cfg(test)]
@@ -292,20 +326,23 @@ mod tests {
     }
 
     #[test]
-    fn tts_body_reads_preset() {
+    fn tts_body_reads_text_and_preset() {
         use axum::body::Bytes;
         let request = parse_tts_body(&Bytes::from_static(
-            b"{\"text\":\"\\u4f60\\u597d\",\"presetId\":\"calm-elegant\"}",
+            b"{\"text\":\"\xe4\xbd\xa0\xe5\xa5\xbd\",\"presetId\":\"calm-elegant\"}",
         ))
         .expect("合法请求");
         assert_eq!(request.preset_id.as_deref(), Some("calm-elegant"));
+        assert_eq!(request.text, "你好", "合成要的是原文，不是只留音色");
     }
 
     #[test]
     fn tts_body_accepts_plain_text() {
         use axum::body::Bytes;
-        let request = parse_tts_body(&Bytes::from_static(b"{\"text\":\"\\u4f60\\u597d\"}"))
-            .expect("合法请求");
+        let request = parse_tts_body(&Bytes::from_static(
+            b"{\"text\":\"\xe4\xbd\xa0\xe5\xa5\xbd\"}",
+        ))
+        .expect("合法请求");
         assert!(request.preset_id.is_none(), "没给音色时跟随人格");
     }
 
@@ -333,6 +370,13 @@ mod tests {
     fn provider_unavailable_message_comes_from_the_failure_table() {
         let failure = VoiceFailure::ProviderUnavailable;
         assert_eq!(failure.code(), "provider_unavailable");
+        assert!(!failure.user_message().is_ascii(), "文案必须是中文");
+    }
+
+    #[test]
+    fn synthesis_failure_maps_to_a_stable_code() {
+        let failure = VoiceFailure::TtsFailed;
+        assert_eq!(failure.code(), "tts_failed");
         assert!(!failure.user_message().is_ascii(), "文案必须是中文");
     }
 }

@@ -126,6 +126,16 @@ pub struct SetupCommand {
     /// 跳过 setup 后本地验收。
     #[arg(long)]
     pub no_validate: bool,
+    /// setup 子命令；省略时执行原有 provider/model 交互向导。
+    #[command(subcommand)]
+    pub command: Option<SetupSubcommand>,
+}
+
+/// `axon setup` 子命令。
+#[derive(Debug, Clone, Subcommand, PartialEq, Eq)]
+pub enum SetupSubcommand {
+    /// 配置独立语音段。
+    Voice(crate::setup_voice_args::VoiceSetupCommand),
 }
 
 /// `axon auth` 参数。

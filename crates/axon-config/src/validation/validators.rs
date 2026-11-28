@@ -16,7 +16,8 @@ pub(crate) fn validate_config(config: &AxonConfig) -> AxonResult<()> {
     validate_remote_policy(config)?;
     validate_providers(&config.providers)?;
     validate_models(&config.providers, &config.models)?;
-    validate_memory_embedding(&config.memory, &config.providers, &config.models)
+    validate_memory_embedding(&config.memory, &config.providers, &config.models)?;
+    crate::voice::validate_voice(&config.voice)
 }
 
 fn validate_agent(agent: &AgentConfig) -> AxonResult<()> {

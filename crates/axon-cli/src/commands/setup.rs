@@ -21,6 +21,8 @@ mod setup_interactive_provider_model;
 mod setup_interactive_style;
 #[path = "setup/interactive_views.rs"]
 mod setup_interactive_views;
+#[path = "setup/interactive_voice.rs"]
+mod setup_interactive_voice;
 #[path = "setup/option_help.rs"]
 mod setup_option_help;
 #[path = "setup/plan.rs"]
@@ -32,7 +34,10 @@ mod setup_plan_entries;
 mod setup_plan_tests;
 #[path = "setup/report.rs"]
 mod setup_report;
+#[path = "setup/voice.rs"]
+mod setup_voice;
 
+use crate::SetupSubcommand;
 use crate::management_commands::json_result;
 use axon_config::AxonConfig;
 use axon_config::setup::{render_env_from, secret_status};
@@ -60,6 +65,10 @@ pub(crate) fn run_setup(
     config_path: Option<&Path>,
 ) -> CliRunResult {
     let out_format = command.format.unwrap_or(format);
+
+    if let Some(SetupSubcommand::Voice(voice)) = &command.command {
+        return setup_voice::run_voice_setup(voice, out_format, config_path);
+    }
 
     let path = match resolved_setup_config_path(config_path) {
         Ok(p) => p,
@@ -112,6 +121,16 @@ pub(crate) fn run_setup(
                 return format_error_result(out_format, &e, Vec::new());
             }
         };
+        // TUI 语音页收集的参数并入同一份候选配置，走同一条确认与事务链路。
+        if let Some(voice) = &interactive_input.voice {
+            match setup_voice::apply_voice_mutation(&mut plan_result.candidate_config, voice) {
+                Ok(changes) => plan_result.changed_summary.extend(changes),
+                Err(e) => {
+                    transaction.cleanup();
+                    return format_error_result(out_format, &e, Vec::new());
+                }
+            }
+        }
         let gateway_token_env = plan_result
             .candidate_config
             .remote

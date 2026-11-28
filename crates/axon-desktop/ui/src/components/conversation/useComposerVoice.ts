@@ -15,9 +15,9 @@ import {
 } from '../../speech/voiceProtocol';
 import { listenVoiceSession, startVoiceSession, stopVoiceSession } from '../../speech/voiceSession';
 import { isBlockedBySystem, readMicrophoneAccess, readVoiceRuntime, VOICE_RUNTIME_MISSING_TEXT } from '../../speech/voicePermission';
-import { VOICE_UI_ENABLED } from '../../speech/enabled';
 import { useVoicePermission, type ComposerPermissionPrompt, type VoiceMode } from './useVoicePermission';
 import { useExpiringNotice } from './composerNotice';
+import { useSpaceHold } from './useSpaceHold';
 
 /*
  * 语音控制器：听写与语音对话两种模式共用一套采集、授权与状态机。
@@ -89,12 +89,16 @@ export interface ComposerVoice {
   phase: VoicePhase;
   /** 服务端中间识别结果；空串表示没有。 */
   partial: string;
+  /** realtime 车道下发的助手文字；仅「思考/播放」阶段有值。 */
+  assistant: string;
   /** 一次性失败结论。 */
   error: string | null;
   /** 采集是否处于打开状态。 */
   active: boolean;
   /** 当前相位已持续多久；待机为零。 */
   elapsedMs: number;
+  /** Space 长按唤醒进度，0 到 1；未在长按时为 0。 */
+  holdProgress: number;
   /** 授权引导；为空时不显示。 */
   permission: ComposerPermissionPrompt | null;
   /** 点击麦克风：开始语音，或关闭当前语音（关闭即定稿）。 */
@@ -134,6 +138,7 @@ export function useComposerVoice({
 }: ComposerVoiceOptions): ComposerVoice {
   const [phase, setPhase] = React.useState<VoicePhase>('idle');
   const [partial, setPartial] = React.useState('');
+  const [assistant, setAssistant] = React.useState('');
   const [error, setError] = React.useState<string | null>(null);
   const [active, setActive] = React.useState(false);
   const [elapsedMs, setElapsedMs] = React.useState(0);
@@ -262,6 +267,7 @@ export function useComposerVoice({
       stopElapsed();
       releasePlayer();
       setPartial('');
+      setAssistant('');
       setPhase(nextPhase);
     },
     [clearFinalizeTimer, releasePlayer, stopCapture, stopElapsed],
@@ -313,6 +319,10 @@ export function useComposerVoice({
           setPartial(frame.text ?? '');
           setPhase('listening');
           break;
+        case 'assistant':
+          // realtime 车道把助手文字单独下发：状态行在「思考/播放」阶段展示它。
+          setAssistant(frame.text ?? '');
+          break;
         case 'final': {
           // 用户已经取消：定稿作废，绝不回填输入坞。
           if (discardRef.current) {
@@ -338,6 +348,7 @@ export function useComposerVoice({
           stopCapture();
           stopElapsed();
           setPartial('');
+          setAssistant('');
           setPhase('thinking');
           break;
         }
@@ -418,6 +429,7 @@ export function useComposerVoice({
     stopCapture();
     stopElapsed();
     setPartial('');
+    setAssistant('');
     setPhase('idle');
     void stopVoiceSession().catch(() => undefined);
     if (mode === 'conversation') {
@@ -525,9 +537,9 @@ export function useComposerVoice({
     return ensureSession();
   }, [ensureSession, replyDestination, sessionId, workspaceId]);
 
-  /** 入口可用：语音入口可见、桌面宿主，并且有工作区或能在首屏建一条。 */
+  /** 入口可用：桌面宿主，并且有工作区或能在首屏建一条。 */
   const available = React.useMemo(
-    () => VOICE_UI_ENABLED && enabled && isDesktopHost() && (workspaceId !== null || ensureSession !== undefined),
+    () => enabled && isDesktopHost() && (workspaceId !== null || ensureSession !== undefined),
     [enabled, ensureSession, workspaceId],
   );
 
@@ -588,6 +600,15 @@ export function useComposerVoice({
     }
     void startListening();
   }, [access, active, finish, phase, startListening]);
+  /*
+   * Space 长按唤醒：入口可用、待机、无授权弹窗时才允许起长按；草稿与焦点
+   * 冲突交给 useSpaceHold 内部按 spaceHold.ts 的口径判定，到点直接调 toggle。
+   */
+  const spaceHold = useSpaceHold({
+    armed: available && phase === 'idle' && access.prompt === null,
+    hasDraft: text.trim().length > 0,
+    onTrigger: toggle,
+  });
 
   /*
    * Esc 关闭语音：这是「停下」的最短路径，不必把指针移回麦克风。
@@ -641,9 +662,11 @@ export function useComposerVoice({
     available,
     phase,
     partial,
+    assistant,
     error,
     active,
     elapsedMs,
+    holdProgress: spaceHold.progress,
     permission: access.prompt,
     toggle,
     finish,

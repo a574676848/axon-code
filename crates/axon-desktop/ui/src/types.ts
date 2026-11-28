@@ -105,6 +105,39 @@ export interface ConfigWriteResult {
   backup_created: boolean;
 }
 
+/** 语音渠道 DTO：密钥只以变量名与是否已配置出现，绝无明文。 */
+export interface VoiceChannelDto {
+  name: string;
+  enabled: boolean;
+  protocol: string;
+  baseUrl: string;
+  apiKeyEnv: string | null;
+  apiKeyConfigured: boolean;
+  wireTransport: string;
+  websocketUrl: string | null;
+  priority: number;
+  weight: number;
+}
+
+/** 语音模型 DTO。 */
+export interface VoiceModelDto {
+  name: string;
+  channel: string;
+  id: string;
+  role: string;
+  voice: string;
+  speechRate: number;
+  turnDetection: string;
+}
+
+/** 独立 `[voice]` 段 DTO，读写共用。 */
+export interface VoiceConfigDto {
+  enabled: boolean;
+  lane: string;
+  channels: VoiceChannelDto[];
+  models: VoiceModelDto[];
+}
+
 /** 供应商写入入参（不含任何明文密钥字段）。 */
 export interface ProviderInput {
   name: string;
@@ -327,6 +360,7 @@ export interface CronSessionTarget {
 export type SettingsSection =
   | 'connection'
   | 'general'
+  | 'voice'
   | 'models'
   | 'pricing'
   | 'balancer'
