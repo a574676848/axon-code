@@ -235,7 +235,11 @@ fn render_text(report: &VoiceSetupReport<'_>) -> String {
     let mut text = String::from("Axon 语音配置\n");
     text.push_str(&format!(
         "  状态：{}\n",
-        if report.available { "已配置" } else { "未配置" }
+        if report.available {
+            "已配置"
+        } else {
+            "未配置"
+        }
     ));
     text.push_str(&format!(
         "  渠道：{} 个，模型：{} 个\n",
@@ -257,9 +261,7 @@ fn render_text(report: &VoiceSetupReport<'_>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        AxonCli, AxonCommand, SetupSubcommand, VoiceRoleArg, VoiceTurnDetectionArg,
-    };
+    use crate::{AxonCli, AxonCommand, SetupSubcommand, VoiceRoleArg, VoiceTurnDetectionArg};
 
     fn voice_command(args: &[&str]) -> VoiceSetupCommand {
         let mut argv = vec!["axon", "setup", "voice"];

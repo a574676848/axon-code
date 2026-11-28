@@ -95,7 +95,12 @@ fn audio_append_is_base64_of_raw_pcm() {
 /// 逐字节比较只会把「字段顺序」这种无关差异变成假失败。
 #[test]
 fn hand_built_audio_append_matches_serde_output() {
-    for pcm in [&[][..], &[0x00][..], &[0x01, 0x02, 0xff][..], &[0x7f; 640][..]] {
+    for pcm in [
+        &[][..],
+        &[0x00][..],
+        &[0x01, 0x02, 0xff][..],
+        &[0x7f; 640][..],
+    ] {
         let actual: serde_json::Value =
             serde_json::from_str(&audio_append_json(pcm)).expect("合法 JSON");
         let expected = serde_json::json!({
@@ -205,7 +210,10 @@ fn lifecycle_and_speech_events_are_recognized() {
 #[test]
 fn unknown_and_malformed_frames_are_ignored() {
     assert_eq!(parse_server_event("not json"), RealtimeEvent::Ignored);
-    assert_eq!(parse_server_event(r#"{"no":"type"}"#), RealtimeEvent::Ignored);
+    assert_eq!(
+        parse_server_event(r#"{"no":"type"}"#),
+        RealtimeEvent::Ignored
+    );
     assert_eq!(
         parse_server_event(r#"{"type":"response.audio_transcript.delta"}"#),
         RealtimeEvent::OutputTranscriptDelta {

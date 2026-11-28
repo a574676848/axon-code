@@ -61,7 +61,11 @@ pub(super) fn print_voice_dashboard(config: &AxonConfig) {
         String::new(),
         format!(
             "  状态   : {}",
-            if voice.is_available() { "已配置" } else { "未配置" }
+            if voice.is_available() {
+                "已配置"
+            } else {
+                "未配置"
+            }
         ),
         format!("  渠道   : {}", voice.channels.len()),
         format!("  模型   : {}", voice.models.len()),

@@ -122,7 +122,7 @@ impl Default for VoiceModelConfig {
 
 /// 用户层语音配置（独立 `[voice]` 段）。
 ///
-/// 没有总开关：有可用模型即可用。车道也不落配置——运行时按模型角色推导，
+/// 没有总开关：有可用模型即可用。车道也不落配置，运行时按模型角色推导，
 /// 避免让用户维护一个「应该由代码决定」的字段。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -252,7 +252,9 @@ pub(crate) fn validate_voice(voice: &VoiceConfig) -> AxonResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{VOICE_ROLE_ASR, VOICE_ROLE_TTS, VoiceChannelConfig, VoiceConfig, VoiceModelConfig};
+    use super::{
+        VOICE_ROLE_ASR, VOICE_ROLE_TTS, VoiceChannelConfig, VoiceConfig, VoiceModelConfig,
+    };
 
     fn sample_config() -> VoiceConfig {
         VoiceConfig {

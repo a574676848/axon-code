@@ -1,3 +1,4 @@
+use axon_daemon::LogSink;
 use axon_session::SqliteRuntimeStore;
 use axon_session_runtime::{EventPublisher, RuntimeClock};
 use std::{
@@ -197,4 +198,21 @@ pub(super) fn open_runtime_store(runtime_root: &std::path::Path) -> SqliteRuntim
         Err(error) => axon_logger::warning(&format!("日志身份对账失败：{error}")),
     }
     store
+}
+
+/// 把网关访问日志接到 Axon 统一日志上。
+///
+/// 访问日志的可见级别由 `[agent] log_level` 决定：想事后归因偶发卡顿，把它设为
+/// `info`（只看慢请求与失败则 `warning`）。网关自身不做任何级别过滤。
+pub(super) struct GatewayAccessLog;
+
+impl LogSink for GatewayAccessLog {
+    fn append(&self, level: &str, message: &str) {
+        match level {
+            "ERROR" => axon_logger::error(message),
+            "WARNING" => axon_logger::warning(message),
+            "DEBUG" => axon_logger::debug(message),
+            _ => axon_logger::info(message),
+        }
+    }
 }

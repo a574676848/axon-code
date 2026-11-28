@@ -2,7 +2,7 @@ use crate::runtime_paths::daemon_endpoint_for_root;
 use axon_config::ConfigLoader;
 use axon_daemon::{
     ActiveTurnSteerSink, DaemonGatewayBridge, DaemonHost, EventProviderRegistry, GatewayAuth,
-    GatewayEgress, GatewayEventOptions, GatewayIngress, GatewayKernel, HttpGatewayAdapter, LogSink,
+    GatewayEgress, GatewayEventOptions, GatewayIngress, GatewayKernel, HttpGatewayAdapter,
     WebSocketGatewayAdapter,
     infrastructure::{
         gateway_auth::GatewayKeyStore,
@@ -44,22 +44,7 @@ mod steer_input;
 mod workers;
 use steer_input::steer_message;
 
-/// 把网关访问日志接到 Axon 统一日志上。
-///
-/// 访问日志的可见级别由 `[agent] log_level` 决定：想事后归因偶发卡顿，把它设为
-/// `info`（只看慢请求与失败则 `warning`）。网关自身不做任何级别过滤。
-struct GatewayAccessLog;
-
-impl LogSink for GatewayAccessLog {
-    fn append(&self, level: &str, message: &str) {
-        match level {
-            "ERROR" => axon_logger::error(message),
-            "WARNING" => axon_logger::warning(message),
-            "DEBUG" => axon_logger::debug(message),
-            _ => axon_logger::info(message),
-        }
-    }
-}
+use support::GatewayAccessLog;
 
 #[path = "daemon_host_runner_answer_ipc.rs"]
 mod answer_ipc;
