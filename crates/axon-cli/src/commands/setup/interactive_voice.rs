@@ -5,7 +5,7 @@
 
 use axon_config::{AxonConfig, VoiceChannelConfig, VoiceModelConfig};
 
-use crate::{VoiceLaneArg, VoiceRoleArg, VoiceSetupCommand, VoiceTurnDetectionArg};
+use crate::{VoiceRoleArg, VoiceSetupCommand, VoiceTurnDetectionArg};
 
 use super::{
     setup_interactive_canvas::render_setup_frame,
@@ -13,10 +13,8 @@ use super::{
     setup_interactive_style::{SetupStyle, paint},
 };
 
-const LANES: &[&str] = &["cascade", "realtime", "auto"];
 const ROLES: &[&str] = &["asr", "tts", "realtime"];
 const TURNS: &[&str] = &["server_vad", "smart_turn_v2", "manual"];
-const YES_NO: &[&str] = &["是", "否"];
 
 /// Esc 或非候选值一律回落到当前值，避免误改。
 fn pick(current: &str, next: String, allowed: &[&str]) -> String {
@@ -24,14 +22,6 @@ fn pick(current: &str, next: String, allowed: &[&str]) -> String {
         next
     } else {
         current.to_owned()
-    }
-}
-
-fn lane_arg(value: &str) -> VoiceLaneArg {
-    match value {
-        "realtime" => VoiceLaneArg::Realtime,
-        "auto" => VoiceLaneArg::Auto,
-        _ => VoiceLaneArg::Cascade,
     }
 }
 
@@ -70,10 +60,9 @@ pub(super) fn print_voice_dashboard(config: &AxonConfig) {
         paint(SetupStyle::Muted, "主菜单  ›  语音"),
         String::new(),
         format!(
-            "  总开关 : {}",
-            if voice.is_enabled() { "开" } else { "关" }
+            "  状态   : {}",
+            if voice.is_available() { "已配置" } else { "未配置" }
         ),
-        format!("  车道   : {}", voice.lane()),
         format!("  渠道   : {}", voice.channels.len()),
         format!("  模型   : {}", voice.models.len()),
     ];
@@ -132,6 +121,25 @@ fn collect_channel_input(current: Option<&VoiceChannelConfig>, cmd: &mut VoiceSe
         ensure_channel(cmd, &name);
         cmd.api_key_env = Some(env);
     }
+
+    let priority_now = current.map_or(0, |c| c.priority);
+    let priority = prompt_i32("渠道优先级", "数值越大越优先；回车保留", priority_now);
+    if priority != priority_now && !name.is_empty() {
+        ensure_channel(cmd, &name);
+        cmd.channel_priority = Some(priority);
+    }
+
+    let weight_now = current.map_or(1, |c| c.weight);
+    let weight_now_i32 = i32::try_from(weight_now).unwrap_or(i32::MAX);
+    let weight = prompt_i32(
+        "渠道权重",
+        "同优先级内越大越优先（≥1）；回车保留",
+        weight_now_i32,
+    );
+    if weight != weight_now_i32 && !name.is_empty() {
+        ensure_channel(cmd, &name);
+        cmd.channel_weight = u32::try_from(weight.max(1)).ok();
+    }
 }
 
 /// 模型级输入。仅当值真正变化才写 `cmd`，并保证同时带上模型名。
@@ -189,6 +197,25 @@ fn collect_model_input(current: Option<&VoiceModelConfig>, cmd: &mut VoiceSetupC
         ensure_model(cmd, &name);
         cmd.turn_detection = Some(turn_arg(&turn));
     }
+
+    let priority_now = current.map_or(0, |m| m.priority);
+    let priority = prompt_i32("模型优先级", "数值越大越优先；回车保留", priority_now);
+    if priority != priority_now && !name.is_empty() {
+        ensure_model(cmd, &name);
+        cmd.model_priority = Some(priority);
+    }
+
+    let weight_now = current.map_or(1, |m| m.weight);
+    let weight_now_i32 = i32::try_from(weight_now).unwrap_or(i32::MAX);
+    let weight = prompt_i32(
+        "模型权重",
+        "同优先级内越大越优先（≥1）；回车保留",
+        weight_now_i32,
+    );
+    if weight != weight_now_i32 && !name.is_empty() {
+        ensure_model(cmd, &name);
+        cmd.model_weight = u32::try_from(weight.max(1)).ok();
+    }
 }
 
 /// 进入 TUI 语音页，收集参数后返回可被 `run_setup` 复用的命令。
@@ -196,36 +223,6 @@ pub(super) fn collect_voice_input(config: &AxonConfig) -> VoiceSetupCommand {
     print_voice_dashboard(config);
     let voice = &config.voice;
     let mut cmd = VoiceSetupCommand::default();
-
-    let enabled_now = if voice.is_enabled() { "是" } else { "否" };
-    let enabled = pick(
-        enabled_now,
-        prompt_choice(
-            "语音总开关",
-            "配置入口；交互 UI 仍由全局开关控制",
-            YES_NO,
-            enabled_now,
-        ),
-        YES_NO,
-    );
-    if enabled != enabled_now {
-        cmd.enable = Some(enabled == "是");
-    }
-
-    let lane_now = voice.lane();
-    let lane = pick(
-        lane_now,
-        prompt_choice(
-            "语音车道",
-            "cascade 级联 / realtime 端到端 / auto 自动",
-            LANES,
-            lane_now,
-        ),
-        LANES,
-    );
-    if lane != lane_now {
-        cmd.lane = Some(lane_arg(&lane));
-    }
 
     collect_channel_input(voice.channels.first(), &mut cmd);
     collect_model_input(voice.models.first(), &mut cmd);
@@ -236,22 +233,18 @@ pub(super) fn collect_voice_input(config: &AxonConfig) -> VoiceSetupCommand {
 mod tests {
     use super::*;
     use axon_config::voice::{
-        VOICE_LANE_AUTO, VOICE_LANE_CASCADE, VOICE_LANE_REALTIME, VOICE_ROLE_TTS,
-        VOICE_TURN_MANUAL, VOICE_TURN_SERVER_VAD, VOICE_TURN_SMART_TURN,
+        VOICE_ROLE_TTS, VOICE_TURN_MANUAL, VOICE_TURN_SERVER_VAD, VOICE_TURN_SMART_TURN,
     };
 
     #[test]
     fn escape_and_unknown_values_fall_back_to_current() {
-        assert_eq!(pick("cascade", "escape".to_owned(), LANES), "cascade");
-        assert_eq!(pick("auto", "bogus".to_owned(), LANES), "auto");
-        assert_eq!(pick("realtime", "auto".to_owned(), LANES), "auto");
+        assert_eq!(pick("asr", "escape".to_owned(), ROLES), "asr");
+        assert_eq!(pick("tts", "bogus".to_owned(), ROLES), "tts");
+        assert_eq!(pick("realtime", "tts".to_owned(), ROLES), "tts");
     }
 
     #[test]
     fn enum_mapping_matches_config_constants() {
-        assert_eq!(lane_arg("cascade").as_config_value(), VOICE_LANE_CASCADE);
-        assert_eq!(lane_arg("realtime").as_config_value(), VOICE_LANE_REALTIME);
-        assert_eq!(lane_arg("auto").as_config_value(), VOICE_LANE_AUTO);
         assert_eq!(role_arg("tts").as_config_value(), VOICE_ROLE_TTS);
         assert_eq!(
             turn_arg("server_vad").as_config_value(),

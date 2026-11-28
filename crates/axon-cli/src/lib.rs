@@ -234,7 +234,7 @@ pub use setup_args::{
     SetupSubcommand, SetupWireTransport,
 };
 use setup_commands::{run_auth, run_setup};
-pub use setup_voice_args::{VoiceLaneArg, VoiceRoleArg, VoiceSetupCommand, VoiceTurnDetectionArg};
+pub use setup_voice_args::{VoiceRoleArg, VoiceSetupCommand, VoiceTurnDetectionArg};
 pub use skills_commands::SkillsCommand;
 use skills_commands::run_skills;
 use upgrade_commands::run_upgrade;

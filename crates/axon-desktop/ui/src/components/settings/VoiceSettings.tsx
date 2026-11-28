@@ -5,10 +5,9 @@ import React, { useCallback, useEffect, useState } from 'react';
 import * as ipc from '../../ipc';
 import type { ConfigWriteResult, VoiceChannelDto, VoiceConfigDto, VoiceModelDto } from '../../types';
 import { Button, Input } from '../ui/controls';
-import { EmptyState, SectionHeading, Text, ToggleField } from '../ui/surfaces';
-import { Switch } from '../ui/controls';
+import { EmptyState, SectionHeading, Text } from '../ui/surfaces';
+import { VoiceInputSettings } from './VoiceInputSettings';
 
-const LANES = ['cascade', 'realtime', 'auto'];
 const ROLES = ['asr', 'tts', 'realtime'];
 const TURNS = ['server_vad', 'smart_turn_v2', 'manual'];
 
@@ -33,6 +32,8 @@ const EMPTY_MODEL: VoiceModelDto = {
   voice: '',
   speechRate: 0,
   turnDetection: 'server_vad',
+  priority: 0,
+  weight: 1,
 };
 
 /** 语音设置页：整段读取、逐项编辑、一次落盘。 */
@@ -100,31 +101,7 @@ export const VoiceSettings: React.FC = () => {
     <div className="space-y-5">
       {error !== null && <Text tone="danger" size="xs">{error}</Text>}
 
-      <section className="space-y-3">
-        <ToggleField
-          label="启用语音配置"
-          description="打开后语音段参与路由；语音交互入口仍由全局开关控制"
-          control={
-            <Switch
-              checked={config.enabled}
-              disabled={busy}
-              onChange={(next) => patch((draft) => { draft.enabled = next; })}
-              label="启用语音配置"
-            />
-          }
-        />
-        <div className="space-y-1">
-          <Text size="sm">语音车道</Text>
-          <select
-            aria-label="语音车道"
-            className="h-8 px-2.5 rounded-sm bg-surface text-row text-text-primary"
-            value={config.lane}
-            onChange={(event) => patch((draft) => { draft.lane = event.target.value; })}
-          >
-            {LANES.map((lane) => <option key={lane} value={lane}>{lane}</option>)}
-          </select>
-        </div>
-      </section>
+      <VoiceInputSettings />
 
       <section className="space-y-3">
         <SectionHeading
@@ -178,6 +155,22 @@ export const VoiceSettings: React.FC = () => {
                     value={channel.apiKeyEnv ?? ''}
                     placeholder={channel.apiKeyConfigured ? '已配置（留空保留）' : '例如 VOLC_API_KEY'}
                     onChange={(event) => patch((draft) => { draft.channels[index].apiKeyEnv = event.target.value || null; })}
+                  />
+                </label>
+                <label className="space-y-1">
+                  <Text size="xs" tone="secondary">优先级</Text>
+                  <Input
+                    aria-label={`渠道 ${index + 1} 优先级`}
+                    value={String(channel.priority)}
+                    onChange={(event) => patch((draft) => { draft.channels[index].priority = Number.parseInt(event.target.value, 10) || 0; })}
+                  />
+                </label>
+                <label className="space-y-1">
+                  <Text size="xs" tone="secondary">权重</Text>
+                  <Input
+                    aria-label={`渠道 ${index + 1} 权重`}
+                    value={String(channel.weight)}
+                    onChange={(event) => patch((draft) => { draft.channels[index].weight = Number.parseInt(event.target.value, 10) || 1; })}
                   />
                 </label>
               </div>
@@ -245,6 +238,22 @@ export const VoiceSettings: React.FC = () => {
                     aria-label={`模型 ${index + 1} 音色`}
                     value={model.voice}
                     onChange={(event) => patch((draft) => { draft.models[index].voice = event.target.value; })}
+                  />
+                </label>
+                <label className="space-y-1">
+                  <Text size="xs" tone="secondary">优先级</Text>
+                  <Input
+                    aria-label={`模型 ${index + 1} 优先级`}
+                    value={String(model.priority)}
+                    onChange={(event) => patch((draft) => { draft.models[index].priority = Number.parseInt(event.target.value, 10) || 0; })}
+                  />
+                </label>
+                <label className="space-y-1">
+                  <Text size="xs" tone="secondary">权重</Text>
+                  <Input
+                    aria-label={`模型 ${index + 1} 权重`}
+                    value={String(model.weight)}
+                    onChange={(event) => patch((draft) => { draft.models[index].weight = Number.parseInt(event.target.value, 10) || 1; })}
                   />
                 </label>
               </div>

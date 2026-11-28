@@ -6,14 +6,12 @@ import { sessionGenerationMetrics } from '../../conversation/sessionGeneration';
 import { reflectionNoticeText } from '../../conversation/reflectionNotice';
 import { useConversationObservations } from '../../conversation/useConversationObservations';
 import { coverFace, showsHero, type StageFrame } from '../../conversation/stage';
-import { useSessionAutoRead, useStopSpeechOnSessionChange } from '../../speech';
 import { ConversationHeader } from './ConversationHeader';
 import { SessionOriginBar } from './SessionOriginBar';
 import { CAPABILITY_PENDING_PLACEHOLDER, READ_ONLY_PLACEHOLDER, UNREGISTERED_SESSION_PLACEHOLDER, sessionWriteGate, type SessionOriginBarState } from '../../sessionOpening';
 import { ConversationHeaderActions } from './ConversationHeaderActions';
 import { useRuntimeFactsReport } from './useRuntimeFactsReport';
 import { goalSessionSelection } from '../../sessionOpening';
-import { useAutoReadReply } from './useAutoReadReply';
 import { ConversationStream } from './ConversationStream';
 import { ConversationCover } from './ConversationCover';
 import { ConversationFailureCards } from './ConversationFailureCards';
@@ -113,15 +111,8 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   const conversation = useConversation(target, sessionFacts);
   // 右侧栏按会话持有停靠面：开关、tab 与分栏都在这一份状态里。
   const rail = useRailLayout(selection?.sessionId ?? null);
-  /*
-   * 语音播报按会话生效：偏好键由工作区与会话拼成，正文舞台与指标条里的
-   * 开关读的都是这一个键，因此两处不会各说一套。
-   */
+  /* 会话键：偏好与显式选择都按「工作区 + 会话」定位。 */
   const sessionKey = selection === null ? null : `${selection.workspaceId}:${selection.sessionId}`;
-  const voiceAutoRead = useSessionAutoRead(sessionKey);
-  useStopSpeechOnSessionChange(sessionKey);
-  // 一轮收口时朗读这一轮的回复：流式与收口补齐两种落地方式都覆盖。
-  useAutoReadReply(sessionKey, conversation.working, conversation.state.turns, voiceAutoRead);
   const [config, setConfig] = React.useState<ResolvedConfig | null>(null);
   const [cronConfig, setCronConfig] = React.useState<CronJob | null>(null);
   const cronJobId = selection?.destination.startsWith(CRON_DESTINATION_PREFIX)
@@ -469,7 +460,6 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                 jobs={runtimeFacts.jobs}
                 sessionId={selection?.sessionId ?? null}
                 working={conversation.working}
-                sessionKey={sessionKey}
                 onOpenSubagent={openSubagentSession}
                 goals={sessionGoals}
                 onOpenGoal={(goal) => {
