@@ -87,12 +87,10 @@ Axon 使用以下用户级目录布局：
 
 ### 语音
 
-语音配置独立成 `[voice]` 段，默认关闭；公共字段与 `[[providers]]` / `[[models]]` 同构，密钥同样只读 `.env`。
+语音配置独立成 `[voice]` 段，配好渠道与模型即可用，没有总开关也没有默认模型；公共字段与 `[[providers]]` / `[[models]]` 同构，密钥同样只读 `.env`。同一角色的多个候选按「渠道优先级 → 模型优先级 → 渠道权重 × 模型权重 → 声明顺序」排序，运行时取第一个凭据齐全的候选。
 
 | 配置项 | 类型 | 可选值/范围 | 默认值 |
 | --- | --- | --- | --- |
-| `voice.enabled` | 布尔值 | `true`、`false` | `false` |
-| `voice.channel_balancer` | 字符串 | `cascade`、`realtime`、`auto` | `"cascade"` |
 | `voice.channels[].name` | 字符串 | 段内唯一，模型 `channel` 引用它 | `""` |
 | `voice.channels[].enabled` | 布尔值 | `true`、`false` | `true` |
 | `voice.channels[].protocol` | 字符串 | provider 协议族，如 `dashscope`、`volcengine-ark-multimodal` | `"volcengine-ark-multimodal"` |
@@ -110,10 +108,12 @@ Axon 使用以下用户级目录布局：
 | `voice.models[].voice` | 字符串 | 音色标识；`role` 为 `tts` / `realtime` 时必填 | `""` |
 | `voice.models[].speech_rate` | 整数 | `-50..=100`，`0` 为默认 | `0` |
 | `voice.models[].turn_detection` | 字符串 | `server_vad`、`smart_turn_v2`、`manual` | `"server_vad"` |
+| `voice.models[].priority` | 整数 | 数值越大越优先 | `0` |
+| `voice.models[].weight` | 无符号整数 | 同优先级内权重，与渠道权重相乘后参与排序 | `1` |
 
 完整可复制样例见 [`config.example.toml`](../config.example.toml) 的 `[voice]` 段。
 
-也可用 `axon setup voice` 读写该段：省略写入参数时读取当前配置，指定 `--channel`、`--model`、`--enable` 等参数时写入；写入经语音段校验后由受锁事务落盘。详见 [`cli.md`](./cli.md)。
+也可用 `axon setup voice` 读写该段：省略写入参数时读取当前配置，指定 `--channel`、`--model`、`--channel-priority`、`--model-weight` 等参数时写入；写入经语音段校验后由受锁事务落盘。详见 [`cli.md`](./cli.md)。
 
 ### 渠道负载均衡
 

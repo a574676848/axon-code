@@ -3,16 +3,18 @@ import { IconButton } from '../ui/controls';
 import { PanelRightIcon } from '../../icons';
 import { RuntimeActions } from './RuntimeActions';
 import { GoalActions } from './GoalActions';
-import { VoiceSessionToggle } from './VoiceSessionToggle';
 import type { JobRow, SubagentRow } from '../../conversation/transcript';
 import type { GoalCardView } from '../../goalTypes';
 
 /*
  * 指标条右侧的操作区。
  *
- * 三件东西按「会话自己的偏好、随会话走的过程事实、窗口的停靠面」排开：
- * 朗读开关常驻（语音入口隐藏时整枚收起），运行时事实只在真的存在子代理或后台
- * 任务时出现，右侧栏入口只在收起态出现，展开后收起动作归面板自己的 tab 条末端。
+ * 三件东西按「随会话走的过程事实、会话目标、窗口的停靠面」排开：
+ * 运行时事实只在真的存在子代理或后台任务时出现，右侧栏入口只在收起态出现，
+ * 展开后收起动作归面板自己的 tab 条末端。
+ *
+ * 旧的「会话级自动朗读开关」已随文本朗读能力一并移除：语音只剩输入坞里的
+ * realtime 对话一路，会话级再挂一个朗读开关等于给同一条能力开第二个口子。
  */
 
 export const ConversationHeaderActions: React.FC<{
@@ -26,8 +28,6 @@ export const ConversationHeaderActions: React.FC<{
   sessionId: string | null;
   /** 本视图是否有正在跑的轮次：子代理名册只在这段窗口里按间隔对账。 */
   working: boolean;
-  /** 当前会话的偏好键；为空表示还没有选中会话。 */
-  sessionKey: string | null;
   onOpenSubagent: (row: import('../../conversation/transcript').SubagentRow) => void;
   railExpanded: boolean;
   onToggleRail: () => void;
@@ -38,13 +38,11 @@ export const ConversationHeaderActions: React.FC<{
   onOpenGoal,
   sessionId,
   working,
-  sessionKey,
   onOpenSubagent,
   railExpanded,
   onToggleRail,
 }) => (
   <>
-    <VoiceSessionToggle sessionKey={sessionKey} />
     <GoalActions goals={goals} onOpenGoal={onOpenGoal} />
     <RuntimeActions
       subagents={subagents}

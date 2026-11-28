@@ -1,11 +1,8 @@
 import React from 'react';
 import { CheckIcon, CopyIcon, DownloadIcon } from '../../icons';
 import { exportMarkdownName } from '../../conversation/textExport';
-import { stop, useSpeechState } from '../../speech';
 import { Markdown } from './Markdown';
 import { MessageActionButton, MessageFooter } from './MessageFooter';
-import { SpeechButton } from './SpeechButton';
-import { VoiceWave } from './VoiceWave';
 import * as ipc from '../../ipc';
 
 /*
@@ -17,7 +14,8 @@ import * as ipc from '../../ipc';
  * 复制交出的是正文原始的 Markdown 源文，而不是渲染后的可见文本：
  * 用户要的是能直接贴到别处的 Markdown，不是丢了标记的纯文本。
  *
- * 朗读同样读原文：净化在语音模块里做，正文展示不受影响。
+ * 语音只剩输入坞里的 realtime 对话：正文不再挂朗读按钮，
+ * 因此这里只负责复制与导出两种「把正文拿走」的动作。
  */
 
 export const AssistantBlock: React.FC<{
@@ -25,7 +23,7 @@ export const AssistantBlock: React.FC<{
   streaming: boolean;
   /** 这一格第一次被看到的服务端记录时间；与用户气泡同款时间标记。 */
   atMs: number | null;
-  /** 这一格在时间线里的标识；朗读状态按它回认「正在念的是这一条」。 */
+  /** 这一格在时间线里的标识；页脚与导出名仍按它归属。 */
   source: string;
   /**
    * 是否渲染页脚。
@@ -34,33 +32,11 @@ export const AssistantBlock: React.FC<{
    * 而操作按钮本来就悬浮才出现，因此整块不渲染。
    */
   footer?: boolean;
-}> = ({ text, streaming, atMs, source, footer = true }) => {
+}> = ({ text, streaming, atMs, source: _source, footer = true }) => {
   const [copied, setCopied] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [saved, setSaved] = React.useState<string | null>(null);
   const [failure, setFailure] = React.useState<string | null>(null);
-  const speech = useSpeechState();
-  const speaking = speech.source === source;
-  const reading = speaking && (speech.status === 'playing' || speech.status === 'preparing');
-  /*
-   * 朗读中或朗读失败时把操作区摊开：停止入口与「语音运行时未就绪」都必须看得见，
-   * 不能等指针悬停才出现。
-   */
-  const revealing = speaking;
-
-  /*
-   * 这一格被删除或整段卸载时停止朗读：声音不该跟着一条已经不存在的消息走。
-   * 只有当前正在念的那一格才有权停，别的消息卸载不能打断这一条。
-   */
-  const speakingRef = React.useRef(speaking);
-  speakingRef.current = speaking;
-  React.useEffect(
-    () => () => {
-      if (speakingRef.current) stop();
-    },
-    [],
-  );
-
   const copy = () => {
     setFailure(null);
     // 复制走原生剪贴板：网页剪贴板要求窗口处于焦点，复制会时灵时不灵。
@@ -104,7 +80,6 @@ export const AssistantBlock: React.FC<{
       {footer && !streaming && text.trim().length > 0 && (
         <MessageFooter
           atMs={atMs}
-          revealActions={revealing}
           status={
             saved !== null ? (
               <span className="ml-1 min-w-0 truncate text-meta text-text-tertiary confirm-pop">
@@ -130,14 +105,6 @@ export const AssistantBlock: React.FC<{
           >
             <DownloadIcon size={14} />
           </MessageActionButton>
-          <SpeechButton text={text} source={source} />
-          {/* 朗读状态紧跟在喇叭之后：说的是这一枚按钮正在做的事。 */}
-          {reading && (
-            <span className="ml-1 flex items-center gap-1.5 text-meta text-text-tertiary">
-              <VoiceWave active size="xs" />
-              正在朗读
-            </span>
-          )}
         </MessageFooter>
       )}
     </div>

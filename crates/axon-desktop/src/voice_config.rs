@@ -58,16 +58,16 @@ pub struct VoiceModelDto {
     pub speech_rate: i32,
     /// 轮次检测策略。
     pub turn_detection: String,
+    /// 模型优先级，数值越大越优先。
+    pub priority: i32,
+    /// 同优先级模型的权重。
+    pub weight: u32,
 }
 
 /// 整段语音配置 DTO：读写共用；写回时 `api_keyConfigured` 由后端忽略并按名保留明文。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VoiceConfigDto {
-    /// 语音入口总开关。
-    pub enabled: bool,
-    /// 语音车道。
-    pub lane: String,
     /// 语音渠道目录。
     pub channels: Vec<VoiceChannelDto>,
     /// 语音模型目录。
@@ -76,8 +76,6 @@ pub struct VoiceConfigDto {
 
 fn to_dto(config: &VoiceConfig) -> VoiceConfigDto {
     VoiceConfigDto {
-        enabled: config.enabled,
-        lane: config.channel_balancer.clone(),
         channels: config
             .channels
             .iter()
@@ -109,6 +107,8 @@ fn to_dto(config: &VoiceConfig) -> VoiceConfigDto {
                 voice: model.voice.clone(),
                 speech_rate: model.speech_rate,
                 turn_detection: model.turn_detection.clone(),
+                priority: model.priority,
+                weight: model.weight,
             })
             .collect(),
     }
@@ -119,8 +119,6 @@ fn from_dto(
     keys: &std::collections::BTreeMap<String, Option<String>>,
 ) -> VoiceConfig {
     VoiceConfig {
-        enabled: input.enabled,
-        channel_balancer: input.lane,
         channels: input
             .channels
             .into_iter()
@@ -151,6 +149,8 @@ fn from_dto(
                 voice: model.voice,
                 speech_rate: model.speech_rate,
                 turn_detection: model.turn_detection,
+                priority: model.priority,
+                weight: model.weight,
             })
             .collect(),
     }
@@ -195,10 +195,7 @@ mod tests {
 
     #[test]
     fn dto_roundtrip_never_carries_api_key_plaintext() {
-        let mut config = VoiceConfig {
-            enabled: true,
-            ..VoiceConfig::default()
-        };
+        let mut config = VoiceConfig::default();
         config.channels.push(VoiceChannelConfig {
             name: "volc-tts".to_owned(),
             api_key: Some("secret-value".to_owned()),

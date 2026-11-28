@@ -6,7 +6,6 @@
 
 use axon_config::voice::{
     VOICE_ROLE_ASR, VOICE_ROLE_REALTIME, VOICE_ROLE_TTS, VoiceChannelConfig, VoiceConfig,
-    VoiceModelConfig,
 };
 use axon_daemon::{RealtimeEndpoint, RealtimeProtocol, VoiceRuntime, VolcAsrConfig, VolcTtsConfig};
 use std::path::Path;
@@ -26,22 +25,6 @@ pub fn voice_runtime_from_config(voice: &VoiceConfig, axon_root: &Path) -> Voice
         asr_config(voice),
     )
     .with_soul(axon_root.join("SOUL.md"))
-}
-
-/// 找出某个角色的模型定义。
-fn model_of<'a>(voice: &'a VoiceConfig, role: &str) -> Option<&'a VoiceModelConfig> {
-    voice.models.iter().find(|model| model.role == role)
-}
-
-/// 找出模型引用的渠道。
-fn channel_of<'a>(
-    voice: &'a VoiceConfig,
-    model: &VoiceModelConfig,
-) -> Option<&'a VoiceChannelConfig> {
-    voice
-        .channels
-        .iter()
-        .find(|channel| channel.name == model.channel)
 }
 
 /// 解析渠道凭据：直填优先，其次按环境变量名取，最后读凭据库。
@@ -69,64 +52,73 @@ fn endpoint_of(channel: &VoiceChannelConfig) -> Option<String> {
     Some(base)
 }
 
-/// 端到端车道：`realtime` 角色。
+/// 端到端车道：`realtime` 角色，按渠道/模型的优先级与权重取第一个凭据齐全的候选。
 fn realtime_endpoint(voice: &VoiceConfig) -> Option<RealtimeEndpoint> {
-    let model = model_of(voice, VOICE_ROLE_REALTIME)?;
-    let channel = channel_of(voice, model)?;
-    let api_key = credential(channel)?;
-    let base = endpoint_of(channel)?;
-    Some(RealtimeEndpoint::from_config(
-        &base,
-        api_key,
-        model.id.clone(),
-        model.voice.clone(),
-        DEFAULT_LANGUAGE,
-        &model.turn_detection,
-        RealtimeProtocol::from_code(&channel.protocol),
-    ))
+    voice
+        .ranked_models(VOICE_ROLE_REALTIME)
+        .into_iter()
+        .find_map(|(model, channel)| {
+            let api_key = credential(channel)?;
+            let base = endpoint_of(channel)?;
+            Some(RealtimeEndpoint::from_config(
+                &base,
+                api_key,
+                model.id.clone(),
+                model.voice.clone(),
+                DEFAULT_LANGUAGE,
+                &model.turn_detection,
+                RealtimeProtocol::from_code(&channel.protocol),
+            ))
+        })
 }
 
-/// 合成渠道：`tts` 角色。
+/// 合成渠道：`tts` 角色，按渠道/模型的优先级与权重取第一个凭据齐全的候选。
 ///
 /// `id` 承载上游资源标识（方舟的 `seed-tts-2.0`），模型名只出现在文档口径里，
 /// 协议不上送；`voice` 是音色标识，`speech_rate` 是合成语速。
 fn tts_config(voice: &VoiceConfig) -> Option<VolcTtsConfig> {
-    let model = model_of(voice, VOICE_ROLE_TTS)?;
-    let channel = channel_of(voice, model)?;
-    let api_key = credential(channel)?;
-    let endpoint = endpoint_of(channel)?;
-    Some(VolcTtsConfig {
-        endpoint,
-        api_key,
-        resource_id: model.id.clone(),
-        speaker: model.voice.clone(),
-        speech_rate: model.speech_rate,
-    })
+    voice
+        .ranked_models(VOICE_ROLE_TTS)
+        .into_iter()
+        .find_map(|(model, channel)| {
+            let api_key = credential(channel)?;
+            let endpoint = endpoint_of(channel)?;
+            Some(VolcTtsConfig {
+                endpoint,
+                api_key,
+                resource_id: model.id.clone(),
+                speaker: model.voice.clone(),
+                speech_rate: model.speech_rate,
+            })
+        })
 }
 
-/// 识别渠道：`asr` 角色。
+/// 识别渠道：`asr` 角色，按渠道/模型的优先级与权重取第一个凭据齐全的候选。
 ///
 /// `id` 承载上游资源标识（方舟的 `volc.seedasr.sauc.duration`）；协议上送的
 /// 模型名由实现内置，内部路由名不冒充模型编号。
 fn asr_config(voice: &VoiceConfig) -> Option<VolcAsrConfig> {
-    let model = model_of(voice, VOICE_ROLE_ASR)?;
-    let channel = channel_of(voice, model)?;
-    let api_key = credential(channel)?;
-    let endpoint = endpoint_of(channel)?;
-    Some(VolcAsrConfig::new(
-        endpoint,
-        api_key,
-        model.id.clone(),
-        "",
-        DEFAULT_LANGUAGE,
-    ))
+    voice
+        .ranked_models(VOICE_ROLE_ASR)
+        .into_iter()
+        .find_map(|(model, channel)| {
+            let api_key = credential(channel)?;
+            let endpoint = endpoint_of(channel)?;
+            Some(VolcAsrConfig::new(
+                endpoint,
+                api_key,
+                model.id.clone(),
+                "",
+                DEFAULT_LANGUAGE,
+            ))
+        })
 }
 
 #[cfg(test)]
 mod tests {
     use axon_config::voice::{
-        VOICE_LANE_REALTIME, VOICE_ROLE_ASR, VOICE_ROLE_REALTIME, VOICE_ROLE_TTS,
-        VoiceChannelConfig, VoiceConfig, VoiceModelConfig,
+        VOICE_ROLE_ASR, VOICE_ROLE_REALTIME, VOICE_ROLE_TTS, VoiceChannelConfig, VoiceConfig,
+        VoiceModelConfig,
     };
     use axon_daemon::VoiceRuntime;
 
@@ -155,7 +147,6 @@ mod tests {
     #[test]
     fn tts_role_maps_into合成渠道() {
         let voice = VoiceConfig {
-            channel_balancer: VOICE_LANE_REALTIME.to_owned(),
             channels: vec![channel("volc-tts")],
             models: vec![VoiceModelConfig {
                 name: "volc-tts-seed20".to_owned(),
@@ -166,7 +157,6 @@ mod tests {
                 speech_rate: 20,
                 ..VoiceModelConfig::default()
             }],
-            ..VoiceConfig::default()
         };
         let runtime = voice_runtime_from_config(&voice);
         let tts = runtime.tts().expect("合成渠道必须装配出来");
@@ -182,7 +172,6 @@ mod tests {
     #[test]
     fn realtime_role_maps_into车道参数() {
         let voice = VoiceConfig {
-            channel_balancer: VOICE_LANE_REALTIME.to_owned(),
             channels: vec![channel("bailian")],
             models: vec![VoiceModelConfig {
                 name: "qwen-realtime".to_owned(),
@@ -192,7 +181,6 @@ mod tests {
                 voice: "longanlingxin_v3.1".to_owned(),
                 ..VoiceModelConfig::default()
             }],
-            ..VoiceConfig::default()
         };
         let runtime = voice_runtime_from_config(&voice);
         let endpoint = runtime.realtime().expect("realtime 车道必须装配出来");
@@ -215,7 +203,6 @@ mod tests {
                 voice: "speaker".to_owned(),
                 ..VoiceModelConfig::default()
             }],
-            ..VoiceConfig::default()
         };
         assert!(
             voice_runtime_from_config(&voice).tts().is_none(),
@@ -226,7 +213,6 @@ mod tests {
     #[test]
     fn asr_role_maps_into识别渠道() {
         let voice = VoiceConfig {
-            channel_balancer: VOICE_LANE_REALTIME.to_owned(),
             channels: vec![channel("volc-asr")],
             models: vec![VoiceModelConfig {
                 name: "volc-asr-seed20".to_owned(),
@@ -235,7 +221,6 @@ mod tests {
                 role: VOICE_ROLE_ASR.to_owned(),
                 ..VoiceModelConfig::default()
             }],
-            ..VoiceConfig::default()
         };
         let runtime = voice_runtime_from_config(&voice);
         let asr = runtime.asr().expect("识别渠道必须装配出来");

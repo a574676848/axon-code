@@ -48,7 +48,7 @@ axon gateway --help                    # 管理 Gateway 多 Key 凭据（key 子
 
 `setup` 在本地验证并原子写入配置；手工修改 `config.toml` 或相邻 `.env` 后，后续命令执行时会自动重新加载。
 
-`axon setup voice` 直接读写独立 `[voice]` 段：不带写入参数时读取当前配置，`--enable`、`--lane`、`--channel`、`--model` 等参数用于写入；写入前执行语音段校验，并复用 setup 的受锁原子事务，失败自动回滚。
+`axon setup voice` 直接读写独立 `[voice]` 段：不带写入参数时读取当前配置，`--channel`、`--channel-priority`、`--model`、`--model-weight` 等参数用于写入；写入前执行语音段校验，并复用 setup 的受锁原子事务，失败自动回滚。
 
 ## 3. 扩展与工具生态
 

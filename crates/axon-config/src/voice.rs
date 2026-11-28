@@ -14,13 +14,6 @@ use crate::{
     PROVIDER_WIRE_TRANSPORT_WEBSOCKET,
 };
 
-/// 语音车道：级联。
-pub const VOICE_LANE_CASCADE: &str = "cascade";
-/// 语音车道：端到端 realtime。
-pub const VOICE_LANE_REALTIME: &str = "realtime";
-/// 语音车道：自动选择。
-pub const VOICE_LANE_AUTO: &str = "auto";
-
 /// 语音模型角色：识别。
 pub const VOICE_ROLE_ASR: &str = "asr";
 /// 语音模型角色：合成。
@@ -105,6 +98,10 @@ pub struct VoiceModelConfig {
     pub speech_rate: i32,
     /// 轮次检测策略：server_vad / smart_turn_v2 / manual。
     pub turn_detection: String,
+    /// 模型优先级，数值越大越优先；与渠道优先级共同决定选择顺序。
+    pub priority: i32,
+    /// 同优先级模型的权重，权重越大越优先。
+    pub weight: u32,
 }
 
 impl Default for VoiceModelConfig {
@@ -117,63 +114,74 @@ impl Default for VoiceModelConfig {
             voice: String::new(),
             speech_rate: 0,
             turn_detection: VOICE_TURN_SERVER_VAD.to_owned(),
+            priority: DEFAULT_CHANNEL_PRIORITY,
+            weight: DEFAULT_CHANNEL_WEIGHT,
         }
     }
 }
 
 /// 用户层语音配置（独立 `[voice]` 段）。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// 没有总开关：有可用模型即可用。车道也不落配置——运行时按模型角色推导，
+/// 避免让用户维护一个「应该由代码决定」的字段。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct VoiceConfig {
-    /// 语音总开关，对应 UI feature flag；默认关闭。
-    pub enabled: bool,
-    /// 语音车道：cascade / realtime / auto。
-    pub channel_balancer: String,
     /// 语音渠道目录。
     pub channels: Vec<VoiceChannelConfig>,
     /// 语音模型目录。
     pub models: Vec<VoiceModelConfig>,
 }
 
-impl Default for VoiceConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            channel_balancer: VOICE_LANE_CASCADE.to_owned(),
-            channels: Vec::new(),
-            models: Vec::new(),
-        }
-    }
+/// 候选的合成权重：渠道权重 × 模型权重，用于同优先级内排序。
+fn candidate_weight(candidate: &(&VoiceModelConfig, &VoiceChannelConfig)) -> u64 {
+    u64::from(candidate.1.weight) * u64::from(candidate.0.weight)
 }
 
 impl VoiceConfig {
-    /// 语音入口是否启用。
+    /// 是否有可用于语音会话的配置。
+    ///
+    /// 替代原先的总开关：有模型即视为可用，调用方不再询问「开没开」。
     #[must_use]
-    pub const fn is_enabled(&self) -> bool {
-        self.enabled
+    pub fn is_available(&self) -> bool {
+        !self.models.is_empty()
     }
 
-    /// 当前语音车道标记。
+    /// 按角色列出候选（模型, 渠道），已排好尝试顺序。
+    ///
+    /// 排序与 LLM 渠道均衡同构：渠道优先级 → 模型优先级 → 双方权重之积 → 声明顺序。
+    /// 渠道停用、或模型引用的渠道不存在时，该候选直接剔除。
+    /// 调用方逐个尝试即可：前一个缺凭据就落到下一个，天然形成回退链。
     #[must_use]
-    pub fn lane(&self) -> &str {
-        &self.channel_balancer
+    pub fn ranked_models(&self, role: &str) -> Vec<(&VoiceModelConfig, &VoiceChannelConfig)> {
+        let mut candidates: Vec<(&VoiceModelConfig, &VoiceChannelConfig)> = self
+            .models
+            .iter()
+            .filter(|model| model.role == role)
+            .filter_map(|model| {
+                self.channels
+                    .iter()
+                    .find(|channel| channel.name == model.channel && channel.enabled)
+                    .map(|channel| (model, channel))
+            })
+            .collect();
+        candidates.sort_by(|left, right| {
+            right
+                .1
+                .priority
+                .cmp(&left.1.priority)
+                .then_with(|| right.0.priority.cmp(&left.0.priority))
+                .then_with(|| candidate_weight(right).cmp(&candidate_weight(left)))
+        });
+        candidates
     }
 
     /// 校验语音段安全不变量。
     ///
     /// # Errors
     ///
-    /// 车道 / 角色 / 轮次检测非法、音色缺失、语速越界或渠道引用不存在时报错。
+    /// 角色 / 轮次检测非法、音色缺失、语速越界、渠道引用不存在时报错。
     pub fn validate(&self) -> AxonResult<()> {
-        if !matches!(
-            self.channel_balancer.as_str(),
-            VOICE_LANE_CASCADE | VOICE_LANE_REALTIME | VOICE_LANE_AUTO
-        ) {
-            return Err(AxonError::config_invalid(
-                "voice.channel_balancer 只能是 cascade / realtime / auto",
-            ));
-        }
-
         let mut names = BTreeSet::new();
         for channel in &self.channels {
             if channel.name.trim().is_empty() {
@@ -236,7 +244,7 @@ impl VoiceConfig {
 
 /// 供 `validators::validate_config` 调用的语音段校验入口。
 pub(crate) fn validate_voice(voice: &VoiceConfig) -> AxonResult<()> {
-    if !voice.enabled && voice.models.is_empty() && voice.channels.is_empty() {
+    if voice.models.is_empty() && voice.channels.is_empty() {
         return Ok(());
     }
     voice.validate()
@@ -244,14 +252,10 @@ pub(crate) fn validate_voice(voice: &VoiceConfig) -> AxonResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        VOICE_LANE_REALTIME, VOICE_ROLE_TTS, VoiceChannelConfig, VoiceConfig, VoiceModelConfig,
-    };
+    use super::{VOICE_ROLE_ASR, VOICE_ROLE_TTS, VoiceChannelConfig, VoiceConfig, VoiceModelConfig};
 
     fn sample_config() -> VoiceConfig {
         VoiceConfig {
-            enabled: true,
-            channel_balancer: VOICE_LANE_REALTIME.to_owned(),
             channels: vec![VoiceChannelConfig {
                 name: "volc-tts".to_owned(),
                 ..VoiceChannelConfig::default()
@@ -268,10 +272,70 @@ mod tests {
     }
 
     #[test]
-    fn default_voice_config_is_valid_and_disabled() {
+    fn default_voice_config_is_empty_and_valid() {
         let config = VoiceConfig::default();
-        assert!(!config.is_enabled());
+        assert!(!config.is_available(), "没有模型时不算可用");
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn ranked_models_orders_by_channel_then_model_priority() {
+        let config = VoiceConfig {
+            channels: vec![
+                VoiceChannelConfig {
+                    name: "backup".to_owned(),
+                    priority: 10,
+                    ..VoiceChannelConfig::default()
+                },
+                VoiceChannelConfig {
+                    name: "primary".to_owned(),
+                    priority: 100,
+                    ..VoiceChannelConfig::default()
+                },
+            ],
+            models: vec![
+                VoiceModelConfig {
+                    name: "backup-tts".to_owned(),
+                    channel: "backup".to_owned(),
+                    role: VOICE_ROLE_TTS.to_owned(),
+                    voice: "speaker".to_owned(),
+                    priority: 100,
+                    ..VoiceModelConfig::default()
+                },
+                VoiceModelConfig {
+                    name: "primary-tts".to_owned(),
+                    channel: "primary".to_owned(),
+                    role: VOICE_ROLE_TTS.to_owned(),
+                    voice: "speaker".to_owned(),
+                    ..VoiceModelConfig::default()
+                },
+            ],
+        };
+        let ranked: Vec<&str> = config
+            .ranked_models(VOICE_ROLE_TTS)
+            .into_iter()
+            .map(|(model, _)| model.name.as_str())
+            .collect();
+        assert_eq!(
+            ranked,
+            ["primary-tts", "backup-tts"],
+            "渠道优先级压过模型优先级"
+        );
+    }
+
+    #[test]
+    fn ranked_models_skips_disabled_channel_and_other_roles() {
+        let mut config = sample_config();
+        assert_eq!(config.ranked_models(VOICE_ROLE_TTS).len(), 1);
+        assert!(
+            config.ranked_models(VOICE_ROLE_ASR).is_empty(),
+            "角色不同不混用"
+        );
+        config.channels[0].enabled = false;
+        assert!(
+            config.ranked_models(VOICE_ROLE_TTS).is_empty(),
+            "停用渠道的模型不参与选择"
+        );
     }
 
     #[test]

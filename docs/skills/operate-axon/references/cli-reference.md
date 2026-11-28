@@ -23,7 +23,7 @@ axon providers add|remove|test <NAME>       # add: --name --protocol --base-url 
 axon models [--provider <name>] [--format text|json]
 axon auth status [--provider <name>]
 axon setup ...
-axon setup voice [--enable[ true|false]] [--lane cascade|realtime|auto] [--channel <name> [--base-url <url>] [--protocol <p>] [--api-key-env <env>] [--wire-transport http|websocket] [--websocket-url <url>]] [--model <name> [--id <id>] [--role asr|tts|realtime] [--speaker <voice>] [--rate <-50..100>] [--turn-detection server-vad|smart-turn|manual]] [--reset] [--format text|json]    # 读写独立 [voice] 段；不带写入参数时读取当前配置
+axon setup voice [--channel <name> [--base-url <url>] [--protocol <p>] [--api-key-env <env>] [--wire-transport http|websocket] [--websocket-url <url>] [--channel-priority <n>] [--channel-weight <n>]] [--model <name> [--id <id>] [--role asr|tts|realtime] [--speaker <voice>] [--rate <-50..100>] [--turn-detection server-vad|smart-turn|manual] [--model-priority <n>] [--model-weight <n>]] [--reset] [--format text|json]    # 读写独立 [voice] 段；同角色候选按渠道/模型优先级与权重排序
 axon skills [--summary]
 axon mcp list [--limit <n>] | get <SERVER_ID> | add --url <url> [--bearer-token-env-var <ENV>] [--working-dir <dir>] | remove <SERVER_ID> | login [--browser] [--scope <scope>] [--client-id <id>] [--resource <uri>] <SERVER_ID> | logout <SERVER_ID>
 

@@ -2,30 +2,9 @@
 
 use super::{Args, OutputFormat, SetupProviderProtocol, SetupWireTransport, ValueEnum};
 use axon_config::voice::{
-    VOICE_LANE_AUTO, VOICE_LANE_CASCADE, VOICE_LANE_REALTIME, VOICE_ROLE_ASR, VOICE_ROLE_REALTIME,
-    VOICE_ROLE_TTS, VOICE_TURN_MANUAL, VOICE_TURN_SERVER_VAD, VOICE_TURN_SMART_TURN,
+    VOICE_ROLE_ASR, VOICE_ROLE_REALTIME, VOICE_ROLE_TTS, VOICE_TURN_MANUAL, VOICE_TURN_SERVER_VAD,
+    VOICE_TURN_SMART_TURN,
 };
-
-/// `axon setup voice` 语音车道取值。
-#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
-pub enum VoiceLaneArg {
-    /// 级联识别与合成。
-    Cascade,
-    /// 端到端实时语音。
-    Realtime,
-    /// 自动选择。
-    Auto,
-}
-
-impl VoiceLaneArg {
-    pub(crate) const fn as_config_value(self) -> &'static str {
-        match self {
-            Self::Cascade => VOICE_LANE_CASCADE,
-            Self::Realtime => VOICE_LANE_REALTIME,
-            Self::Auto => VOICE_LANE_AUTO,
-        }
-    }
-}
 
 /// `axon setup voice` 语音模型角色取值。
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
@@ -75,12 +54,6 @@ pub struct VoiceSetupCommand {
     /// 输出格式；省略时继承上层 setup 设置。
     #[arg(long, value_enum)]
     pub format: Option<OutputFormat>,
-    /// 语音入口总开关；`--enable` 为开，`--enable false` 为关。
-    #[arg(long, num_args = 0..=1, default_missing_value = "true")]
-    pub enable: Option<bool>,
-    /// 语音车道：cascade / realtime / auto。
-    #[arg(long, value_enum)]
-    pub lane: Option<VoiceLaneArg>,
     /// 渠道名称；给出渠道级参数时必须指定。
     #[arg(long)]
     pub channel: Option<String>,
@@ -99,6 +72,12 @@ pub struct VoiceSetupCommand {
     /// 新增渠道的 API key 环境变量名。
     #[arg(long)]
     pub api_key_env: Option<String>,
+    /// 渠道优先级，数值越大越优先；与模型优先级一起决定选择顺序。
+    #[arg(long)]
+    pub channel_priority: Option<i32>,
+    /// 渠道权重，同优先级内权重越大越优先。
+    #[arg(long)]
+    pub channel_weight: Option<u32>,
     /// 模型路由名称；给出模型级参数时必须指定。
     #[arg(long)]
     pub model: Option<String>,
@@ -117,6 +96,12 @@ pub struct VoiceSetupCommand {
     /// 轮次检测策略。
     #[arg(long, value_enum)]
     pub turn_detection: Option<VoiceTurnDetectionArg>,
+    /// 模型优先级，数值越大越优先。
+    #[arg(long)]
+    pub model_priority: Option<i32>,
+    /// 模型权重，同优先级内权重越大越优先。
+    #[arg(long)]
+    pub model_weight: Option<u32>,
     /// 重置整个 `[voice]` 段为默认值。
     #[arg(long)]
     pub reset: bool,
@@ -127,8 +112,6 @@ impl VoiceSetupCommand {
     #[must_use]
     pub fn has_mutation(&self) -> bool {
         self.reset
-            || self.enable.is_some()
-            || self.lane.is_some()
             || self.channel.is_some()
             || self.protocol.is_some()
             || self.base_url.is_some()
@@ -141,5 +124,9 @@ impl VoiceSetupCommand {
             || self.speaker.is_some()
             || self.rate.is_some()
             || self.turn_detection.is_some()
+            || self.channel_priority.is_some()
+            || self.channel_weight.is_some()
+            || self.model_priority.is_some()
+            || self.model_weight.is_some()
     }
 }

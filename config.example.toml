@@ -46,12 +46,9 @@ model = ""
 # 禁用的 Skill 名称集合；可选值：任意 Skill name 字符串；默认值：[]。
 disabled = []
 
-# 语音配置（独立 [voice] 段；默认整段关闭，与 UI feature flag 联动）。
+# 语音配置（独立 [voice] 段；先配渠道，再配模型，模型用 channel 引用渠道）。
+# 没有总开关，也没有默认模型：同一角色的多个候选按渠道/模型的优先级与权重排序取第一个可用。
 [voice]
-# 语音总开关；可选值：true、false；默认值：false。开启前需先配置 channels/models。
-enabled = false
-# 语音车道；可选值：cascade（级联 STT→run→TTS）、realtime（端到端）、auto；默认值："cascade"。
-channel_balancer = "cascade"
 
 # 语音渠道（同构于 [[providers]]，复用主备/熔断语义）。
 [[voice.channels]]
@@ -88,6 +85,10 @@ voice = "zh_female_shuangkuaisisi_uranus_bigtts"
 speech_rate = 20
 # 轮次检测；可选值：server_vad、smart_turn_v2、manual；默认值："server_vad"。
 turn_detection = "server_vad"
+# 模型优先级；数值越大越优先，与渠道优先级一起决定选择顺序；默认值：0。
+priority = 0
+# 同优先级模型的权重；权重越大越优先；默认值：1。
+weight = 1
 
 # 识别渠道：与合成分开配置——两者端点路径不同，不能共用一个 base_url。
 [[voice.channels]]

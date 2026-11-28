@@ -128,12 +128,14 @@ export interface VoiceModelDto {
   voice: string;
   speechRate: number;
   turnDetection: string;
+  /** 模型优先级，数值越大越优先。 */
+  priority: number;
+  /** 同优先级模型的权重。 */
+  weight: number;
 }
 
 /** 独立 `[voice]` 段 DTO，读写共用。 */
 export interface VoiceConfigDto {
-  enabled: boolean;
-  lane: string;
   channels: VoiceChannelDto[];
   models: VoiceModelDto[];
 }

@@ -23,15 +23,6 @@ pub(super) fn apply_voice_mutation(
         config.voice = VoiceConfig::default();
         changed.push("voice.reset".to_owned());
     }
-    if let Some(enabled) = command.enable {
-        config.voice.enabled = enabled;
-        changed.push(format!("voice.enabled={enabled}"));
-    }
-    if let Some(lane) = command.lane {
-        let value = lane.as_config_value();
-        config.voice.channel_balancer = value.to_owned();
-        changed.push(format!("voice.lane={value}"));
-    }
 
     if let Some(name) = &command.channel {
         let index = match config
@@ -64,6 +55,12 @@ pub(super) fn apply_voice_mutation(
         }
         if let Some(env) = &command.api_key_env {
             channel.api_key_env = Some(env.clone());
+        }
+        if let Some(priority) = command.channel_priority {
+            channel.priority = priority;
+        }
+        if let Some(weight) = command.channel_weight {
+            channel.weight = weight;
         }
         changed.push(format!("voice.channel.{name}"));
     }
@@ -108,6 +105,12 @@ pub(super) fn apply_voice_mutation(
         }
         if let Some(detection) = command.turn_detection {
             model.turn_detection = detection.as_config_value().to_owned();
+        }
+        if let Some(priority) = command.model_priority {
+            model.priority = priority;
+        }
+        if let Some(weight) = command.model_weight {
+            model.weight = weight;
         }
         changed.push(format!("voice.model.{name}"));
     }
@@ -183,8 +186,7 @@ pub(super) fn run_voice_setup(
 struct VoiceSetupReport<'a> {
     status: &'static str,
     config_path: String,
-    enabled: bool,
-    lane: &'a str,
+    available: bool,
     channels: usize,
     models: usize,
     config_changed: bool,
@@ -203,14 +205,16 @@ impl<'a> VoiceSetupReport<'a> {
         config_changed: bool,
     ) -> Self {
         let mut next_commands = Vec::new();
-        if !config.voice.enabled {
-            next_commands.push("axon setup voice --enable".to_owned());
+        if config.voice.models.is_empty() {
+            next_commands.push(
+                "axon setup voice --channel <名称> --model <名称> --role realtime --speaker <音色>"
+                    .to_owned(),
+            );
         }
         Self {
             status: "ok",
             config_path: path.display().to_string(),
-            enabled: config.voice.enabled,
-            lane: config.voice.lane(),
+            available: config.voice.is_available(),
             channels: config.voice.channels.len(),
             models: config.voice.models.len(),
             config_changed,
@@ -219,8 +223,7 @@ impl<'a> VoiceSetupReport<'a> {
             voice: &config.voice,
             next_commands,
             summary: vec![format!(
-                "语音配置车道 {}，渠道 {} 个，模型 {} 个",
-                config.voice.lane(),
+                "语音配置：渠道 {} 个，模型 {} 个",
                 config.voice.channels.len(),
                 config.voice.models.len()
             )],
@@ -232,13 +235,8 @@ fn render_text(report: &VoiceSetupReport<'_>) -> String {
     let mut text = String::from("Axon 语音配置\n");
     text.push_str(&format!(
         "  状态：{}\n",
-        if report.enabled {
-            "已启用"
-        } else {
-            "未启用"
-        }
+        if report.available { "已配置" } else { "未配置" }
     ));
-    text.push_str(&format!("  车道：{}\n", report.lane));
     text.push_str(&format!(
         "  渠道：{} 个，模型：{} 个\n",
         report.channels, report.models
@@ -260,7 +258,7 @@ fn render_text(report: &VoiceSetupReport<'_>) -> String {
 mod tests {
     use super::*;
     use crate::{
-        AxonCli, AxonCommand, SetupSubcommand, VoiceLaneArg, VoiceRoleArg, VoiceTurnDetectionArg,
+        AxonCli, AxonCommand, SetupSubcommand, VoiceRoleArg, VoiceTurnDetectionArg,
     };
 
     fn voice_command(args: &[&str]) -> VoiceSetupCommand {
@@ -279,11 +277,12 @@ mod tests {
     #[test]
     fn voice_mutation_roundtrip_persists_channel_and_model() {
         let command = voice_command(&[
-            "--enable",
-            "--lane",
-            "cascade",
             "--channel",
             "volc-tts",
+            "--channel-priority",
+            "100",
+            "--channel-weight",
+            "5",
             "--base-url",
             "https://example.invalid/v1",
             "--model",
@@ -296,17 +295,24 @@ mod tests {
             "20",
             "--turn-detection",
             "smart-turn",
+            "--model-priority",
+            "7",
+            "--model-weight",
+            "3",
         ]);
         let mut config = AxonConfig::default();
         let changed = apply_voice_mutation(&mut config, &command).unwrap();
 
-        assert!(config.voice.is_enabled());
-        assert_eq!(config.voice.lane(), "cascade");
+        assert!(config.voice.is_available());
         assert_eq!(config.voice.channels[0].name, "volc-tts");
         assert_eq!(
             config.voice.channels[0].base_url,
             "https://example.invalid/v1"
         );
+        assert_eq!(config.voice.channels[0].priority, 100);
+        assert_eq!(config.voice.channels[0].weight, 5);
+        assert_eq!(config.voice.models[0].priority, 7);
+        assert_eq!(config.voice.models[0].weight, 3);
         assert_eq!(config.voice.models[0].role, "tts");
         assert_eq!(config.voice.models[0].voice, "zh_female_example");
         assert_eq!(config.voice.models[0].speech_rate, 20);
@@ -334,7 +340,6 @@ mod tests {
 
     #[test]
     fn voice_enum_arguments_map_to_config_values() {
-        assert_eq!(VoiceLaneArg::Realtime.as_config_value(), "realtime");
         assert_eq!(VoiceRoleArg::Asr.as_config_value(), "asr");
         assert_eq!(VoiceTurnDetectionArg::Manual.as_config_value(), "manual");
     }
