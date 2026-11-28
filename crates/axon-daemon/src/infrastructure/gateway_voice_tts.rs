@@ -1,7 +1,7 @@
 //! 朗读合成与音色查询：`/api/v1/voice/tts`、`/cue`、`/preview`、`/presets`、`/status`。
 //!
 //! 合成由云端提供方（火山方舟 Agent Plan）承担：daemon 持凭据、直连它的单向
-//! 流式通道，收齐后按裸 WAV 下发——桌面端的 `accept: audio/wav` 与
+//! 流式通道，收齐后按裸 WAV 下发；桌面端的 `accept: audio/wav` 与
 //! `read_to_vec` 是既定契约，不改播放模型。朗读稿渲染与人格融合仍是共享基础
 //! 设施：流式朗读走 `gateway_voice_turn`，这里只负责「给定文本 → 一段音频」。
 //!

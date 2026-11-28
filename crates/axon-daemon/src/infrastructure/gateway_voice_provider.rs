@@ -6,8 +6,8 @@
 //! daemon 其余模块不需要改动。
 //!
 //! 运行参数由 [`VoiceRuntime`] 承载：用户层 `[voice]` 段经 CLI 映射后注入，
-//! 未注入时按进程环境兜底。两条车道都由这一份快照裁决，运行期不再反复读
-//! 环境变量，配置改动只在下次启动生效——行为可预期优先于热更新。
+//! 未注入时按进程环境兜底。模型与参数都由这一份快照裁决，运行期不再反复读
+//! 环境变量，配置改动只在下次启动生效，行为可预期优先于热更新。
 
 use super::gateway_voice_realtime_protocol::{SessionConfig, TurnDetection};
 use super::gateway_voice_worker::BoxedTransport;

@@ -105,40 +105,8 @@ export interface ConfigWriteResult {
   backup_created: boolean;
 }
 
-/** 语音渠道 DTO：密钥只以变量名与是否已配置出现，绝无明文。 */
-export interface VoiceChannelDto {
-  name: string;
-  enabled: boolean;
-  protocol: string;
-  baseUrl: string;
-  apiKeyEnv: string | null;
-  apiKeyConfigured: boolean;
-  wireTransport: string;
-  websocketUrl: string | null;
-  priority: number;
-  weight: number;
-}
-
-/** 语音模型 DTO。 */
-export interface VoiceModelDto {
-  name: string;
-  channel: string;
-  id: string;
-  role: string;
-  voice: string;
-  speechRate: number;
-  turnDetection: string;
-  /** 模型优先级，数值越大越优先。 */
-  priority: number;
-  /** 同优先级模型的权重。 */
-  weight: number;
-}
-
-/** 独立 `[voice]` 段 DTO，读写共用。 */
-export interface VoiceConfigDto {
-  channels: VoiceChannelDto[];
-  models: VoiceModelDto[];
-}
+/** 语音配置 DTO：定义在 `voiceTypes.ts`，这里原样再导出。 */
+export type { VoiceChannelDto, VoiceConfigDto, VoiceModelDto } from './voiceTypes';
 
 /** 供应商写入入参（不含任何明文密钥字段）。 */
 export interface ProviderInput {

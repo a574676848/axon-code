@@ -27,12 +27,12 @@ mod gateway_voice_out_frames;
 mod gateway_voice_provider;
 #[path = "gateway_voice_ready.rs"]
 mod gateway_voice_ready;
-#[path = "gateway_voice_realtime_provider.rs"]
-mod gateway_voice_realtime_provider;
 #[path = "gateway_voice_realtime.rs"]
 mod gateway_voice_realtime;
 #[path = "gateway_voice_realtime_protocol.rs"]
 mod gateway_voice_realtime_protocol;
+#[path = "gateway_voice_realtime_provider.rs"]
+mod gateway_voice_realtime_provider;
 #[path = "gateway_voice_tts.rs"]
 mod gateway_voice_tts;
 #[path = "gateway_voice_turn.rs"]

@@ -3,8 +3,8 @@
 //! 直方图用固定对数桶 + 原子数组：写入无锁、无分配、无扩容，符合 §4.8 P1/P4；
 //! 读取时按桶上界折算分位数，精度足够定位抖动，不引第三方 histogram 依赖。
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// 直方图桶数：桶 `i` 覆盖 `[2^i, 2^(i+1))` 微秒，24 桶覆盖 1 µs ~ 16.7 s。
 const BUCKETS: usize = 24;
@@ -210,10 +210,7 @@ mod tests {
     #[test]
     fn rtf_is_absent_until_measured() {
         let metrics = VoiceMetrics::default();
-        assert!(
-            metrics.snapshot()["rtfP50"].is_null(),
-            "没有实测就不能给 0"
-        );
+        assert!(metrics.snapshot()["rtfP50"].is_null(), "没有实测就不能给 0");
     }
 
     #[test]
@@ -234,7 +231,7 @@ mod tests {
     fn histogram_reports_p50_and_p99() {
         let histogram = LatencyHistogram::default();
         // 98 个 1.5 ms 观测 + 2 个 200 ms 观测：p99 在 100 样本里取第 99 个，
-        // 1 个慢样本只会落在 max，2 个才会推进 p99——这条边界必须钉住。
+        // 1 个慢样本只会落在 max，2 个才会推进 p99，这条边界必须钉住。
         for _ in 0..98 {
             histogram.record(1_500);
         }

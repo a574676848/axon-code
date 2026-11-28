@@ -15,10 +15,8 @@
 use super::gateway_voice_metrics::VoiceMetrics;
 use super::gateway_voice_out_frames::{error_json, state_json};
 use super::gateway_voice_provider::{Lane, RealtimeProtocol, VoiceRuntime};
-use super::gateway_voice_realtime_provider::{
-    RealtimeControl, RealtimeEvent, RealtimeProvider,
-};
 use super::gateway_voice_realtime_protocol::{BailianProvider, merge_transcript, playback_chunks};
+use super::gateway_voice_realtime_provider::{RealtimeControl, RealtimeEvent, RealtimeProvider};
 use super::gateway_voice_worker::{Command, CommandQueue, VoiceOut, VoiceWorker};
 use axon_rustls_provider::ensure_rustls_crypto_provider;
 use futures_util::{SinkExt, StreamExt};

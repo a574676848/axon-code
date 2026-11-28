@@ -240,10 +240,12 @@ pub(super) fn parse_server_event(text: &str) -> RealtimeEvent {
         "session.updated" => RealtimeEvent::SessionUpdated,
         "input_audio_buffer.speech_started" => RealtimeEvent::SpeechStarted,
         "input_audio_buffer.speech_stopped" => RealtimeEvent::SpeechStopped,
-        "conversation.item.input_audio_transcription.delta" => RealtimeEvent::InputTranscriptDelta {
-            text: string_field(&value, "text"),
-            stash: string_field(&value, "stash"),
-        },
+        "conversation.item.input_audio_transcription.delta" => {
+            RealtimeEvent::InputTranscriptDelta {
+                text: string_field(&value, "text"),
+                stash: string_field(&value, "stash"),
+            }
+        }
         "conversation.item.input_audio_transcription.completed" => {
             RealtimeEvent::InputTranscriptCompleted {
                 transcript: string_field(&value, "transcript"),
